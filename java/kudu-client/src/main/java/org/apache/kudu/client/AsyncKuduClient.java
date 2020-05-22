@@ -693,17 +693,48 @@ public class AsyncKuduClient implements AutoCloseable {
   }
 
   /**
-   * Delete a table on the cluster with the specified name.
+   * SoftDelete a table on the cluster with the specified name, the table will be
+   * reserved for 7 days after being deleted.
    * @param name the table's name
    * @return a deferred object to track the progress of the deleteTable command
    */
   public Deferred<DeleteTableResponse> deleteTable(String name) {
+    return deleteTable(name, false, 60 * 60 * 24 * 7);
+  }
+
+  /**
+   * Delete a table on the cluster with the specified name.
+   * @param name the table's name
+   * @param forceOnTrashedTable the flag to decide whether to trash table
+   * @param reserveSeconds the trashed table to be alive time
+   * @return a deferred object to track the progress of the deleteTable command
+   */
+  public Deferred<DeleteTableResponse> deleteTable(String name,
+                                                   boolean forceOnTrashedTable,
+                                                   int reserveSeconds) {
     checkIsClosed();
     DeleteTableRequest delete = new DeleteTableRequest(this.masterTable,
                                                        name,
                                                        timer,
-                                                       defaultAdminOperationTimeoutMs);
+                                                       defaultAdminOperationTimeoutMs,
+                                                       forceOnTrashedTable,
+                                                       reserveSeconds);
+
     return sendRpcToTablet(delete);
+  }
+
+  /**
+   * Recall a deleted table on the cluster with the specified name
+   * @param name the table's name
+   * @return a deferred object to track the progress of the recall command
+   */
+  public Deferred<RecallDeletedTableResponse> recallDeletedTable(String name) {
+    checkIsClosed();
+    RecallDeletedTableRequest recall = new RecallDeletedTableRequest(this.masterTable,
+                                                                     name,
+                                                                     timer,
+                                                                     defaultAdminOperationTimeoutMs);
+    return sendRpcToTablet(recall);
   }
 
   /**
