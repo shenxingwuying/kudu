@@ -331,6 +331,9 @@ DEFINE_bool(enable_per_range_hash_schemas, false,
             "Whether the ability to specify different hash schemas per range is enabled");
 TAG_FLAG(enable_per_range_hash_schemas, unsafe);
 
+DEFINE_bool(skip_loading_deleted_data_when_startup, true,
+            "No longer load deleted trfiles into memory");
+
 DECLARE_bool(raft_prepare_replacement_before_eviction);
 DECLARE_int64(tsk_rotation_seconds);
 
@@ -420,7 +423,10 @@ class TableLoader : public TableVisitor {
 
     // Add the tablet to the IDs map and to the name map (if the table is not deleted).
     bool is_deleted = l.mutable_data()->is_deleted();
-    catalog_manager_->table_ids_map_[table->id()] = table;
+    
+    if (!FLAGS_skip_loading_deleted_data_when_startup || !is_deleted) {
+      catalog_manager_->table_ids_map_[table->id()] = table;
+    }
     if (!is_deleted) {
       auto* existing = InsertOrReturnExisting(&catalog_manager_->normalized_table_names_map_,
                                               CatalogManager::NormalizeTableName(l.data().name()),
@@ -471,6 +477,9 @@ class TabletLoader : public TabletVisitor {
     scoped_refptr<TableInfo> table(FindPtrOrNull(
         catalog_manager_->table_ids_map_, table_id));
     if (table == nullptr) {
+      if (FLAGS_skip_loading_deleted_data_when_startup) {
+        return Status::OK();
+      }
       // Tables and tablets are always created/deleted in one operation, so
       // this shouldn't be possible.
       string msg = Substitute("Missing table $0 required by tablet $1 (metadata: $2)",
@@ -484,12 +493,14 @@ class TabletLoader : public TabletVisitor {
     TabletMetadataLock l(tablet.get(), LockMode::WRITE);
     l.mutable_data()->pb.CopyFrom(metadata);
 
-    // Add the tablet to the tablet manager.
-    catalog_manager_->tablet_map_[tablet->id()] = tablet;
-
     // Add the tablet to the table.
     bool is_deleted = l.mutable_data()->is_deleted();
+     
     l.Commit();
+    if (!FLAGS_skip_loading_deleted_data_when_startup || !is_deleted) {
+      // Add the tablet to the tablet manager.
+      catalog_manager_->tablet_map_[tablet->id()] = tablet;
+    }
     if (!is_deleted) {
       // Need to use a new tablet lock here because AddRemoveTablets() reads
       // from clean state, which is uninitialized for these brand new tablets.
