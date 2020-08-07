@@ -1,0 +1,15 @@
+package_modules:
+  # 模块名，与 build.yml 中的相同
+  kudu:
+    # 源代码在本地
+    source: local
+    variants:
+      - os_distro: el6
+      - os_distro: el7
+    # 填写四位版本号中的前三位
+    # 第四位由 dragon 系统自动生成
+    # 注意使用 "" 双引号，否则不符合 yaml 格式要求
+    version: "1.14.0"
+    pub:
+      # 作为 dragon 包来进行发布
+      - type: dragon

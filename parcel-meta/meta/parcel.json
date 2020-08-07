@@ -1,0 +1,59 @@
+{
+  "schema_version":     1,
+  "name":               "KUDU_SENSORS_DATA",
+  "version":            "{autogen_version}-cdh5.12.1.p0",
+  "extraVersionInfo": {
+    "fullVersion":        "{autogen_version}-cdh5.12.1.p0-{od}",
+    "baseVersion":        "cdh5.12.1",
+    "patchCount":         "0"
+  },
+
+  "setActiveSymlink":   true,
+
+  "scripts": {
+    "defines": "kudu_env.sh"
+  },
+  "depends": "CDH (>= 5.4.0)",
+  "packages": [
+    { "name":    "kudu",
+      "version": "{autogen_version}+cdh5.12.1+0"
+    }
+    ,{ "name":    "kudu-client0",
+      "version": "{autogen_version}+cdh5.12.1+0"
+    }
+    ,{ "name":    "kudu-client-devel",
+      "version": "{autogen_version}+cdh5.12.1+0"
+    }
+    ,{ "name":    "kudu-master",
+      "version": "{autogen_version}+cdh5.12.1+0"
+    }
+    ,{ "name":    "kudu-tserver",
+      "version": "{autogen_version}+cdh5.12.1+0"
+    }
+  ],
+
+  "components": [
+    { "name":     "kudu",
+      "version":  "{autogen_version}-cdh5.12.1",
+      "pkg_version":  "{autogen_version}+cdh5.12.1+0",
+      "pkg_release": "cdh5.12.1.p0"
+    }
+  ],
+
+  "provides": [
+        "kudu"
+  ],
+
+  "users": {
+     "kudu": {
+       "longname"    : "Kudu",
+       "home"        : "/var/lib/kudu",
+       "shell"       : "/sbin/nologin",
+       "extra_groups" : [ ]
+     }
+  },
+
+  "groups": [
+     "kudu"
+  ]
+}

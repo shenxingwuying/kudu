@@ -1,0 +1,11 @@
+build_modules:
+  bite_kudu:
+    - type: dragon
+    - type: docker
+      args:
+        DOCKERFILE_PATH: ./el7/  
+  bite_kudu_el6:
+    - type: dragon
+    - type: docker
+      args:
+        DOCKERFILE_PATH: ./el6/  

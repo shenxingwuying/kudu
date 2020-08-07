@@ -1,0 +1,16 @@
+# 参考文档: https://doc.sensorsdata.cn/pages/viewpage.action?pageId=103014492
+build_modules:
+  # 模块名是 kudu
+  kudu:
+    # 为了支持多变体，添加 variants 字段
+    variants:
+      # os_distro: The common name of the operating system distribution
+      - os_distro: el6
+      - os_distro: el7
+    types:
+      # 制品类型是 dragon，既 "标准模块 tar 包"
+      - type: dragon
+        # 添加自定义 build 命令
+        add_cmds:
+          - ["RUN", "sh build.sh"]
+          - ["COPY", "/data/opt/kudu/*", "./"]

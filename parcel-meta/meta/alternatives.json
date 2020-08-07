@@ -1,0 +1,26 @@
+{
+    "kudu": {
+      "destination": "/usr/bin/kudu",
+      "source": "bin/kudu",
+      "priority": 10,
+      "isDirectory": false
+    }
+    ,"kudu-master": {
+      "destination": "/usr/sbin/kudu-master",
+      "source": "sbin/kudu-master",
+      "priority": 10,
+      "isDirectory": false
+    }
+    ,"kudu-tserver": {
+      "destination": "/usr/sbin/kudu-tserver",
+      "source": "sbin/kudu-tserver",
+      "priority": 10,
+      "isDirectory": false
+    }
+    ,"sp_kudu": {
+      "destination": "/usr/bin/sp_kudu",
+      "source": "bin/kudu",
+      "priority": 10,
+      "isDirectory": false
+    }
+}
