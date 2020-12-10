@@ -47,6 +47,7 @@ DECLARE_string(collector_master_addrs);
 DECLARE_uint32(collector_metrics_collect_interval_sec);
 DECLARE_uint32(collector_timeout_sec);
 DECLARE_uint32(collector_warn_threshold_ms);
+DECLARE_string(ksyncer_uuid);
 
 using rapidjson::Value;
 using std::string;
@@ -190,7 +191,7 @@ Status NodesChecker::UpdateServers(const string& role) {
   for (const Value* server : servers) {
     string uuid;
     CHECK_OK(r.ExtractString(server, "uuid", &uuid));
-    if (uuid == KSyncerUUID()) {
+    if (uuid == FLAGS_ksyncer_uuid) {
       continue;
     }
     string http_address;

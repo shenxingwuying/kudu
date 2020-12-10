@@ -45,6 +45,8 @@
 #include "kudu/util/logging.h"
 #include "kudu/util/status.h"
 
+DECLARE_string(ksyncer_uuid);
+
 using kudu::cluster_summary::HealthCheckResult;
 using kudu::cluster_summary::HealthCheckResultToString;
 using kudu::cluster_summary::ServerHealth;
@@ -457,6 +459,11 @@ Status Rebalancer::BuildClusterInfo(const ClusterRawInfo& raw_info,
       }
       const int* replica_count = FindOrNull(tserver_replicas_count, ignored_tserver);
       if (!replica_count) {
+        // ignored_tserver 默认加上 ksyncer, 对于没有 ksyncer 的集群，
+        // 可以在错误信息里去掉这部分。
+        if (ignored_tserver == FLAGS_ksyncer_uuid) {
+          continue;
+        }
         return Status::InvalidArgument(Substitute(
             "ignored tserver $0 is not reported among known tservers", ignored_tserver));
       }

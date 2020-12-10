@@ -70,6 +70,7 @@ DEFINE_uint32(collector_monitor_table_replication_factor, 3,
 DECLARE_string(collector_cluster_name);
 DECLARE_string(collector_master_addrs);
 DECLARE_uint32(collector_warn_threshold_ms);
+DECLARE_string(ksyncer_uuid);
 
 using kudu::client::KuduClientBuilder;
 using kudu::client::KuduColumnSchema;
@@ -359,7 +360,7 @@ Status ServiceMonitor::GetTabletServers(vector<KuduTabletServer*>* servers) {
   RETURN_NOT_OK(client_->ListTabletServers(servers));
   for (auto server = servers->begin(); server != servers->end(); ++server) {
     // TODO(yingchun): Skip to monitor KSyncer, KSyncer will be removed in short future.
-    if ((*server)->uuid() == KSyncerUUID()) {
+    if ((*server)->uuid() == FLAGS_ksyncer_uuid) {
       delete *server;
       servers->erase(server);
       return Status::OK();

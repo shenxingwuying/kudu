@@ -362,9 +362,14 @@ class Log : public RefCountedThreadSafe<Log> {
   // If successful, num_gced is set to the number of deleted log segments.
   //
   // This method is thread-safe.
+  Status GC(RetentionIndexes retention_indexes, bool is_to_sync_table, int* num_gced);
+
   Status GC(RetentionIndexes retention_indexes, int* num_gced);
 
   // Computes the amount of bytes that would have been GC'd if Log::GC had been called.
+  int64_t GetGCableDataSize(RetentionIndexes retention_indexes,
+                            bool is_to_sync_table) const;
+
   int64_t GetGCableDataSize(RetentionIndexes retention_indexes) const;
 
   // Returns a map which can be used to determine the cumulative size of log segments
@@ -471,6 +476,10 @@ class Log : public RefCountedThreadSafe<Log> {
   Status Sync();
 
   // Helper method to get the segment sequence to GC based on the provided 'retention' struct.
+  void GetSegmentsToGCUnlocked(RetentionIndexes retention_indexes,
+                               bool is_to_sync_table,
+                               SegmentSequence* segments_to_gc) const;
+
   void GetSegmentsToGCUnlocked(RetentionIndexes retention_indexes,
                                SegmentSequence* segments_to_gc) const;
 

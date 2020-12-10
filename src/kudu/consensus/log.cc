@@ -970,7 +970,9 @@ Status Log::Sync() {
   return segment_allocator_.Sync();
 }
 
-int GetPrefixSizeToGC(RetentionIndexes retention_indexes, const SegmentSequence& segments) {
+int GetPrefixSizeToGC(RetentionIndexes retention_indexes,
+                      bool is_to_sync_table,
+                      const SegmentSequence& segments) {
   int rem_segs = segments.size();
   int prefix_size = 0;
   for (const scoped_refptr<ReadableLogSegment>& segment : segments) {
@@ -988,9 +990,10 @@ int GetPrefixSizeToGC(RetentionIndexes retention_indexes, const SegmentSequence&
 
     // Check if removing this segment would compromise the ability to catch up a peer,
     // we should retain it, unless this would break the max_segments flag.
-    if (seg_max_idx >= retention_indexes.for_peers &&
-        rem_segs <= FLAGS_log_max_segments_to_retain) {
-      break;
+    if (seg_max_idx >= retention_indexes.for_peers) {
+      if (is_to_sync_table || rem_segs <= FLAGS_log_max_segments_to_retain) {
+        break;
+      }
     }
 
     prefix_size++;
@@ -999,10 +1002,24 @@ int GetPrefixSizeToGC(RetentionIndexes retention_indexes, const SegmentSequence&
   return prefix_size;
 }
 
+// test compactiable purpose
+int GetPrefixSizeToGC(RetentionIndexes retention_indexes,
+                      const SegmentSequence segments) {
+  return GetPrefixSizeToGC(retention_indexes, /* is_to_sync_table */ false, segments);
+}
+
 void Log::GetSegmentsToGCUnlocked(RetentionIndexes retention_indexes,
+                                  bool is_to_sync_table,
                                   SegmentSequence* segments_to_gc) const {
   reader_->GetSegmentsSnapshot(segments_to_gc);
-  segments_to_gc->resize(GetPrefixSizeToGC(retention_indexes, *segments_to_gc));
+  segments_to_gc->resize(GetPrefixSizeToGC(retention_indexes,
+                                           is_to_sync_table,
+                                           *segments_to_gc));
+}
+
+void Log::GetSegmentsToGCUnlocked(RetentionIndexes retention_indexes,
+                                  SegmentSequence* segments_to_gc) const {
+  GetSegmentsToGCUnlocked(retention_indexes, /* is_to_sync_table */ false, segments_to_gc);
 }
 
 Status Log::Append(LogEntryPB* entry) {
@@ -1030,6 +1047,10 @@ Status Log::WaitUntilAllFlushed() {
 }
 
 Status Log::GC(RetentionIndexes retention_indexes, int32_t* num_gced) {
+  return GC(retention_indexes, /* is_to_sync_table */ false, num_gced);
+}
+
+Status Log::GC(RetentionIndexes retention_indexes, bool is_to_sync_table, int32_t* num_gced) {
   CHECK_GE(retention_indexes.for_durability, 0);
 
   VLOG_WITH_PREFIX(1) << "Running Log GC on " << ctx_.log_dir << ": retaining "
@@ -1042,7 +1063,7 @@ Status Log::GC(RetentionIndexes retention_indexes, int32_t* num_gced) {
       std::lock_guard<percpu_rwlock> l(state_lock_);
       CHECK_EQ(kLogWriting, log_state_);
 
-      GetSegmentsToGCUnlocked(retention_indexes, &segments_to_delete);
+      GetSegmentsToGCUnlocked(retention_indexes, is_to_sync_table, &segments_to_delete);
 
       if (segments_to_delete.empty()) {
         VLOG_WITH_PREFIX(1) << "No segments to delete.";
@@ -1086,19 +1107,24 @@ Status Log::GC(RetentionIndexes retention_indexes, int32_t* num_gced) {
   return Status::OK();
 }
 
-int64_t Log::GetGCableDataSize(RetentionIndexes retention_indexes) const {
+int64_t Log::GetGCableDataSize(RetentionIndexes retention_indexes,
+                               bool is_to_sync_table) const {
   CHECK_GE(retention_indexes.for_durability, 0);
   SegmentSequence segments_to_delete;
   {
     shared_lock<rw_spinlock> l(state_lock_.get_lock());
     CHECK_EQ(kLogWriting, log_state_);
-    GetSegmentsToGCUnlocked(retention_indexes, &segments_to_delete);
+    GetSegmentsToGCUnlocked(retention_indexes, is_to_sync_table, &segments_to_delete);
   }
   int64_t total_size = 0;
   for (const auto& segment : segments_to_delete) {
     total_size += segment->file_size();
   }
   return total_size;
+}
+
+int64_t Log::GetGCableDataSize(RetentionIndexes retention_indexes) const {
+  return GetGCableDataSize(retention_indexes, /* is_to_sync_table */ false);
 }
 
 void Log::GetReplaySizeMap(std::map<int64_t, int64_t>* replay_size) const {

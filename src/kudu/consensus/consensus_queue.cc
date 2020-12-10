@@ -76,6 +76,13 @@ DEFINE_double(consensus_fail_log_read_ops, 0.0,
               "Fraction of the time when reading from the log cache will fail");
 TAG_FLAG(consensus_fail_log_read_ops, hidden);
 
+DEFINE_string(ksyncer_uuid, "beefbeefbeefbeefbeefbeefbeefbeef",
+              "UUID of KSyncer, should always be 'beefbeefbeefbeefbeefbeefbeefbeef'");
+TAG_FLAG(ksyncer_uuid, hidden);
+DEFINE_validator(ksyncer_uuid, [](const char* /*n*/, const std::string& value) {
+  return value == "beefbeefbeefbeefbeefbeefbeefbeef";
+});
+
 DECLARE_bool(raft_prepare_replacement_before_eviction);
 DECLARE_bool(safe_time_advancement_without_writes);
 DECLARE_int32(consensus_rpc_timeout_ms);
@@ -861,6 +868,7 @@ void PeerMessageQueue::AdvanceQueueWatermark(const char* type,
   // - Find the vector.size() - 'num_peers_required' position, this
   //   will be the new 'watermark'.
   vector<int64_t> watermarks;
+  int64_t ksyncer_watermark = -1;
   for (const PeersMap::value_type& peer : peers_map_) {
     if (replica_types == VOTER_REPLICAS &&
         peer.second->peer_pb.member_type() != RaftPeerPB::VOTER) {
@@ -886,7 +894,11 @@ void PeerMessageQueue::AdvanceQueueWatermark(const char* type,
     // was an error (LMP mismatch, for example), the 'last_received' is _not_ usable
     // for watermark calculation. This could be fixed by separately storing the
     // 'match_index' on a per-peer basis and using that for watermark calculation.
-    if (peer.second->last_exchange_status == PeerStatus::OK) {
+    if (peer.second->last_exchange_status == PeerStatus::OK ||
+        peer.second->uuid() == FLAGS_ksyncer_uuid) {
+      if (peer.second->uuid() == FLAGS_ksyncer_uuid) {
+        ksyncer_watermark = peer.second->last_received.index();
+      }
       watermarks.push_back(peer.second->last_received.index());
     }
   }
@@ -901,6 +913,9 @@ void PeerMessageQueue::AdvanceQueueWatermark(const char* type,
   std::sort(watermarks.begin(), watermarks.end());
 
   int64_t new_watermark = watermarks[watermarks.size() - num_peers_required];
+  if (ksyncer_watermark != -1) {
+    new_watermark = std::min(new_watermark, ksyncer_watermark);
+  }
   int64_t old_watermark = *watermark;
   *watermark = new_watermark;
 
@@ -1051,6 +1066,9 @@ void PeerMessageQueue::UpdateExchangeStatus(TrackedPeer* peer,
 
 void PeerMessageQueue::PromoteIfNeeded(TrackedPeer* peer, const TrackedPeer& prev_peer_state,
                                        const ConsensusStatusPB& status) {
+  if (peer->uuid() == FLAGS_ksyncer_uuid) {
+    return;
+  }
   DCHECK(queue_lock_.is_locked());
   if (queue_state_.mode != PeerMessageQueue::LEADER ||
       peer->last_exchange_status != PeerStatus::OK) {
@@ -1091,6 +1109,9 @@ void PeerMessageQueue::PromoteIfNeeded(TrackedPeer* peer, const TrackedPeer& pre
 
 void PeerMessageQueue::TransferLeadershipIfNeeded(const TrackedPeer& peer,
                                                   const ConsensusStatusPB& status) {
+  if (peer.uuid() == FLAGS_ksyncer_uuid) {
+    return;
+  }
   DCHECK(queue_lock_.is_locked());
   bool server_quiescing = server_quiescing_ && *server_quiescing_;
   // Only transfer leadership if the local peer has begun looking for a

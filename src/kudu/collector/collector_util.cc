@@ -138,9 +138,6 @@ map<string, int> GetPercentiles() {
   return percentiles;
 }
 
-string KSyncerUUID() {
-  return "beefbeefbeefbeefbeefbeefbeefbeef";
-}
 
 } // namespace collector
 } // namespace kudu

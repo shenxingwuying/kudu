@@ -36,6 +36,8 @@
 #include "kudu/util/pb_util.h"
 #include "kudu/util/status.h"
 
+DECLARE_string(ksyncer_uuid);
+
 using google::protobuf::RepeatedPtrField;
 using kudu::pb_util::SecureShortDebugString;
 using kudu::pb_util::SecureDebugString;
@@ -604,6 +606,12 @@ bool ShouldEvictReplica(const RaftConfigPB& config,
         !peer.health_report().has_overall_health() ||
         overall_health == HealthReportPB::UNKNOWN;
     const bool has_replace = peer.attrs().replace();
+
+    // Tablets 3RF but with 4 peers, pegasus peer doesn't count.
+    if (peer_uuid == FLAGS_ksyncer_uuid) {
+      VLOG(3) << "skip evicting ksyncer";
+      continue;
+    }
 
     switch (peer.member_type()) {
       case RaftPeerPB::VOTER:

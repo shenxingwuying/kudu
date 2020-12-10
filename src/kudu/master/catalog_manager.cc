@@ -346,6 +346,7 @@ TAG_FLAG(enable_per_range_hash_schemas, unsafe);
 DEFINE_bool(skip_loading_deleted_data_when_startup, true,
             "No longer load deleted trfiles into memory");
 
+DECLARE_string(ksyncer_uuid);
 DECLARE_bool(raft_prepare_replacement_before_eviction);
 DECLARE_int64(tsk_rotation_seconds);
 
@@ -5230,7 +5231,11 @@ Status CatalogManager::BuildLocationsForTablet(
     switch (filter) {
       case VOTER_REPLICA:
         if (!peer.has_member_type() ||
-            peer.member_type() != consensus::RaftPeerPB::VOTER) {
+            peer.member_type() != consensus::RaftPeerPB::VOTER ||
+            peer.permanent_uuid() == FLAGS_ksyncer_uuid) {
+          if (peer.permanent_uuid() == FLAGS_ksyncer_uuid) {
+            VLOG(3) << "GET ksyncer connector, skipping";
+          }
           // Jump to the next iteration of the outside cycle.
           continue;
         }

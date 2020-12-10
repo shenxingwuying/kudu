@@ -35,7 +35,5 @@ prometheus::Summary::Quantiles GetQuantiles();
 
 std::map<std::string, int> GetPercentiles();
 
-std::string KSyncerUUID();
-
 } // namespace collector
 } // namespace kudu

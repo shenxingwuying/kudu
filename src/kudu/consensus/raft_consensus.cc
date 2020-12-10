@@ -130,6 +130,7 @@ DEFINE_bool(raft_prepare_replacement_before_eviction, true,
 TAG_FLAG(raft_prepare_replacement_before_eviction, advanced);
 TAG_FLAG(raft_prepare_replacement_before_eviction, experimental);
 
+DECLARE_string(ksyncer_uuid);
 DECLARE_int32(memory_limit_warn_threshold_percentage);
 
 // Metrics
@@ -1926,6 +1927,56 @@ Status RaftConsensus::BulkChangeConfig(const BulkChangeConfigRequestPB& req,
     // A record of the peers being modified so that we can enforce only one
     // change per peer per request.
     unordered_set<string> peers_modified;
+
+    // 当有 ksyncer peer 在 raft peers 中时。如果发起 kudu cluster rebalanace.
+    // 会调用 kudu::tools::ScheduleReplicaMove 方法，发起的 BulkChangeConfigRequest
+    // BulkChange 通常包含多个请求, 在 kudu::tools::ScheduleReplicaMove 中包含两部分。
+    // 针对一个 move 操作，包含 tablet, from_ts, to_ts
+    // 1. 对于 from_ts, 会发起 MODIFY_PEER.
+    // 2. 对 to_ts, 会发起 ADD_PEER.
+    // 这个代码块用于禁止任何针对 ksyncer peer 的 move 操作。包括 ksyncer 作为
+    // from_ts 或 to_ts.
+    if (req.config_changes_size() == 2) {
+      int beef_cnt = 0;
+      int modify_peer_times = 0;
+      int add_peer_times = 0;
+      for (const auto& item : req.config_changes()) {
+        if (PREDICT_FALSE(!item.has_type())) {
+          *error_code = TabletServerErrorPB::INVALID_CONFIG;
+          return Status::InvalidArgument("Must specify 'type' argument",
+                                         SecureShortDebugString(req));
+        }
+        if (PREDICT_FALSE(!item.has_peer())) {
+          *error_code = TabletServerErrorPB::INVALID_CONFIG;
+          return Status::InvalidArgument("Must specify 'peer' argument",
+                                         SecureShortDebugString(req));
+        }
+
+        const RaftPeerPB& peer = item.peer();
+        if (PREDICT_FALSE(!peer.has_permanent_uuid())) {
+          return Status::InvalidArgument("peer must have permanent_uuid specified",
+                                         SecureShortDebugString(req));
+        }
+
+        const string& server_uuid = peer.permanent_uuid();
+        if (server_uuid == FLAGS_ksyncer_uuid) {
+          ++beef_cnt;
+        }
+        ChangeConfigType type = item.type(); // Always have value, guarantee by 'item.has_type()'.
+        if (type == ADD_PEER) {
+          ++add_peer_times;
+        } else if (type == MODIFY_PEER) {
+          ++modify_peer_times;
+        }
+      }
+      if (beef_cnt * modify_peer_times * add_peer_times == 1) {
+        LOG(INFO) << "Rebalance on beef is not allowed. It's a fake peer.";
+        return Status::InvalidArgument(
+            Substitute("Rebalance on beef is not allowed. It's a fake peer."
+                       "Add --ignored_tservers=$0 when using sp_kudu cluster rebalance tool.",
+                       FLAGS_ksyncer_uuid));
+      }
+    }
 
     for (const auto& item : req.config_changes()) {
       if (PREDICT_FALSE(!item.has_type())) {

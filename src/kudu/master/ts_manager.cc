@@ -50,6 +50,8 @@ DEFINE_bool(location_mapping_by_uuid, false,
 TAG_FLAG(location_mapping_by_uuid, hidden);
 TAG_FLAG(location_mapping_by_uuid, unsafe);
 
+DECLARE_string(ksyncer_uuid);
+
 METRIC_DEFINE_gauge_int32(server, cluster_replica_skew,
                           "Cluster Replica Skew",
                           kudu::MetricUnit::kTablets,
@@ -243,6 +245,11 @@ void TSManager::GetDescriptorsAvailableForPlacement(TSDescriptorVector* descs) c
   descs->reserve(servers_by_id_.size());
   for (const TSDescriptorMap::value_type& entry : servers_by_id_) {
     const shared_ptr<TSDescriptor>& ts = entry.second;
+    if (ts->permanent_uuid() == FLAGS_ksyncer_uuid) {
+      VLOG(3) << "Not going to use ksyncer peer as candidate";
+      continue;
+    }
+
     if (AvailableForPlacementUnlocked(*ts)) {
       descs->push_back(ts);
     }

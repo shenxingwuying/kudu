@@ -44,6 +44,7 @@
 #include "kudu/gutil/port.h"
 #include "kudu/gutil/stl_util.h"
 #include "kudu/gutil/strings/substitute.h"
+#include "kudu/gutil/strings/util.h"
 #include "kudu/rpc/result_tracker.h"
 #include "kudu/tablet/mvcc.h"
 #include "kudu/tablet/ops/alter_schema_op.h"
@@ -129,6 +130,13 @@ using strings::Substitute;
 
 namespace kudu {
 namespace tablet {
+
+namespace {
+bool IsToSyncTable(const string& table_name) {
+  return HasPrefixString(table_name, "profile_wos") ||
+         HasPrefixString(table_name, "item_wos");
+}
+} // anonymous namespace
 
 TabletReplica::TabletReplica(
     scoped_refptr<TabletMetadata> meta,
@@ -497,7 +505,8 @@ Status TabletReplica::RunLogGC() {
   }
   int32_t num_gced;
   log::RetentionIndexes retention = GetRetentionIndexes();
-  Status s = log_->GC(retention, &num_gced);
+  bool is_to_sync_table = IsToSyncTable(meta_->table_name());
+  Status s = log_->GC(retention, is_to_sync_table, &num_gced);
   if (!s.ok()) {
     s = s.CloneAndPrepend("Unexpected error while running Log GC from TabletReplica");
     LOG(ERROR) << s.ToString();
@@ -626,7 +635,8 @@ Status TabletReplica::GetReplaySizeMap(map<int64_t, int64_t>* replay_size_map) c
 
 Status TabletReplica::GetGCableDataSize(int64_t* retention_size) const {
   RETURN_NOT_OK(CheckRunning());
-  *retention_size = log_->GetGCableDataSize(GetRetentionIndexes());
+  bool is_to_sync_table = IsToSyncTable(meta_->table_name());
+  *retention_size = log_->GetGCableDataSize(GetRetentionIndexes(), is_to_sync_table);
   return Status::OK();
 }
 

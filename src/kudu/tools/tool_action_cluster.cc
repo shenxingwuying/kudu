@@ -59,6 +59,7 @@ using std::vector;
 using strings::Split;
 using strings::Substitute;
 
+DECLARE_string(ksyncer_uuid);
 DECLARE_string(tables);
 DECLARE_string(tablets);
 
@@ -295,8 +296,11 @@ Status EvaluateMoveSingleReplicasFlag(const vector<string>& master_addresses,
 // can be the source and the destination of no more than the specified number of
 // move operations.
 Status RunRebalance(const RunnerContext& context) {
-  const vector<string> ignored_tservers =
-      Split(FLAGS_ignored_tservers, ",", strings::SkipEmpty());
+  vector<string> ignored_tservers = Split(FLAGS_ignored_tservers, ",", strings::SkipEmpty());
+  if (!std::any_of(ignored_tservers.begin(), ignored_tservers.end(),
+                   [&](const string& v){ return v == FLAGS_ksyncer_uuid; } )) {
+    ignored_tservers.emplace_back(FLAGS_ksyncer_uuid);
+  }
   vector<string> master_addresses;
   RETURN_NOT_OK(ParseMasterAddresses(context, &master_addresses));
   const vector<string> table_filters =
