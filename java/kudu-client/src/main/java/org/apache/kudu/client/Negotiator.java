@@ -95,10 +95,20 @@ public class Negotiator extends SimpleChannelInboundHandler<CallResponse> {
   private static final Logger LOG = LoggerFactory.getLogger(Negotiator.class);
 
   private final SaslClientCallbackHandler saslCallback = new SaslClientCallbackHandler();
-  private static final ImmutableSet<RpcHeader.RpcFeatureFlag> SUPPORTED_RPC_FEATURES =
-      ImmutableSet.of(
-          RpcHeader.RpcFeatureFlag.APPLICATION_FEATURE_FLAGS,
-          RpcHeader.RpcFeatureFlag.TLS);
+
+  private static final ImmutableSet<RpcHeader.RpcFeatureFlag> SUPPORTED_RPC_FEATURES;
+
+  static {
+    String disableKuduClientTlsStr = System.getenv("DISABLE_KUDU_CLIENT_TLS");
+    boolean disableKuduClientTls = disableKuduClientTlsStr != null &&
+                                   disableKuduClientTlsStr.equals("1");
+    if (disableKuduClientTls) {
+      SUPPORTED_RPC_FEATURES = ImmutableSet.of(RpcHeader.RpcFeatureFlag.APPLICATION_FEATURE_FLAGS);
+    } else {
+      SUPPORTED_RPC_FEATURES = ImmutableSet.of(RpcHeader.RpcFeatureFlag.APPLICATION_FEATURE_FLAGS,
+                                               RpcHeader.RpcFeatureFlag.TLS);
+    }
+  }
 
   /**
    * Set of SASL mechanisms supported by the client, in descending priority order.
@@ -352,7 +362,8 @@ public class Negotiator extends SimpleChannelInboundHandler<CallResponse> {
     // Store the supported features advertised by the server.
     serverFeatures = getFeatureFlags(response);
     // If the server supports TLS, we will always speak TLS to it.
-    final boolean negotiatedTls = serverFeatures.contains(RpcFeatureFlag.TLS);
+    final boolean negotiatedTls = serverFeatures.contains(RpcFeatureFlag.TLS) &&
+                                  SUPPORTED_RPC_FEATURES.contains(RpcFeatureFlag.TLS);
 
     // Check the negotiated authentication type sent by the server.
     chosenAuthnType = chooseAuthenticationType(response);
