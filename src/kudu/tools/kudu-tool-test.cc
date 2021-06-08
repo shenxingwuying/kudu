@@ -3214,8 +3214,8 @@ void CheckReplicas(MiniTabletServer* internal_ts, int offset, int step) {
 
     CHECK(external_replica->tablet()->schema()->Equals(
         *(internal_replica->tablet()->schema())));
-    CHECK(external_replica->tablet()->metadata()->partition_schema().Equals(
-        internal_replica->tablet()->metadata()->partition_schema()));
+    CHECK(external_replica->tablet()->metadata()->partition_schema() ==
+        internal_replica->tablet()->metadata()->partition_schema());
 
     // Simply compare data.
     CHECK_EQ(external_replica->tablet()->OnDiskDataSize(),
