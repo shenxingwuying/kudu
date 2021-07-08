@@ -25,10 +25,12 @@ fi
 TP_SOURCE_DIR="$TP_DIR/src"
 TP_BUILD_DIR="$TP_DIR/build"
 
+NO_REMOVE_THIRDPARTY_ARCHIVES=1
+
 # This URL corresponds to the CloudFront Distribution for the S3
 # bucket cloudera-thirdparty-libs which is directly accessible at
 # http://cloudera-thirdparty-libs.s3.amazonaws.com/
-CLOUDFRONT_URL_PREFIX=https://d3dr9sfxru4sde.cloudfront.net
+CLOUDFRONT_URL_PREFIX=https://jfrog-internal.sensorsdata.cn/artifactory/d3dr9sfxru4sde_cloudfront_net-cache
 
 # Third party dependency downloading URL, default to the CloudFront
 # Distribution URL.
