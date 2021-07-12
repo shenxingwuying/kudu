@@ -1146,6 +1146,16 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
                                                        std::string* origin_table_name,
                                                        WallTime* mark_delete_time);
 
+  enum class ValidateType {
+    kCreateTable = 0,
+    kAlterTable,
+  };
+  template<typename RespClass>
+  Status ValidateNumberReplicas(const std::string& normalized_table_name,
+                                RespClass* resp, ValidateType type,
+                                const boost::optional<int>& partitions_count,
+                                int num_replicas);
+
   // TODO(unknown): the maps are a little wasteful of RAM, since the TableInfo/TabletInfo
   // objects have a copy of the string key. But STL doesn't make it
   // easy to make a "gettable set".

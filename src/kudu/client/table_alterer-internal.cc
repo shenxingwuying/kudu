@@ -60,6 +60,7 @@ Status KuduTableAlterer::Data::ToRequest(AlterTableRequestPB* req) {
   if (!rename_to_.is_initialized() &&
       !new_extra_configs_ &&
       !set_owner_to_.is_initialized() &&
+      !set_replication_factor_to_.is_initialized() &&
       steps_.empty()) {
     return Status::InvalidArgument("No alter steps provided");
   }
@@ -77,6 +78,9 @@ Status KuduTableAlterer::Data::ToRequest(AlterTableRequestPB* req) {
   }
   if (set_owner_to_.is_initialized()) {
     req->set_new_table_owner(set_owner_to_.get());
+  }
+  if (set_replication_factor_to_.is_initialized()) {
+    req->set_num_replicas(set_replication_factor_to_.get());
   }
 
   if (schema_ != nullptr) {

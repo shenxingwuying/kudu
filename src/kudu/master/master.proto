@@ -734,6 +734,8 @@ message AlterTableRequestPB {
   // must start with 101
   // Force to alter a trashed table.
   optional bool force_on_trashed_table = 101 [default = false];
+
+  optional int32 num_replicas = 102;
 }
 
 message AlterTableResponsePB {

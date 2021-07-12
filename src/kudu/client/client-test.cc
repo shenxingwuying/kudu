@@ -63,6 +63,7 @@
 #include "kudu/client/schema.h"
 #include "kudu/client/session-internal.h"
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
+#include "kudu/client/table_alterer-internal.h"
 #include "kudu/client/transaction-internal.h"
 #include "kudu/client/value.h"
 #include "kudu/client/write_op.h"
@@ -5593,9 +5594,10 @@ TEST_F(ClientTest, TestCreateTableWithBadNumReplicas) {
   const vector<pair<int, string>> cases = {
     {3, "not enough live tablet servers to create a table with the requested "
      "replication factor 3; 1 tablet servers are alive"},
-    {2, "illegal replication factor 2 (replication factor must be odd)"},
-    {-1, "illegal replication factor -1 (replication factor must be positive)"},
-    {11, "illegal replication factor 11 (max replication factor is 7)"}
+    {2, "illegal replication factor 2: replication factor must be odd"},
+    {-1, "illegal replication factor -1: minimum allowed replication factor is 1"},
+    {11, "illegal replication factor 11: maximum allowed replication factor is 7 "
+         "(controlled by --max_num_replicas)"}
   };
 
   for (const auto& c : cases) {
@@ -8120,6 +8122,71 @@ TEST_F(ClientTestUnixSocket, TestConnectViaUnixSocket) {
     total_unix_conns += counter->value();
   }
   ASSERT_EQ(1, total_unix_conns);
+}
+
+class MultiTServerClientTest : public ClientTest {
+ public:
+  void SetUp() override {
+    KuduTest::SetUp();
+
+    // Start minicluster and wait for tablet servers to connect to master.
+    InternalMiniClusterOptions options;
+    options.num_tablet_servers = 4;
+    cluster_.reset(new InternalMiniCluster(env_, std::move(options)));
+    ASSERT_OK(cluster_->StartSync());
+
+    // Scenarios of this test might require multiple retries from the client if
+    // running on a slow or overloaded machine. The timeout for RPC operations
+    // is set higher than the default to avoid false positives.
+    KuduClientBuilder builder;
+    builder.default_admin_operation_timeout(MonoDelta::FromSeconds(60));
+    builder.default_rpc_timeout(MonoDelta::FromSeconds(60));
+    ASSERT_OK(cluster_->CreateClient(&builder, &client_));
+
+    unique_ptr<KuduTableCreator> table_creator(client_->NewTableCreator());
+    ASSERT_OK(table_creator->table_name(kTableName)
+        .schema(&schema_)
+        .add_hash_partitions({ "key" }, 2)
+        .num_replicas(3)
+        .Create());
+    ASSERT_OK(client_->OpenTable(kTableName, &client_table_));
+  }
+};
+
+// Test changing replication factor.
+TEST_F(MultiTServerClientTest, TestSetReplicationFactor) {
+  string tablet_id = GetFirstTabletId(client_table_.get());
+
+  scoped_refptr<internal::RemoteTablet> rt;
+  client_->data_->meta_cache_->ClearCache();
+  ASSERT_OK(MetaCacheLookupById(tablet_id, &rt));
+  ASSERT_NE(nullptr, rt);
+  vector<internal::RemoteReplica> replicas;
+  rt->GetRemoteReplicas(&replicas);
+  ASSERT_EQ(3, replicas.size());
+
+  // Set replication factor from 3 to 1.
+  unique_ptr<KuduTableAlterer> table_alterer(client_->NewTableAlterer(kTableName));
+  table_alterer->data_->set_replication_factor_to_ = 1;
+  ASSERT_OK(table_alterer->Alter());
+  ASSERT_EVENTUALLY([&] {
+    client_->data_->meta_cache_->ClearCache();
+    ASSERT_OK(MetaCacheLookupById(tablet_id, &rt));
+    ASSERT_NE(nullptr, rt);
+    rt->GetRemoteReplicas(&replicas);
+    ASSERT_EQ(1, replicas.size());
+  });
+
+  // Set replication factor from 1 to 3.
+  table_alterer->data_->set_replication_factor_to_ = 3;
+  ASSERT_OK(table_alterer->Alter());
+  ASSERT_EVENTUALLY([&] {
+    client_->data_->meta_cache_->ClearCache();
+    ASSERT_OK(MetaCacheLookupById(tablet_id, &rt));
+    ASSERT_NE(nullptr, rt);
+    rt->GetRemoteReplicas(&replicas);
+    ASSERT_EQ(3, replicas.size());
+  });
 }
 
 } // namespace client
