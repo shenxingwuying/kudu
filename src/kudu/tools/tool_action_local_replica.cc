@@ -22,6 +22,8 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -67,10 +69,13 @@
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/gutil/strings/util.h"
 #include "kudu/master/sys_catalog.h"
+#include "kudu/rpc/messenger.h"
+#include "kudu/rpc/rpc_controller.h"
 #include "kudu/tablet/diskrowset.h"
 #include "kudu/tablet/metadata.pb.h"
 #include "kudu/tablet/rowset.h"
 #include "kudu/tablet/rowset_metadata.h"
+#include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_mem_trackers.h"
 #include "kudu/tablet/tablet_metadata.h"
 #include "kudu/tablet/tablet_replica.h"
@@ -78,13 +83,20 @@
 #include "kudu/tools/tool_action_common.h"
 #include "kudu/tserver/tablet_copy_client.h"
 #include "kudu/tserver/ts_tablet_manager.h"
+#include "kudu/tserver/tserver.pb.h"
+#include "kudu/tserver/tserver_service.proxy.h"
 #include "kudu/util/env.h"
 #include "kudu/util/env_util.h"
 #include "kudu/util/faststring.h"
+#include "kudu/util/flag_validators.h"
+#include "kudu/util/locks.h"
+#include "kudu/util/memory/arena.h"
 #include "kudu/util/metrics.h"
+#include "kudu/util/monotime.h"
 #include "kudu/util/net/net_util.h"
 #include "kudu/util/pb_util.h"
 #include "kudu/util/status.h"
+#include "kudu/util/threadpool.h"
 
 namespace kudu {
 namespace rpc {
@@ -104,6 +116,11 @@ DEFINE_bool(list_detail, false,
 DEFINE_int64(rowset_index, -1,
              "Index of the rowset in local replica, default value(-1) "
              "will dump all the rowsets of the local replica");
+DEFINE_int32(num_clone_processes, -1, "num of clone processes to run");
+DEFINE_int32(current_bucket, -1, "current bucket of clone process");
+DEFINE_int32(num_max_threads, 8, "num of threads when cloning");
+DEFINE_bool(rewrite_config, false, "rewrite raft config when cloning");
+DEFINE_int32(target_port, 7050, "rewrite raft config when cloning");
 DEFINE_bool(clean_unsafe, false,
             "Delete the local replica completely, not leaving a tombstone. "
             "This is not guaranteed to be safe because it also removes the "
@@ -115,6 +132,27 @@ DEFINE_bool(ignore_nonexistent, false,
             "tablet replica to remove is not found");
 
 DECLARE_int32(tablet_copy_download_threads_nums_per_session);
+
+DECLARE_string(tables);
+
+static bool ValidateCloneFlags() {
+  if (FLAGS_current_bucket < 0 && FLAGS_num_clone_processes < 0) {
+    return true;
+  }
+
+  if (FLAGS_current_bucket < 0 || FLAGS_num_clone_processes < 0) {
+    LOG(ERROR) << "--current_bucket and --num_clone_processes must be both < 0 or >= 0";
+    return false;
+  }
+
+  if (FLAGS_current_bucket >= FLAGS_num_clone_processes) {
+    LOG(ERROR) << "--current_bucket must be in range [0, --num_clone_processes]";
+    return false;
+  }
+
+  return true;
+}
+GROUP_FLAG_VALIDATOR(clone_flags_validator, ValidateCloneFlags);
 
 using kudu::consensus::ConsensusMetadata;
 using kudu::consensus::ConsensusMetadataManager;
@@ -129,21 +167,30 @@ using kudu::log::LogReader;
 using kudu::log::ReadableLogSegment;
 using kudu::log::SegmentSequence;
 using kudu::rpc::Messenger;
+using kudu::rpc::MessengerBuilder;
+using kudu::rpc::RpcController;
 using kudu::tablet::DiskRowSet;
 using kudu::tablet::RowIteratorOptions;
 using kudu::tablet::RowSetMetadata;
 using kudu::tablet::TabletDataState;
 using kudu::tablet::TabletMetadata;
-using kudu::tserver::TSTabletManager;
+using kudu::tablet::TabletStatusPB;
+using kudu::tserver::ListTabletsRequestPB;
+using kudu::tserver::ListTabletsResponsePB;
 using kudu::tserver::TabletCopyClient;
+using kudu::tserver::TabletServerServiceProxy;
+using kudu::tserver::TSTabletManager;
+
 using std::cout;
 using std::endl;
 using std::map;
 using std::pair;
 using std::shared_ptr;
+using std::set;
 using std::string;
 using std::unique_ptr;
 using std::vector;
+using strings::Split;
 using strings::Substitute;
 
 namespace kudu {
@@ -383,6 +430,180 @@ Status CopyFromRemote(const RunnerContext& context) {
   RETURN_NOT_OK(client.Start(hp, nullptr));
   RETURN_NOT_OK(client.FetchAll(nullptr));
   return client.Finish();
+}
+
+Status GetReplicas(TabletServerServiceProxy* proxy,
+                   vector<ListTabletsResponsePB::StatusAndSchemaPB>* replicas) {
+  ListTabletsRequestPB req;
+  ListTabletsResponsePB resp;
+  RpcController rpc;
+  rpc.set_timeout(MonoDelta::FromMilliseconds(3000));
+
+  // Even with FLAGS_include_schema=false, don't set need_schema_info=false
+  // in the request. The reason is that the schema is still needed to decode
+  // the partition of each replica, and the partition information is pretty
+  // much always nice to have.
+  RETURN_NOT_OK(proxy->ListTablets(req, &resp, &rpc));
+  if (resp.has_error()) {
+    return StatusFromPB(resp.error().status());
+  }
+
+  replicas->assign(resp.status_and_schema().begin(),
+                   resp.status_and_schema().end());
+  return Status::OK();
+}
+
+Status CloneTserver(const RunnerContext& context) {
+  // 1. List all local tablets.
+  FsManager fs_manager(Env::Default(), FsManagerOpts());
+  RETURN_NOT_OK(fs_manager.Open());
+  scoped_refptr<ConsensusMetadataManager> cmeta_manager(new ConsensusMetadataManager(&fs_manager));
+
+  vector<string> tablets;
+  RETURN_NOT_OK(fs_manager.ListTabletIds(&tablets));
+
+  set<string> local_tablets(tablets.begin(), tablets.end());
+
+  // 2. Obtain tablet list from remote tserver to download.
+  const string& rpc_address = FindOrDie(context.required_args, "source");
+
+  HostPort hp;
+  RETURN_NOT_OK(ParseHostPortString(rpc_address, &hp));
+  unique_ptr<TabletServerServiceProxy> proxy;
+  RETURN_NOT_OK(BuildProxy(hp.host(), hp.port(), &proxy));
+
+  vector<ListTabletsResponsePB::StatusAndSchemaPB> replicas;
+  RETURN_NOT_OK(GetReplicas(proxy.get(), &replicas));
+
+  sort(replicas.begin(), replicas.end(),
+       [](const ListTabletsResponsePB::StatusAndSchemaPB& lhs,
+          const ListTabletsResponsePB::StatusAndSchemaPB& rhs) {
+         return lhs.tablet_status().tablet_id() < rhs.tablet_status().tablet_id();
+  });
+
+  // 3. Generate tablet list to download.
+  const vector<string> table_filters = Split(FLAGS_tables, ",", strings::SkipEmpty());
+
+  vector<string> tablets_to_download;
+  std::unordered_map<string, int64_t> tablet_id_to_size;
+  int64_t total_byte_size = 0;
+  for (int i = 0; i < replicas.size(); ++i) {
+    const TabletStatusPB& ts = replicas[i].tablet_status();
+    // Skip if the tablet is not health, or local tserver contains it, or it's been filtered out.
+    if (ts.state() != tablet::RUNNING ||
+        ContainsKey(local_tablets, ts.tablet_id()) ||
+        !MatchesAnyPattern(table_filters, ts.table_name())) {
+      continue;
+    }
+
+    // In multi-processor mode, check whether the replica should be cloned by current processor.
+    // NOTE: We have checked flags, no need to validate again.
+    if (FLAGS_current_bucket >= 0 &&
+        i % FLAGS_num_clone_processes != FLAGS_current_bucket) {
+      continue;
+    }
+
+    tablets_to_download.emplace_back(ts.tablet_id());
+    if (ts.has_estimated_on_disk_size()) {
+      tablet_id_to_size[ts.tablet_id()] = ts.estimated_on_disk_size();
+      total_byte_size += ts.estimated_on_disk_size();
+    } else {
+      tablet_id_to_size[ts.tablet_id()] = 0;
+    }
+  }
+
+  // 4. Start downloading tablets.
+  // Protect finished_byte_size, failed_tablets and succeed_tablets.
+  simple_spinlock lock;
+  int64_t finished_byte_size = 0;
+  vector<string> failed_tablets;
+  vector<string> succeed_tablets;
+  std::unique_ptr<ThreadPool> clone_pool;
+  ThreadPoolBuilder("clone-pool").set_max_threads(FLAGS_num_max_threads)
+                                 .set_min_threads(FLAGS_num_max_threads)
+                                 .Build(&clone_pool);
+  for (const auto& tablet_id : tablets_to_download) {
+    {
+      std::lock_guard<simple_spinlock> l(lock);
+      // Short circuit break when occured error.
+      if (!failed_tablets.empty()) {
+        break;
+      }
+    }
+    RETURN_NOT_OK(clone_pool->Submit([&]() {
+      LOG(INFO) << "Downloading tablet " << tablet_id;
+      MessengerBuilder builder("tablet_clone_client." + tablet_id);
+      shared_ptr<Messenger> messenger;
+      builder.Build(&messenger);
+      TabletCopyClient client(tablet_id, &fs_manager, cmeta_manager,
+                              messenger, nullptr /* no metrics */);
+      client.Start(hp, nullptr);
+      client.FetchAll(nullptr);
+      Status s = client.Finish();
+      {
+        std::lock_guard<simple_spinlock> l(lock);
+        if (!s.ok()) {
+          failed_tablets.emplace_back(tablet_id);
+          LOG(INFO) << Substitute("Tablet $0 download failed, error=$1.",
+                                  tablet_id, s.ToString());
+        } else {
+          succeed_tablets.emplace_back(tablet_id);
+          LOG(INFO) << Substitute("Tablet $0 download success.");
+        }
+        finished_byte_size += tablet_id_to_size[tablet_id];
+        LOG(INFO) << Substitute("$0/$1 tablets, $2/$3 KiB downloaded, include $4 failed tablets.",
+                                succeed_tablets.size() + failed_tablets.size(),
+                                tablets_to_download.size(),
+                                finished_byte_size >> 10,
+                                total_byte_size >> 10,
+                                failed_tablets.size());
+      }
+    }));
+  }
+  clone_pool->Wait();
+  clone_pool->Shutdown();
+
+  if (!failed_tablets.empty()) {
+    return Status::Corruption(Substitute("Failed during download, failed tablets are: $0",
+                                         JoinStrings(failed_tablets, ";")));
+  }
+  CHECK_EQ(tablets_to_download.size(), succeed_tablets.size());
+
+  // 5. Rewrite config to 'uuid:HOSTF:port', indicate this replica need to be re-distributed.
+  if (FLAGS_rewrite_config) {
+    LOG(INFO) << "Rewriting raft config";
+    string fqdn;
+    GetHostname(&fqdn);
+    HostPort hostport(std::move(fqdn), FLAGS_target_port);
+    const string& uuid = fs_manager.uuid();
+    vector<pair<string, HostPort>> peers{{uuid, hostport}};
+
+    int cmeta_updated_count = 0;
+    for (const auto& tablet_id : succeed_tablets) {
+      RETURN_NOT_OK(BackupConsensusMetadata(&fs_manager, tablet_id));
+      scoped_refptr<ConsensusMetadataManager> cmeta_manager =
+        new ConsensusMetadataManager(&fs_manager);
+      scoped_refptr<ConsensusMetadata> cmeta;
+      RETURN_NOT_OK(cmeta_manager->Load(tablet_id, &cmeta));
+      RaftConfigPB current_config = cmeta->CommittedConfig();
+      RaftConfigPB new_config = current_config;
+      new_config.clear_peers();
+      for (const auto& p : peers) {
+        RaftPeerPB new_peer;
+        new_peer.set_member_type(RaftPeerPB::VOTER);
+        new_peer.set_permanent_uuid(p.first);
+        HostPortPB new_peer_host_port_pb = HostPortToPB(p.second);
+        new_peer.mutable_last_known_addr()->CopyFrom(new_peer_host_port_pb);
+        new_config.add_peers()->CopyFrom(new_peer);
+      }
+      cmeta->set_committed_config(new_config);
+      RETURN_NOT_OK(cmeta->Flush());
+      LOG(INFO) << Substitute("$0/$1 tablets rewrite done.", ++cmeta_updated_count, succeed_tablets.size());
+    }
+  }
+  LOG(INFO) << "clone tserver succeed";
+
+  return Status::OK();
 }
 
 Status DeleteLocalReplica(const string& tablet_id,
@@ -933,6 +1154,21 @@ unique_ptr<Mode> BuildLocalReplicaMode() {
       .AddOptionalParameter("tablet_copy_download_threads_nums_per_session")
       .Build();
 
+  unique_ptr<Action> clone =
+      ActionBuilder("clone", &CloneTserver)
+      .AddRequiredParameter({ "source", "Source RPC address of form hostname:port" })
+      .Description("Clone all or partial tablet replicas from a remote server.")
+      .AddOptionalParameter("current_bucket")
+      .AddOptionalParameter("fs_data_dirs")
+      .AddOptionalParameter("fs_metadata_dir")
+      .AddOptionalParameter("fs_wal_dir")
+      .AddOptionalParameter("num_clone_processes")
+      .AddOptionalParameter("num_max_threads")
+      .AddOptionalParameter("rewrite_config")
+      .AddOptionalParameter("tables")
+      .AddOptionalParameter("target_port")
+      .Build();
+
   unique_ptr<Action> list =
       ActionBuilder("list", &ListLocalReplicas)
       .Description("Show list of tablet replicas in the local filesystem")
@@ -967,6 +1203,7 @@ unique_ptr<Mode> BuildLocalReplicaMode() {
   return ModeBuilder("local_replica")
       .Description("Operate on local tablet replicas via the local filesystem")
       .AddMode(std::move(cmeta))
+      .AddAction(std::move(clone))
       .AddAction(std::move(copy_from_remote))
       .AddAction(std::move(data_size))
       .AddAction(std::move(delete_local_replica))

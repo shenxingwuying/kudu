@@ -430,7 +430,7 @@ class TableLoader : public TableVisitor {
 
     // Add the tablet to the IDs map and to the name map (if the table is not deleted).
     bool is_deleted = l.mutable_data()->is_deleted();
-    
+
     if (!FLAGS_skip_loading_deleted_data_when_startup || !is_deleted) {
       catalog_manager_->table_ids_map_[table->id()] = table;
     }
@@ -502,7 +502,7 @@ class TabletLoader : public TabletVisitor {
 
     // Add the tablet to the table.
     bool is_deleted = l.mutable_data()->is_deleted();
-     
+
     l.Commit();
     if (!FLAGS_skip_loading_deleted_data_when_startup || !is_deleted) {
       // Add the tablet to the tablet manager.

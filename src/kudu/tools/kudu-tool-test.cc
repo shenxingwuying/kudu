@@ -91,6 +91,7 @@
 #include "kudu/integration-tests/cluster_verifier.h"
 #include "kudu/integration-tests/mini_cluster_fs_inspector.h"
 #include "kudu/integration-tests/test_workload.h"
+#include "kudu/master/catalog_manager.h"
 #include "kudu/master/master.h"
 #include "kudu/master/master.pb.h"
 #include "kudu/master/mini_master.h"
@@ -171,6 +172,7 @@ using kudu::cluster::ExternalMiniClusterOptions;
 using kudu::cluster::ExternalTabletServer;
 using kudu::cluster::InternalMiniCluster;
 using kudu::cluster::InternalMiniClusterOptions;
+using kudu::cluster::MiniCluster;
 using kudu::consensus::OpId;
 using kudu::consensus::RECEIVED_OPID;
 using kudu::consensus::ReplicateMsg;
@@ -1095,6 +1097,16 @@ TEST_F(ToolTest, TestModeHelp) {
     // Try with hyphens instead of underscores.
     NO_FATALS(RunTestHelp("local-replica copy-from-remote --help",
                           kLocalReplicaCopyFromRemoteRegexes));
+  }
+  {
+    const vector<string> kLocalReplicaCloneRegexes = {
+        "Clone all or partial tablet replicas from a remote server",
+    };
+    NO_FATALS(RunTestHelp("local_replica clone --help",
+                          kLocalReplicaCloneRegexes));
+    // Try with hyphens instead of underscores.
+    NO_FATALS(RunTestHelp("local-replica clone --help",
+                          kLocalReplicaCloneRegexes));
   }
   {
     const string kCmd = "master";
@@ -3151,6 +3163,53 @@ TEST_F(ToolTest, TestLocalReplicaCMetaOps) {
     EXPECT_THAT(stderr, testing::HasSubstr(
         "specified term 10 must be higher than current term 123"));
   }
+}
+
+void StartStandaloneTserver(std::shared_ptr<MiniTabletServer>& tablet_server) {
+  uint16_t ts_rpc_port = 0;
+  string bind_ip = GetBindIpForDaemon(10, kDefaultBindMode);
+  tablet_server = std::make_shared<MiniTabletServer>(
+      JoinPathSegments(GetTestDataDirectory(), "external_ts"),
+      HostPort(bind_ip, ts_rpc_port),
+      1);
+
+  CHECK_OK(tablet_server->Start());
+  CHECK_OK(tablet_server->WaitStarted());
+  tablet_server->Shutdown();
+}
+
+// Test for 'local_replica clone' functionality.
+TEST_F(ToolTest, TestLocalReplicaCloneOps) {
+  NO_FATALS(StartMiniCluster());
+
+  std::shared_ptr<MiniTabletServer> external_ts;
+  NO_FATALS(StartStandaloneTserver(external_ts));
+
+  // TestWorkLoad.Setup() internally generates a table.
+  TestWorkload workload(mini_cluster_.get());
+  workload.set_num_replicas(1);
+  workload.Setup();
+
+  MiniTabletServer* internal_ts = mini_cluster_->mini_tablet_server(0);
+  const string& flags = Substitute("$0 --fs_wal_dir=$1 --fs_data_dirs=$2",
+                                   internal_ts->bound_rpc_addr().ToString(),
+                                   external_ts->options()->fs_opts.wal_root,
+                                   JoinStrings(external_ts->options()->fs_opts.data_roots, ","));
+
+  string stdout;
+  string stderr;
+  NO_FATALS(RunActionStdoutStderrString(
+      Substitute("local_replica clone $0", flags), &stdout, &stderr))
+      << flags << "\n" << stdout << "\n" << stderr;
+
+  vector<string> local_tablet_ids;
+  ASSERT_OK(external_ts->Start());
+  ASSERT_OK(external_ts->WaitStarted());
+  ASSERT_OK(external_ts->server()->fs_manager()->ListTabletIds(&local_tablet_ids));
+  sort(local_tablet_ids.begin(), local_tablet_ids.end());
+  vector<string> remote_tablet_ids = mini_cluster_->mini_tablet_server(0)->ListTablets();
+  sort(remote_tablet_ids.begin(), remote_tablet_ids.end());
+  ASSERT_EQ(remote_tablet_ids, local_tablet_ids);
 }
 
 TEST_F(ToolTest, TestTserverList) {
