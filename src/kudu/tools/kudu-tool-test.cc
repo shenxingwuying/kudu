@@ -3165,51 +3165,91 @@ TEST_F(ToolTest, TestLocalReplicaCMetaOps) {
   }
 }
 
-void StartStandaloneTserver(std::shared_ptr<MiniTabletServer>& tablet_server) {
+void StartStandaloneTserver(std::shared_ptr<MiniTabletServer>& tablet_server, int index) {
   uint16_t ts_rpc_port = 0;
   string bind_ip = GetBindIpForDaemon(10, kDefaultBindMode);
   tablet_server = std::make_shared<MiniTabletServer>(
-      JoinPathSegments(GetTestDataDirectory(), "external_ts"),
+      JoinPathSegments(GetTestDataDirectory(), Substitute("external_ts_$0", index)),
       HostPort(bind_ip, ts_rpc_port),
       1);
 
   CHECK_OK(tablet_server->Start());
   CHECK_OK(tablet_server->WaitStarted());
-  tablet_server->Shutdown();
+}
+
+void CheckReplicas(MiniTabletServer* internal_ts, int offset, int step) {
+  vector<string> remote_tablet_ids = internal_ts->ListTablets();
+  sort(remote_tablet_ids.begin(), remote_tablet_ids.end());
+
+  std::shared_ptr<MiniTabletServer> external_ts;
+  NO_FATALS(StartStandaloneTserver(external_ts, offset));
+  external_ts->Shutdown();
+
+  const string& cmd = Substitute(
+      "local_replica clone $0 --fs_wal_dir=$1 --fs_data_dirs=$2 --num_clone_processes=$3"
+      " --current_bucket=$4 --rewrite_config",
+      internal_ts->bound_rpc_addr().ToString(),
+      external_ts->options()->fs_opts.wal_root,
+      JoinStrings(external_ts->options()->fs_opts.data_roots, ","),
+      step,
+      offset);
+  CHECK_OK(RunActionPrependStdoutStderr(cmd));
+
+  vector<string> local_tablet_ids;
+  CHECK_OK(external_ts->Start());
+  CHECK_OK(external_ts->WaitStarted());
+  CHECK_OK(external_ts->server()->fs_manager()->ListTabletIds(&local_tablet_ids));
+  sort(local_tablet_ids.begin(), local_tablet_ids.end());
+  CHECK_LE(remote_tablet_ids.size() / step, local_tablet_ids.size());
+  CHECK_GE(remote_tablet_ids.size() / step + 1, local_tablet_ids.size());
+  for (int i = offset; i < remote_tablet_ids.size(); i += step) {
+    const auto& remote_tablet_id = remote_tablet_ids[i];
+    scoped_refptr<tablet::TabletReplica> external_replica;
+    CHECK(external_ts->server()->tablet_manager()->LookupTablet(
+        remote_tablet_id, &external_replica));
+
+    scoped_refptr<tablet::TabletReplica> internal_replica;
+    CHECK(internal_ts->server()->tablet_manager()->LookupTablet(
+        remote_tablet_id, &internal_replica));
+
+    CHECK(external_replica->tablet()->schema()->Equals(
+        *(internal_replica->tablet()->schema())));
+    CHECK(external_replica->tablet()->metadata()->partition_schema().Equals(
+        internal_replica->tablet()->metadata()->partition_schema()));
+
+    // Simply compare data.
+    CHECK_EQ(external_replica->tablet()->OnDiskDataSize(),
+             internal_replica->tablet()->OnDiskDataSize());
+
+    uint64_t er_count = 0;
+    uint64_t ir_count = 0;
+    CHECK_OK(external_replica->tablet()->CountLiveRows(&er_count));
+    CHECK_OK(internal_replica->tablet()->CountLiveRows(&ir_count));
+    CHECK_EQ(ir_count, er_count);
+  }
 }
 
 // Test for 'local_replica clone' functionality.
 TEST_F(ToolTest, TestLocalReplicaCloneOps) {
   NO_FATALS(StartMiniCluster());
 
-  std::shared_ptr<MiniTabletServer> external_ts;
-  NO_FATALS(StartStandaloneTserver(external_ts));
-
   // TestWorkLoad.Setup() internally generates a table.
   TestWorkload workload(mini_cluster_.get());
   workload.set_num_replicas(1);
+  workload.set_num_tablets(10);
   workload.Setup();
+  workload.Start();
+  while (workload.rows_inserted() < (AllowSlowTests() ? 1000000 : 1000)) {
+    SleepFor(MonoDelta::FromMilliseconds(10));
+  }
+  workload.StopAndJoin();
 
   MiniTabletServer* internal_ts = mini_cluster_->mini_tablet_server(0);
-  const string& flags = Substitute("$0 --fs_wal_dir=$1 --fs_data_dirs=$2",
-                                   internal_ts->bound_rpc_addr().ToString(),
-                                   external_ts->options()->fs_opts.wal_root,
-                                   JoinStrings(external_ts->options()->fs_opts.data_roots, ","));
 
-  string stdout;
-  string stderr;
-  NO_FATALS(RunActionStdoutStderrString(
-      Substitute("local_replica clone $0", flags), &stdout, &stderr))
-      << flags << "\n" << stdout << "\n" << stderr;
-
-  vector<string> local_tablet_ids;
-  ASSERT_OK(external_ts->Start());
-  ASSERT_OK(external_ts->WaitStarted());
-  ASSERT_OK(external_ts->server()->fs_manager()->ListTabletIds(&local_tablet_ids));
-  sort(local_tablet_ids.begin(), local_tablet_ids.end());
-  vector<string> remote_tablet_ids = mini_cluster_->mini_tablet_server(0)->ListTablets();
-  sort(remote_tablet_ids.begin(), remote_tablet_ids.end());
-  ASSERT_EQ(remote_tablet_ids, local_tablet_ids);
+  int local_ts_count = 5;
+  for (int i = 0; i < local_ts_count; ++i) {
+    CheckReplicas(internal_ts, i, local_ts_count);
+  }
 }
 
 TEST_F(ToolTest, TestTserverList) {
