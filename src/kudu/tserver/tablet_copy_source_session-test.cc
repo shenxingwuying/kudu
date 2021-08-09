@@ -34,7 +34,6 @@
 #include "kudu/common/row_operations.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.h"
-#include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/consensus_meta_manager.h"
 #include "kudu/consensus/log.h"
 #include "kudu/consensus/log_anchor_registry.h"
@@ -188,7 +187,7 @@ class TabletCopyTest : public KuduTabletTest {
                                      prepare_pool_.get(),
                                      dns_resolver_.get()));
     ASSERT_OK(tablet_replica_->WaitUntilConsensusRunning(MonoDelta::FromSeconds(10)));
-    ASSERT_OK(tablet_replica_->consensus()->WaitUntilLeaderForTests(MonoDelta::FromSeconds(10)));
+    ASSERT_OK(tablet_replica_->consensus()->WaitUntilLeader(MonoDelta::FromSeconds(10)));
   }
 
   void TabletReplicaStateChangedCallback(const string& tablet_id, const string& reason) {
