@@ -555,11 +555,13 @@ message DeleteTableRequestPB {
   // which the Kudu master has been configured to integrate with.
   optional bool modify_external_catalogs = 2 [default = true];
 
+  // !!!NOTICE!!! (yingchun): For compatibility reason, SensorsData added fields
+  // must start with 101
   // Reserve seconds after the table has been deleted.
-  optional uint32 reserve_seconds = 3;
+  optional uint32 reserve_seconds = 101;
 
   // Force to delete a trashed table.
-  optional bool force_on_trashed_table = 4 [default = false];
+  optional bool force_on_trashed_table = 102 [default = false];
 }
 
 message DeleteTableResponsePB {
@@ -727,8 +729,11 @@ message AlterTableRequestPB {
   map<string, string> new_extra_configs = 6;
 
   optional string new_table_owner = 7;
+
+  // !!!NOTICE!!! (yingchun): For compatibility reason, SensorsData added fields
+  // must start with 101
   // Force to alter a trashed table.
-  optional bool force_on_trashed_table = 8 [default = false];
+  optional bool force_on_trashed_table = 101 [default = false];
 }
 
 message AlterTableResponsePB {
