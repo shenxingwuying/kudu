@@ -28,6 +28,7 @@
 #include "kudu/client/schema.h"
 #include "kudu/client/write_op.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/txn_id.h"
 #include "kudu/common/wire_protocol-test-util.h"
 #include "kudu/gutil/mathlimits.h"
@@ -92,7 +93,7 @@ TestWorkload::TestWorkload(MiniCluster* cluster,
     remote_error_allowed_(false),
     write_pattern_(INSERT_RANDOM_ROWS),
     selection_(client::KuduClient::CLOSEST_REPLICA),
-    schema_(KuduSchema::FromSchema(GetSimpleTestSchema())),
+    schema_(KuduSchema::FromSchema(*GetSimpleTestSchema().get())),
     num_replicas_(3),
     num_tablets_(partitioning_ == PartitioningType::RANGE ? 1 : 2),
     table_name_(kDefaultTableName),

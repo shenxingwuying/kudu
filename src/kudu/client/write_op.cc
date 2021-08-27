@@ -25,9 +25,10 @@
 #include "kudu/client/schema.h"
 #include "kudu/common/common.pb.h"
 #include "kudu/common/row.h"
+#include "kudu/common/row_operations.pb.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/types.h"
-#include "kudu/common/wire_protocol.pb.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/util/bitmap.h"
 #include "kudu/util/slice.h"
 
@@ -54,7 +55,7 @@ RowOperationsPB_Type ToInternalWriteType(KuduWriteOperation::Type type) {
 
 KuduWriteOperation::KuduWriteOperation(const shared_ptr<KuduTable>& table)
   : table_(table),
-    row_(table->schema().schema_),
+    row_(table->schema().schema_->get()),
     size_in_buffer_(0) {}
 
 KuduWriteOperation::~KuduWriteOperation() {}

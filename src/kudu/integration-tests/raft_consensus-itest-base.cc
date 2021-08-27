@@ -35,6 +35,7 @@
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/client/write_op.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/opid.pb.h"
@@ -108,7 +109,7 @@ void RaftConsensusITestBase::ScanReplica(TabletServerServiceProxy* replica_proxy
 
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(tablet_id_);
-  ASSERT_OK(SchemaToColumnPBs(schema_, scan->mutable_projected_columns()));
+  ASSERT_OK(SchemaToColumnPBs(*schema_.get(), scan->mutable_projected_columns()));
 
   // Send the call
   {

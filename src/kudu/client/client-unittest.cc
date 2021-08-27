@@ -338,7 +338,7 @@ TEST(ClientUnitTest, TestKuduSchemaToStringWithColumnIds) {
   SchemaBuilder builder;
   builder.AddKeyColumn("key", DataType::INT32);
   const auto schema = builder.Build();
-  const auto kudu_schema = KuduSchema::FromSchema(schema);
+  const auto kudu_schema = KuduSchema::FromSchema(*schema.get());
 
   // The string version of the KuduSchema should not have column ids, even
   // though the default string version of the underlying Schema should.
@@ -347,8 +347,8 @@ TEST(ClientUnitTest, TestKuduSchemaToStringWithColumnIds) {
                  "    $0:key INT32 NOT NULL,\n"
                  "    PRIMARY KEY (key)\n"
                  ")",
-                 schema.column_id(0)),
-      schema.ToString());
+                 schema->column_id(0)),
+      schema->ToString());
   EXPECT_EQ("(\n"
             "    key INT32 NOT NULL,\n"
             "    PRIMARY KEY (key)\n"

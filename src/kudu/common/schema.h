@@ -38,6 +38,7 @@
 #include "kudu/common/types.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/port.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/strcat.h"
 #include "kudu/gutil/strings/stringpiece.h"
 #include "kudu/gutil/strings/substitute.h"
@@ -48,6 +49,7 @@
 
 namespace kudu {
 class Schema;
+typedef scoped_refptr<Schema> SchemaRefPtr;
 }  // namespace kudu
 
 // Check that two schemas are equal, yielding a useful error message in the case that
@@ -453,7 +455,7 @@ class ColumnSchema {
 // possible, or pass by pointer or reference. Functions that create new
 // Schemas should generally prefer taking a Schema pointer and using
 // Schema::Reset() rather than returning by value.
-class Schema {
+class Schema : public RefCountedThreadSafe<Schema> {
  public:
   static constexpr int kColumnNotFound = -1;
 
@@ -720,7 +722,7 @@ class Schema {
   // extra copy of the ColumnSchemas.
   // TODO this should probably be cached since the key projection
   // is not supposed to change, for a single schema.
-  Schema CreateKeyProjection() const {
+  scoped_refptr<Schema> CreateKeyProjection() const {
     std::vector<ColumnSchema> key_cols(cols_.begin(),
                                   cols_.begin() + num_key_columns_);
     std::vector<ColumnId> col_ids;
@@ -728,16 +730,16 @@ class Schema {
       col_ids.assign(col_ids_.begin(), col_ids_.begin() + num_key_columns_);
     }
 
-    return Schema(std::move(key_cols), std::move(col_ids), num_key_columns_);
+    return new Schema(std::move(key_cols), std::move(col_ids), num_key_columns_);
   }
 
   // Return a new Schema which is the same as this one, but with IDs assigned.
   // Requires that this schema has no column IDs.
-  Schema CopyWithColumnIds() const;
+  scoped_refptr<Schema> CopyWithColumnIds() const;
 
   // Return a new Schema which is the same as this one, but without any column
   // IDs assigned.
-  Schema CopyWithoutColumnIds() const;
+  scoped_refptr<Schema> CopyWithoutColumnIds() const;
 
   // Create a new schema containing only the selected columns.
   // The resulting schema will have no key columns defined.
@@ -999,6 +1001,7 @@ class Schema {
   // prevent subtle bugs.
 };
 
+
 // Helper used for schema creation/editing.
 //
 // Example:
@@ -1040,8 +1043,12 @@ class SchemaBuilder {
     return false;
   }
 
-  Schema Build() const { return Schema(cols_, col_ids_, num_key_columns_); }
-  Schema BuildWithoutIds() const { return Schema(cols_, num_key_columns_); }
+  SchemaRefPtr Build() const {
+      return new Schema(cols_, col_ids_, num_key_columns_);
+  }
+  SchemaRefPtr BuildWithoutIds() const {
+      return new Schema(cols_, num_key_columns_);
+  }
 
   Status AddKeyColumn(const std::string& name, DataType type);
 

@@ -278,7 +278,7 @@ WriteRpc::WriteRpc(const scoped_refptr<Batcher>& batcher,
       batcher_(batcher),
       ops_(std::move(ops)),
       tablet_id_(tablet_id) {
-  const Schema* schema = table()->schema().schema_;
+  const Schema* schema = table()->schema().schema_->get();
 
   req_.set_tablet_id(tablet_id_);
   switch (batcher->external_consistency_mode()) {

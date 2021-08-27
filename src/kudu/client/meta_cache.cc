@@ -404,9 +404,9 @@ string MetaCacheEntry::DebugString(const KuduTable* table) const {
 
   // The upper bound is exclusive, so it's necessary to get proper hash schema
   // for the key.
-  string upper_bound_string = upper_bound.empty()
-      ? "<end>"
-      : table->partition_schema().PartitionKeyDebugString(upper_bound, *table->schema().schema_);
+  string upper_bound_string = upper_bound.empty() ?
+      "<end>" : table->partition_schema().PartitionKeyDebugString(
+          upper_bound, *table->schema().schema_->get());
 
   MonoDelta ttl = expiration_time_ - MonoTime::Now();
 
@@ -1378,7 +1378,8 @@ void MetaCache::ReleaseMasterLookupPermit() {
 string MetaCache::DebugLowerBoundPartitionKey(const KuduTable* table,
                                               const PartitionKey& partition_key) {
   return partition_key.empty() ? "<start>" :
-      table->partition_schema().PartitionKeyDebugString(partition_key, *table->schema().schema_);
+      table->partition_schema().PartitionKeyDebugString(partition_key,
+                                                        *table->schema().schema_->get());
 }
 
 } // namespace internal

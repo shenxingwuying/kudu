@@ -96,7 +96,7 @@ namespace tserver {
 class TsTabletManagerTest : public KuduTest {
  public:
   TsTabletManagerTest()
-    : schema_({ ColumnSchema("key", INT32) }, 1) {
+    : schema_(new Schema({ ColumnSchema("key", INT32) }, 1)) {
   }
 
   virtual void SetUp() OVERRIDE {
@@ -118,18 +118,19 @@ class TsTabletManagerTest : public KuduTest {
   }
 
   Status CreateNewTablet(const std::string& tablet_id,
-                         const Schema& schema,
+                         const SchemaRefPtr& schema,
                          bool wait_leader,
                          boost::optional<TableExtraConfigPB> extra_config,
                          boost::optional<std::string> dimension_label,
                          scoped_refptr<tablet::TabletReplica>* out_tablet_replica) {
-    Schema full_schema = SchemaBuilder(schema).Build();
-    std::pair<PartitionSchema, Partition> partition = tablet::CreateDefaultPartition(full_schema);
+    SchemaRefPtr full_schema_ptr = SchemaBuilder(*schema.get()).Build();
+    std::pair<PartitionSchema, Partition> partition =
+        tablet::CreateDefaultPartition(full_schema_ptr);
 
     scoped_refptr<tablet::TabletReplica> tablet_replica;
     RETURN_NOT_OK(tablet_manager_->CreateNewTablet(tablet_id, tablet_id, partition.second,
                                                    tablet_id,
-                                                   full_schema, partition.first,
+                                                   full_schema_ptr, partition.first,
                                                    config_,
                                                    std::move(extra_config),
                                                    std::move(dimension_label),
@@ -163,8 +164,8 @@ class TsTabletManagerTest : public KuduTest {
   }
 
   void InsertTestRows(Tablet* tablet, int64_t count) {
-    LocalTabletWriter writer(tablet, &schema_);
-    KuduPartialRow row(&schema_);
+    LocalTabletWriter writer(tablet, schema_.get());
+    KuduPartialRow row(schema_.get());
     for (int64_t i = 0; i < count; i++) {
       ASSERT_OK(row.SetInt32(0, i));
       ASSERT_OK(writer.Insert(row));
@@ -177,7 +178,7 @@ class TsTabletManagerTest : public KuduTest {
   TSTabletManager* tablet_manager_;
   Heartbeater* heartbeater_;
 
-  Schema schema_;
+  SchemaRefPtr schema_;
   RaftConfigPB config_;
 };
 

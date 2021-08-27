@@ -181,11 +181,12 @@ TEST_F(PartitionPrunerTest, TestPrimaryKeyRangePruning) {
   // (a INT8, b INT8, c INT8)
   // PRIMARY KEY (a, b, c)) SPLIT ROWS [(0, 0, 0), (10, 10, 10)]
   // DISTRIBUTE BY RANGE(a, b, c);
-  Schema schema({ ColumnSchema("a", INT8),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", INT8),
                   ColumnSchema("b", INT8),
                   ColumnSchema("c", INT8) },
                 { ColumnId(0), ColumnId(1), ColumnId(2) },
-                3);
+                3));
+  Schema& schema = *schema_ptr.get();
   Arena arena(1024);
 
   PartitionSchema partition_schema;
@@ -202,7 +203,7 @@ TEST_F(PartitionPrunerTest, TestPrimaryKeyRangePruning) {
   ASSERT_OK(split2.SetInt8("c", 10));
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions({ split1, split2 }, {}, {}, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions({ split1, split2 }, {}, {}, schema_ptr, &partitions));
 
   // Creates a scan with optional lower and upper bounds, and checks that the
   // expected number of tablets are pruned.
@@ -299,11 +300,12 @@ TEST_F(PartitionPrunerTest, TestPartialPrimaryKeyRangePruning) {
   // (a INT8, b STRING, c STRING, PRIMARY KEY (a, b, c))
   // DISTRIBUTE BY RANGE(a, b)
   // SPLIT ROWS [(0, "m"), (10, "r"];
-  Schema schema({ ColumnSchema("a", INT8),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", INT8),
       ColumnSchema("b", STRING),
       ColumnSchema("c", STRING) },
       { ColumnId(0), ColumnId(1), ColumnId(2) },
-      3);
+      3));
+  Schema& schema = *schema_ptr.get();
   Arena arena(1024);
 
   PartitionSchemaPB pb;
@@ -320,7 +322,7 @@ TEST_F(PartitionPrunerTest, TestPartialPrimaryKeyRangePruning) {
   ASSERT_OK(split2.SetStringCopy("b", "r"));
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions({ split1, split2 }, {}, {}, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions({ split1, split2 }, {}, {}, schema_ptr, &partitions));
 
   // Applies the specified lower and upper bound primary keys against the
   // schema, and checks that the expected number of partitions are pruned.
@@ -412,11 +414,12 @@ TEST_F(PartitionPrunerTest, TestIntPartialPrimaryKeyRangePruning) {
   // (a INT8, b INT8, c INT8, PRIMARY KEY (a, b, c))
   // DISTRIBUTE BY RANGE(a, b)
   // SPLIT ROWS [(0, 0)];
-  Schema schema({ ColumnSchema("a", INT8),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", INT8),
                   ColumnSchema("b", INT8),
                   ColumnSchema("c", INT8) },
                 { ColumnId(0), ColumnId(1), ColumnId(2) },
-                3);
+                3));
+  Schema& schema = *schema_ptr.get();
   Arena arena(1024);
 
   PartitionSchemaPB pb;
@@ -429,7 +432,7 @@ TEST_F(PartitionPrunerTest, TestIntPartialPrimaryKeyRangePruning) {
   ASSERT_OK(split.SetInt8("b", 0));
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions({ split }, {}, {}, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions({ split }, {}, {}, schema_ptr, &partitions));
 
   // Applies the specified lower and upper bound primary keys against the
   // schema, and checks that the expected number of partitions are pruned.
@@ -498,11 +501,12 @@ TEST_F(PartitionPrunerTest, TestRangePruning) {
   // PRIMARY KEY (a, b, c))
   // DISTRIBUTE BY RANGE(c, b);
   // SPLIT ROWS [(0, "m"), (10, "r")];
-  Schema schema({ ColumnSchema("a", INT8),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", INT8),
                   ColumnSchema("b", STRING),
                   ColumnSchema("c", INT8) },
                 { ColumnId(0), ColumnId(1), ColumnId(2) },
-                3);
+                3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB pb;
   CreatePartitionSchemaPB({"c", "b"}, {}, &pb);
@@ -518,7 +522,7 @@ TEST_F(PartitionPrunerTest, TestRangePruning) {
   ASSERT_OK(split2.SetStringCopy("b", "r"));
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions({ split1, split2 }, {}, {}, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions({ split1, split2 }, {}, {}, schema_ptr, &partitions));
 
   // Applies the specified predicates to a scan and checks that the expected
   // number of partitions are pruned.
@@ -674,11 +678,12 @@ TEST_F(PartitionPrunerTest, TestHashPruning) {
   // PRIMARY KEY (a, b, c)
   // DISTRIBUTE BY HASH(a) INTO 2 BUCKETS,
   //               HASH(b, c) INTO 2 BUCKETS;
-  Schema schema({ ColumnSchema("a", INT8),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", INT8),
                   ColumnSchema("b", INT8),
                   ColumnSchema("c", INT8) },
                 { ColumnId(0), ColumnId(1), ColumnId(2) },
-                3);
+                3));
+    Schema& schema = *schema_ptr.get();
 
     PartitionSchemaPB pb;
     CreatePartitionSchemaPB({}, { {{"a"}, 2, 0}, {{"b", "c"}, 2, 0} }, &pb);
@@ -688,7 +693,7 @@ TEST_F(PartitionPrunerTest, TestHashPruning) {
 
     vector<Partition> partitions;
     ASSERT_OK(partition_schema.CreatePartitions(vector<KuduPartialRow>(), {}, {},
-                                                       schema, &partitions));
+                                                       schema_ptr, &partitions));
 
 
   // Applies the specified predicates to a scan and checks that the expected
@@ -750,11 +755,12 @@ TEST_F(PartitionPrunerTest, TestInListHashPruning) {
   // DISTRIBUTE BY HASH(a) INTO 3 BUCKETS,
   //               HASH(b) INTO 3 BUCKETS;
   //               HASH(c) INTO 3 BUCKETS;
-  Schema schema({ ColumnSchema("a", INT8),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", INT8),
                   ColumnSchema("b", INT8),
                   ColumnSchema("c", INT8) },
                 { ColumnId(0), ColumnId(1), ColumnId(2) },
-                3);
+                3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB pb;
   CreatePartitionSchemaPB({}, { {{"a"}, 3, 0}, {{"b"}, 3, 0}, {{"c"}, 3, 0} }, &pb);
@@ -764,7 +770,7 @@ TEST_F(PartitionPrunerTest, TestInListHashPruning) {
 
   vector<Partition> partitions;
   ASSERT_OK(partition_schema.CreatePartitions(vector<KuduPartialRow>(), {}, {},
-                                                     schema, &partitions));
+                                                     schema_ptr, &partitions));
 
 
   // Applies the specified predicates to a scan and checks that the expected
@@ -828,11 +834,12 @@ TEST_F(PartitionPrunerTest, TestMultiColumnInListHashPruning) {
   // PRIMARY KEY (a, b, c)
   // DISTRIBUTE BY HASH(a) INTO 3 BUCKETS,
   //               HASH(b, c) INTO 3 BUCKETS;
-  Schema schema({ ColumnSchema("a", INT8),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", INT8),
                   ColumnSchema("b", INT8),
                   ColumnSchema("c", INT8) },
                 { ColumnId(0), ColumnId(1), ColumnId(2) },
-                3);
+                3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB pb;
   CreatePartitionSchemaPB({}, { {{"a"}, 3, 0}, {{"b", "c"}, 3, 0} }, &pb);
@@ -842,7 +849,7 @@ TEST_F(PartitionPrunerTest, TestMultiColumnInListHashPruning) {
 
   vector<Partition> partitions;
   ASSERT_OK(partition_schema.CreatePartitions(vector<KuduPartialRow>(), {}, {},
-                                                     schema, &partitions));
+                                                     schema_ptr, &partitions));
 
 
   // Applies the specified predicates to a scan and checks that the expected
@@ -923,12 +930,13 @@ TEST_F(PartitionPrunerTest, TestPruning) {
   // PARTITION BY RANGE (time) (PARTITION VALUES < 10,
   //                            PARTITION VALUES >= 10)
   //              HASH (host, metric) 2 PARTITIONS;
-  Schema schema({ ColumnSchema("host", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("host", STRING),
                   ColumnSchema("metric", STRING),
                   ColumnSchema("time", UNIXTIME_MICROS),
                   ColumnSchema("value", DOUBLE) },
                 { ColumnId(0), ColumnId(1), ColumnId(2), ColumnId(3) },
-                3);
+                3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB pb;
   CreatePartitionSchemaPB({"time"}, { {{"host", "metric"}, 2, 0} }, &pb);
@@ -940,7 +948,7 @@ TEST_F(PartitionPrunerTest, TestPruning) {
 
   vector<Partition> partitions;
   ASSERT_OK(partition_schema.CreatePartitions(
-      vector<KuduPartialRow>{ split }, {}, {}, schema, &partitions));
+      vector<KuduPartialRow>{ split }, {}, {}, schema_ptr, &partitions));
   ASSERT_EQ(4, partitions.size());
 
   // Applies the specified predicates to a scan and checks that the expected
@@ -1034,10 +1042,11 @@ TEST_F(PartitionPrunerTest, TestKudu2173) {
   // (a INT8, b INT8, PRIMARY KEY (a, b))
   // DISTRIBUTE BY RANGE(a)
   // SPLIT ROWS [(10)]
-  Schema schema({ ColumnSchema("a", INT8),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", INT8),
           ColumnSchema("b", INT8)},
     { ColumnId(0), ColumnId(1) },
-    2);
+    2));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB pb;
   CreatePartitionSchemaPB({"a"}, {}, &pb);
@@ -1047,7 +1056,7 @@ TEST_F(PartitionPrunerTest, TestKudu2173) {
   KuduPartialRow split1(&schema);
   ASSERT_OK(split1.SetInt8("a", 10));
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions({ split1 }, {}, {}, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions({ split1 }, {}, {}, schema_ptr, &partitions));
 
   // Applies the specified predicates to a scan and checks that the expected
   // number of partitions are pruned.
@@ -1090,11 +1099,12 @@ TEST_F(PartitionPrunerTest, DISABLED_TestHashSchemasPerRangePruning) {
   // PARTITION BY RANGE (C)
   // DISTRIBUTE BY HASH(A) INTO 2 BUCKETS
   //               HASH(B) INTO 2 BUCKETS;
-  Schema schema({ ColumnSchema("A", INT8),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("A", INT8),
                   ColumnSchema("B", INT8),
                   ColumnSchema("C", STRING) },
                 { ColumnId(0), ColumnId(1), ColumnId(2) },
-                3);
+                3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB pb;
   CreatePartitionSchemaPB({"C"}, { {{"A"}, 2, 0}, {{"B"}, 2, 0} }, &pb);
@@ -1131,7 +1141,8 @@ TEST_F(PartitionPrunerTest, DISABLED_TestHashSchemasPerRangePruning) {
   ASSERT_OK(PartitionSchema::FromPB(pb, schema, &partition_schema));
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions({}, bounds, range_hash_schemas, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions({}, bounds, range_hash_schemas,
+                                              schema_ptr, &partitions));
   ASSERT_EQ(12, partitions.size());
 
   // Applies the specified predicates to a scan and checks that the expected
@@ -1282,11 +1293,12 @@ TEST_F(PartitionPrunerTest, TestHashSchemasPerRangeWithPartialPrimaryKeyRangePru
   // (a INT8, b INT8, c INT8)
   // PRIMARY KEY (a, b, c)
   // PARTITION BY RANGE(a, b)
-  Schema schema({ ColumnSchema("a", INT8),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", INT8),
                   ColumnSchema("b", INT8),
                   ColumnSchema("c", INT8) },
                 { ColumnId(0), ColumnId(1), ColumnId(2) },
-                3);
+                3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB pb;
   CreatePartitionSchemaPB({"a", "b"}, {}, &pb);
@@ -1310,7 +1322,8 @@ TEST_F(PartitionPrunerTest, TestHashSchemasPerRangeWithPartialPrimaryKeyRangePru
   ASSERT_OK(PartitionSchema::FromPB(pb, schema, &partition_schema));
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions({}, bounds, range_hash_schemas, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions({}, bounds, range_hash_schemas,
+                                              schema_ptr, &partitions));
   ASSERT_EQ(9, partitions.size());
 
   Arena arena(1024);
@@ -1389,11 +1402,12 @@ TEST_F(PartitionPrunerTest, TestInListHashPruningPerRange) {
   // PRIMARY KEY (A, B, C)
   // PARTITION BY RANGE (A)
   // DISTRIBUTE HASH(B, C) INTO 3 BUCKETS;
-  Schema schema({ ColumnSchema("A", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("A", STRING),
                   ColumnSchema("B", INT8),
                   ColumnSchema("C", INT8) },
                 { ColumnId(0), ColumnId(1), ColumnId(2) },
-                3);
+                3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB pb;
   CreatePartitionSchemaPB({"A"}, { {{"B", "C"}, 3, 0} }, &pb);
@@ -1419,7 +1433,8 @@ TEST_F(PartitionPrunerTest, TestInListHashPruningPerRange) {
   ASSERT_OK(PartitionSchema::FromPB(pb, schema, &partition_schema));
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions({}, bounds, range_hash_schemas, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions({}, bounds, range_hash_schemas,
+                                              schema_ptr, &partitions));
   ASSERT_EQ(7, partitions.size());
 
   // Applies the specified predicates to a scan and checks that the expected
@@ -1489,10 +1504,11 @@ TEST_F(PartitionPrunerTest, DISABLED_TestSingleRangeElementAndBoundaryCase) {
   // (A INT8, B INT8)
   // PRIMARY KEY (A, B)
   // PARTITION BY RANGE (A);
-  Schema schema({ ColumnSchema("A", INT8),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("A", INT8),
                   ColumnSchema("B", INT8) },
                 { ColumnId(0), ColumnId(1) },
-                2);
+                2));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB pb;
   CreatePartitionSchemaPB({"A"}, {}, &pb);
@@ -1520,7 +1536,8 @@ TEST_F(PartitionPrunerTest, DISABLED_TestSingleRangeElementAndBoundaryCase) {
   ASSERT_OK(PartitionSchema::FromPB(pb, schema, &partition_schema));
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions({}, bounds, range_hash_schemas, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions({}, bounds, range_hash_schemas,
+                                              schema_ptr, &partitions));
   ASSERT_EQ(10, partitions.size());
 
   // Applies the specified predicates to a scan and checks that the expected

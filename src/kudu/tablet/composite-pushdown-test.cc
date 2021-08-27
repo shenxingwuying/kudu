@@ -35,6 +35,7 @@
 #include "kudu/common/scan_spec.h"
 #include "kudu/common/schema.h"
 #include "kudu/gutil/port.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/stringprintf.h"
 #include "kudu/tablet/local_tablet_writer.h"
 #include "kudu/tablet/tablet-test-util.h"
@@ -57,12 +58,12 @@ const char* const kTestHostnames[] = { "foo", "foobar", "baz", nullptr };
 class CompositePushdownTest : public KuduTabletTest {
  public:
   CompositePushdownTest()
-      : KuduTabletTest(Schema({ ColumnSchema("year", INT16),
+      : KuduTabletTest(make_scoped_refptr(new Schema({ ColumnSchema("year", INT16),
                                 ColumnSchema("month", INT8),
                                 ColumnSchema("day", INT8),
                                 ColumnSchema("hostname", STRING),
                                 ColumnSchema("data", STRING) },
-                              4)) {
+                              4))) {
   }
 
   virtual void SetUp() OVERRIDE {
@@ -75,8 +76,8 @@ class CompositePushdownTest : public KuduTabletTest {
     uint32_t nrows = 10 * 12 * 28;
     int i = 0;
 
-    LocalTabletWriter writer(tablet().get(), &client_schema_);
-    KuduPartialRow row(&client_schema_);
+    LocalTabletWriter writer(tablet().get(), client_schema_.get());
+    KuduPartialRow row(client_schema_.get());
     for (int16_t year = 2000; year <= 2010; year++) {
       for (int8_t month = 1; month <= 12; month++) {
         for (int8_t day = 1; day <= 28; day++) {
@@ -137,10 +138,10 @@ TEST_F(CompositePushdownTest, TestPushDownExactEquality) {
   int8_t month = 9;
   int8_t day = 7;
   Slice host(kTestHostnames[0]);
-  auto pred_year = ColumnPredicate::Equality(schema_.column(0), &year);
-  auto pred_month = ColumnPredicate::Equality(schema_.column(1), &month);
-  auto pred_day = ColumnPredicate::Equality(schema_.column(2), &day);
-  auto pred_host = ColumnPredicate::Equality(schema_.column(3), &host);
+  auto pred_year = ColumnPredicate::Equality(schema_->column(0), &year);
+  auto pred_month = ColumnPredicate::Equality(schema_->column(1), &month);
+  auto pred_day = ColumnPredicate::Equality(schema_->column(2), &day);
+  auto pred_host = ColumnPredicate::Equality(schema_->column(3), &host);
   spec.AddPredicate(pred_year);
   spec.AddPredicate(pred_month);
   spec.AddPredicate(pred_day);
@@ -164,10 +165,10 @@ TEST_F(CompositePushdownTest, TestPushDownStringInequality) {
   int8_t month = 9;
   int8_t day = 7;
   Slice host("foo");
-  auto pred_year = ColumnPredicate::Equality(schema_.column(0), &year);
-  auto pred_month = ColumnPredicate::Equality(schema_.column(1), &month);
-  auto pred_day = ColumnPredicate::Equality(schema_.column(2), &day);
-  auto pred_host = ColumnPredicate::InclusiveRange(schema_.column(3), nullptr, &host, &arena);
+  auto pred_year = ColumnPredicate::Equality(schema_->column(0), &year);
+  auto pred_month = ColumnPredicate::Equality(schema_->column(1), &month);
+  auto pred_day = ColumnPredicate::Equality(schema_->column(2), &day);
+  auto pred_host = ColumnPredicate::InclusiveRange(schema_->column(3), nullptr, &host, &arena);
   spec.AddPredicate(pred_year);
   spec.AddPredicate(pred_month);
   spec.AddPredicate(pred_day);
@@ -190,9 +191,9 @@ TEST_F(CompositePushdownTest, TestPushDownDateEquality) {
   int16_t year = 2001;
   int8_t month = 9;
   int8_t day = 7;
-  auto pred_year = ColumnPredicate::Equality(schema_.column(0), &year);
-  auto pred_month = ColumnPredicate::Equality(schema_.column(1), &month);
-  auto pred_day = ColumnPredicate::Equality(schema_.column(2), &day);
+  auto pred_year = ColumnPredicate::Equality(schema_->column(0), &year);
+  auto pred_month = ColumnPredicate::Equality(schema_->column(1), &month);
+  auto pred_day = ColumnPredicate::Equality(schema_->column(2), &day);
   spec.AddPredicate(pred_year);
   spec.AddPredicate(pred_month);
   spec.AddPredicate(pred_day);
@@ -214,8 +215,8 @@ TEST_F(CompositePushdownTest, TestPushDownDateEquality) {
 TEST_F(CompositePushdownTest, TestPushDownPrefixEquality) {
   int16_t year = 2001;
   int8_t month = 9;
-  ColumnPredicate pred_year = ColumnPredicate::Equality(schema_.column(0), &year);
-  ColumnPredicate pred_month = ColumnPredicate::Equality(schema_.column(1), &month);
+  ColumnPredicate pred_year = ColumnPredicate::Equality(schema_->column(0), &year);
+  ColumnPredicate pred_month = ColumnPredicate::Equality(schema_->column(1), &month);
 
   {
     ScanSpec spec;
@@ -259,15 +260,15 @@ TEST_F(CompositePushdownTest, TestPushDownPrefixEqualitySuffixInequality) {
   int8_t day_l = 1;
   int8_t day_u = 16;
 
-  auto pred_year = ColumnPredicate::Equality(schema_.column(0), &year);
+  auto pred_year = ColumnPredicate::Equality(schema_->column(0), &year);
 
-  auto pred_month_eq = ColumnPredicate::Equality(schema_.column(1), &month_l);
-  auto pred_month_ge_lt = ColumnPredicate::Range(schema_.column(1), &month_l, &month_u);
-  auto pred_month_lt = ColumnPredicate::Range(schema_.column(1), nullptr, &month_l);
+  auto pred_month_eq = ColumnPredicate::Equality(schema_->column(1), &month_l);
+  auto pred_month_ge_lt = ColumnPredicate::Range(schema_->column(1), &month_l, &month_u);
+  auto pred_month_lt = ColumnPredicate::Range(schema_->column(1), nullptr, &month_l);
 
-  auto pred_day_ge_lt = ColumnPredicate::Range(schema_.column(2), &day_l, &day_u);
-  auto pred_day_ge = ColumnPredicate::Range(schema_.column(2), &day_l, nullptr);
-  auto pred_day_lt = ColumnPredicate::Range(schema_.column(2), nullptr, &day_u);
+  auto pred_day_ge_lt = ColumnPredicate::Range(schema_->column(2), &day_l, &day_u);
+  auto pred_day_ge = ColumnPredicate::Range(schema_->column(2), &day_l, nullptr);
+  auto pred_day_lt = ColumnPredicate::Range(schema_->column(2), nullptr, &day_u);
 
   {
     // year=2001, month=9, day >= 1 && day < 16
@@ -359,7 +360,7 @@ TEST_F(CompositePushdownTest, TestPushdownPrefixInequality) {
   int16_t year_2004 = 2004;
   {
     // year >= 2001 && year < 2004
-    auto pred_year = ColumnPredicate::Range(schema_.column(0), &year_2001, &year_2004);
+    auto pred_year = ColumnPredicate::Range(schema_->column(0), &year_2001, &year_2004);
     ScanSpec spec;
     spec.AddPredicate(pred_year);
     vector<string> results;
@@ -375,7 +376,7 @@ TEST_F(CompositePushdownTest, TestPushdownPrefixInequality) {
 
   {
     // year >= 2001
-    auto pred_year = ColumnPredicate::Range(schema_.column(0), &year_2001, nullptr);
+    auto pred_year = ColumnPredicate::Range(schema_->column(0), &year_2001, nullptr);
     ScanSpec spec;
     spec.AddPredicate(pred_year);
     vector<string> results;
@@ -393,7 +394,7 @@ TEST_F(CompositePushdownTest, TestPushdownPrefixInequality) {
 
   {
     // year < 2004
-    auto pred_year = ColumnPredicate::Range(schema_.column(0), nullptr, &year_2004);
+    auto pred_year = ColumnPredicate::Range(schema_->column(0), nullptr, &year_2004);
     ScanSpec spec;
     spec.AddPredicate(pred_year);
     vector<string> results;

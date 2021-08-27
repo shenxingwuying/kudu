@@ -31,6 +31,7 @@
 #include "kudu/common/encoded_key.h"
 #include "kudu/common/partial_row.h"
 #include "kudu/common/schema.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/substitute.h"
 
 namespace kudu {
@@ -50,8 +51,8 @@ const char* ScanConfiguration::kDefaultIsDeletedColName = "is_deleted";
 
 ScanConfiguration::ScanConfiguration(KuduTable* table)
     : table_(table),
-      projection_(table->schema().schema_),
-      client_projection_(KuduSchema::FromSchema(*table->schema().schema_)),
+      projection_(*table->schema().schema_),
+      client_projection_(KuduSchema::FromSchema(*table->schema().schema_->get())),
       has_batch_size_bytes_(false),
       batch_size_bytes_(0),
       selection_(KuduClient::CLOSEST_REPLICA),
@@ -66,7 +67,7 @@ ScanConfiguration::ScanConfiguration(KuduTable* table)
 }
 
 Status ScanConfiguration::SetProjectedColumnNames(const vector<string>& col_names) {
-  const Schema& schema = *table().schema().schema_;
+  const Schema& schema = *table().schema().schema_->get();
   vector<int> col_indexes;
   col_indexes.reserve(col_names.size());
   for (const string& col_name : col_names) {
@@ -81,7 +82,7 @@ Status ScanConfiguration::SetProjectedColumnNames(const vector<string>& col_name
 }
 
 Status ScanConfiguration::SetProjectedColumnIndexes(const vector<int>& col_indexes) {
-  const Schema* table_schema = table_->schema().schema_;
+  const Schema* table_schema = table_->schema().schema_->get();
   vector<ColumnSchema> cols;
   cols.reserve(col_indexes.size());
   for (const int col_index : col_indexes) {
@@ -121,7 +122,7 @@ Status ScanConfiguration::AddLowerBoundRaw(const Slice& key) {
   // Make a copy of the key.
   EncodedKey* enc_key = nullptr;
   RETURN_NOT_OK(EncodedKey::DecodeEncodedString(
-                  *table_->schema().schema_, &arena_, key, &enc_key));
+                  *table_->schema().schema_->get(), &arena_, key, &enc_key));
   spec_.SetLowerBoundKey(enc_key);
   return Status::OK();
 }
@@ -130,7 +131,7 @@ Status ScanConfiguration::AddUpperBoundRaw(const Slice& key) {
   // Make a copy of the key.
   EncodedKey* enc_key = nullptr;
   RETURN_NOT_OK(EncodedKey::DecodeEncodedString(
-                  *table_->schema().schema_, &arena_, key, &enc_key));
+                  *table_->schema().schema_->get(), &arena_, key, &enc_key));
   spec_.SetExclusiveUpperBoundKey(enc_key);
   return Status::OK();
 }
@@ -231,7 +232,7 @@ Status ScanConfiguration::AddIsDeletedColumn() {
 
   // Generate a unique name for the IS_DELETED virtual column.
   string col_name = kDefaultIsDeletedColName;
-  while (table_->schema().schema_->find_column(col_name) != Schema::kColumnNotFound) {
+  while ((*table_->schema().schema_)->find_column(col_name) != Schema::kColumnNotFound) {
     col_name += "_";
   }
 
@@ -247,17 +248,16 @@ Status ScanConfiguration::AddIsDeletedColumn() {
 }
 
 void ScanConfiguration::OptimizeScanSpec() {
-  spec_.OptimizeScan(*table_->schema().schema_,
+  spec_.OptimizeScan(*table_->schema().schema_->get(),
                      &arena_,
                      /* remove_pushed_predicates */ false);
 }
 
 Status ScanConfiguration::CreateProjection(const vector<ColumnSchema>& cols) {
-  unique_ptr<Schema> s(new Schema);
+  SchemaRefPtr s(new Schema);
   RETURN_NOT_OK(s->Reset(cols, 0));
-  projection_ = s.get();
-  schemas_pool_.push_back(std::move(s));
-  client_projection_ = KuduSchema::FromSchema(*projection_);
+  projection_ = s;
+  client_projection_ = KuduSchema::FromSchema(*projection_.get());
   return Status::OK();
 }
 

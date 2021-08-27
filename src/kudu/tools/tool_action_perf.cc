@@ -649,7 +649,7 @@ WriteResults GeneratorThread(const shared_ptr<KuduSession>& session,
     // Planning for non-intersecting ranges for different generator threads
     // in sequential generation mode.
     const int64_t gen_span = SpanPerThread(KuduSchema::ToSchema(
-        table->schema()).num_key_columns());
+        table->schema())->num_key_columns());
     const int64_t gen_seed = gen_idx * gen_span + gen_seq_start;
     Generator key_gen(key_gen_mode, gen_seed, FLAGS_string_len);
     Generator value_gen(value_gen_mode, gen_seed, FLAGS_string_len);
@@ -820,7 +820,7 @@ Status TestLoadGenerator(const RunnerContext& context) {
       // tablets. In case we're inserting in random mode, use unbounded range
       // partitioning, so the table has key coverage of the entire keyspace.
       const int64_t total_inserted_span =
-          SpanPerThread(KuduSchema::ToSchema(schema).num_key_columns()) * gen_num;
+          SpanPerThread(KuduSchema::ToSchema(schema)->num_key_columns()) * gen_num;
       const int64_t span_per_range =
           total_inserted_span / FLAGS_table_num_range_partitions;
       table_creator->set_range_partition_columns({ kKeyColumnName });
@@ -979,7 +979,8 @@ Status TabletScan(const RunnerContext& context) {
   // Tablet has been bootstrapped and opened. We can now scan it.
   for (int i = 0; i < FLAGS_num_iters; i++) {
     LOG_TIMING(INFO, Substitute("scanning tablet (iter $0)", i)) {
-      Schema projection = tablet->schema()->CopyWithoutColumnIds();
+      SchemaRefPtr projection_ptr = tablet->schema()->CopyWithoutColumnIds();
+      Schema& projection = *projection_ptr.get();
       RowIteratorOptions opts;
       opts.projection = &projection;
       opts.order = FLAGS_ordered_scan ? ORDERED : UNORDERED;

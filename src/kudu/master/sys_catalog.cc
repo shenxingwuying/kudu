@@ -252,9 +252,10 @@ Status SysCatalogTable::Load(FsManager *fs_manager) {
   RETURN_NOT_OK(tablet::TabletMetadata::Load(fs_manager, kSysCatalogTabletId, &metadata));
 
   // Verify that the schema is the current one
-  if (!metadata->schema().Equals(BuildTableSchema())) {
+  SchemaRefPtr schema_ptr = BuildTableSchema();
+  if (!metadata->schema()->Equals(*schema_ptr.get())) {
     // TODO: In this case we probably should execute the migration step.
-    return(Status::Corruption("Unexpected schema", metadata->schema().ToString()));
+    return(Status::Corruption("Unexpected schema", metadata->schema()->ToString()));
   }
 
   LOG(INFO) << "Verifying existing consensus state";
@@ -325,9 +326,9 @@ Status SysCatalogTable::Load(FsManager *fs_manager) {
 Status SysCatalogTable::CreateNew(FsManager *fs_manager) {
   // Create the new Metadata
   scoped_refptr<tablet::TabletMetadata> metadata;
-  Schema schema = BuildTableSchema();
+  SchemaRefPtr schema = BuildTableSchema();
   PartitionSchema partition_schema;
-  RETURN_NOT_OK(PartitionSchema::FromPB(PartitionSchemaPB(), schema, &partition_schema));
+  RETURN_NOT_OK(PartitionSchema::FromPB(PartitionSchemaPB(), *schema.get(), &partition_schema));
 
   vector<KuduPartialRow> split_rows;
   vector<Partition> partitions;
@@ -529,8 +530,8 @@ Status SysCatalogTable::SetupTablet(
 
   tablet_replica_->RegisterMaintenanceOps(master_->maintenance_manager());
 
-  schema_ = SchemaBuilder(*tablet->schema()).BuildWithoutIds();
-  key_schema_ = schema_.CreateKeyProjection();
+  schema_ = SchemaBuilder(*tablet->schema().get()).BuildWithoutIds();
+  key_schema_ = schema_->CreateKeyProjection();
 
   return Status::OK();
 }
@@ -604,7 +605,7 @@ Status SysCatalogTable::SyncWrite(const WriteRequestPB& req) {
 
 // Schema for the unified SysCatalogTable. See the comment in the header for
 // more details.
-Schema SysCatalogTable::BuildTableSchema() {
+SchemaRefPtr SysCatalogTable::BuildTableSchema() {
   SchemaBuilder builder;
   CHECK_OK(builder.AddKeyColumn(kSysCatalogTableColType, INT8));
   CHECK_OK(builder.AddKeyColumn(kSysCatalogTableColId, STRING));
@@ -617,7 +618,7 @@ Status SysCatalogTable::Write(Actions actions, WriteMode mode) {
 
   WriteRequestPB req;
   req.set_tablet_id(kSysCatalogTabletId);
-  RETURN_NOT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  RETURN_NOT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
   if (actions.table_to_add) {
     ReqAddTable(&req, actions.table_to_add);
@@ -671,7 +672,7 @@ void SysCatalogTable::ReqAddTable(WriteRequestPB* req,
   faststring metadata_buf;
   pb_util::SerializeToString(table->metadata().dirty().pb, &metadata_buf);
 
-  KuduPartialRow row(&schema_);
+  KuduPartialRow row(schema_.get());
   CHECK_OK(row.SetInt8(kSysCatalogTableColType, TABLES_ENTRY));
   CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColId, table->id()));
   CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColMetadata, metadata_buf));
@@ -693,7 +694,7 @@ void SysCatalogTable::ReqUpdateTable(WriteRequestPB* req,
   faststring metadata_buf;
   pb_util::SerializeToString(table->metadata().dirty().pb, &metadata_buf);
 
-  KuduPartialRow row(&schema_);
+  KuduPartialRow row(schema_.get());
   CHECK_OK(row.SetInt8(kSysCatalogTableColType, TABLES_ENTRY));
   CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColId, table->id()));
   CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColMetadata, metadata_buf));
@@ -703,7 +704,7 @@ void SysCatalogTable::ReqUpdateTable(WriteRequestPB* req,
 
 void SysCatalogTable::ReqDeleteTable(WriteRequestPB* req,
                                      const scoped_refptr<TableInfo>& table) {
-  KuduPartialRow row(&schema_);
+  KuduPartialRow row(schema_.get());
   CHECK_OK(row.SetInt8(kSysCatalogTableColType, TABLES_ENTRY));
   CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColId, table->id()));
   RowOperationsPBEncoder enc(req->mutable_row_operations());
@@ -751,10 +752,10 @@ Status SysCatalogTable::VisitTables(TableVisitor* visitor) {
 template<typename T>
 Status SysCatalogTable::GetEntryFromRow(
     const RowBlockRow& row, string* entry_id, T* entry_data) const {
-  const Slice* id = schema_.ExtractColumnFromRow<STRING>(
-      row, schema_.find_column(kSysCatalogTableColId));
-  const Slice* data = schema_.ExtractColumnFromRow<STRING>(
-      row, schema_.find_column(kSysCatalogTableColMetadata));
+  const Slice* id = schema_->ExtractColumnFromRow<STRING>(
+      row, schema_->find_column(kSysCatalogTableColId));
+  const Slice* data = schema_->ExtractColumnFromRow<STRING>(
+      row, schema_->find_column(kSysCatalogTableColMetadata));
   string str_id = id->ToString();
   RETURN_NOT_OK_PREPEND(
       pb_util::ParseFromArray(entry_data, data->data(), data->size()),
@@ -769,13 +770,13 @@ Status SysCatalogTable::GetEntryFromRow(
 template<typename T, SysCatalogTable::CatalogEntryType entry_type>
 Status SysCatalogTable::ProcessRows(
     function<Status(const string&, const T&)> processor) const {
-  const int type_col_idx = schema_.find_column(kSysCatalogTableColType);
+  const int type_col_idx = schema_->find_column(kSysCatalogTableColType);
   CHECK(type_col_idx != Schema::kColumnNotFound)
       << "cannot find sys catalog table column " << kSysCatalogTableColType
-      << " in schema: " << schema_.ToString();
+      << " in schema: " << schema_->ToString();
 
   static const int8_t kEntryType = entry_type;
-  auto pred = ColumnPredicate::Equality(schema_.column(type_col_idx),
+  auto pred = ColumnPredicate::Equality(schema_->column(type_col_idx),
                                         &kEntryType);
   ScanSpec spec;
   spec.AddPredicate(pred);
@@ -785,7 +786,7 @@ Status SysCatalogTable::ProcessRows(
   RETURN_NOT_OK(iter->Init(&spec));
 
   RowBlockMemory mem(32 * 1024);
-  RowBlock block(&iter->schema(), 512, &mem);
+  RowBlock block(iter->schema().get(), 512, &mem);
   while (iter->HasNext()) {
     RETURN_NOT_OK(iter->NextBlock(&block));
     const size_t nrows = block.nrows();
@@ -879,7 +880,7 @@ Status SysCatalogTable::AddClusterIdEntry(
     const SysClusterIdEntryPB& entry) {
   WriteRequestPB req;
   req.set_tablet_id(kSysCatalogTabletId);
-  RETURN_NOT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  RETURN_NOT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
   CHECK(entry.has_cluster_id());
   CHECK(!entry.cluster_id().empty());
@@ -887,7 +888,7 @@ Status SysCatalogTable::AddClusterIdEntry(
   faststring metadata_buf;
   pb_util::SerializeToString(entry, &metadata_buf);
 
-  KuduPartialRow row(&schema_);
+  KuduPartialRow row(schema_.get());
   CHECK_OK(row.SetInt8(kSysCatalogTableColType, CLUSTER_ID));
   CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColId, kClusterIdRowId));
   CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColMetadata, metadata_buf));
@@ -901,12 +902,12 @@ Status SysCatalogTable::AddCertAuthorityEntry(
     const SysCertAuthorityEntryPB& entry) {
   WriteRequestPB req;
   req.set_tablet_id(kSysCatalogTabletId);
-  RETURN_NOT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  RETURN_NOT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
   faststring metadata_buf;
   pb_util::SerializeToString(entry, &metadata_buf);
 
-  KuduPartialRow row(&schema_);
+  KuduPartialRow row(schema_.get());
   CHECK_OK(row.SetInt8(kSysCatalogTableColType, CERT_AUTHORITY_INFO));
   CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColId, kSysCertAuthorityEntryId));
   CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColMetadata, metadata_buf));
@@ -919,7 +920,7 @@ Status SysCatalogTable::AddCertAuthorityEntry(
 Status SysCatalogTable::AddTskEntry(const SysTskEntryPB& entry) {
   WriteRequestPB req;
   req.set_tablet_id(kSysCatalogTabletId);
-  CHECK_OK(SchemaToPB(schema_, req.mutable_schema()));
+  CHECK_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
   CHECK(entry.tsk().has_key_seq_num());
   CHECK(entry.tsk().has_expire_unix_epoch_seconds());
@@ -932,7 +933,7 @@ Status SysCatalogTable::AddTskEntry(const SysTskEntryPB& entry) {
   // WriteRequestPB object by RowOperationsPBEncoder.
   const string entry_id = TskSeqNumberToEntryId(entry.tsk().key_seq_num());
 
-  KuduPartialRow row(&schema_);
+  KuduPartialRow row(schema_.get());
   CHECK_OK(row.SetInt8(kSysCatalogTableColType, TSK_ENTRY));
   CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColId, entry_id));
   CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColMetadata, metadata_buf));
@@ -947,9 +948,9 @@ Status SysCatalogTable::RemoveTskEntries(const set<string>& entry_ids) {
   WriteRequestPB req;
   req.set_tablet_id(kSysCatalogTabletId);
   RowOperationsPBEncoder enc(req.mutable_row_operations());
-  CHECK_OK(SchemaToPB(schema_, req.mutable_schema()));
+  CHECK_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
   for (const auto& id : entry_ids) {
-    KuduPartialRow row(&schema_);
+    KuduPartialRow row(schema_.get());
     CHECK_OK(row.SetInt8(kSysCatalogTableColType, TSK_ENTRY));
     CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColId, id));
     enc.Add(RowOperationsPB::DELETE, row);
@@ -963,8 +964,8 @@ Status SysCatalogTable::WriteTServerState(const string& tserver_id,
   DCHECK(!tserver_id.empty());
   WriteRequestPB req;
   req.set_tablet_id(kSysCatalogTabletId);
-  RETURN_NOT_OK(SchemaToPB(schema_, req.mutable_schema()));
-  KuduPartialRow row(&schema_);
+  RETURN_NOT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
+  KuduPartialRow row(schema_.get());
   RETURN_NOT_OK(row.SetInt8(kSysCatalogTableColType, TSERVER_STATE));
   RETURN_NOT_OK(row.SetString(kSysCatalogTableColId, tserver_id));
 
@@ -982,8 +983,8 @@ Status SysCatalogTable::RemoveTServerState(const string& tserver_id) {
   WriteRequestPB req;
   req.set_tablet_id(kSysCatalogTabletId);
   RowOperationsPBEncoder enc(req.mutable_row_operations());
-  RETURN_NOT_OK(SchemaToPB(schema_, req.mutable_schema()));
-  KuduPartialRow row(&schema_);
+  RETURN_NOT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
+  KuduPartialRow row(schema_.get());
   RETURN_NOT_OK(row.SetInt8(kSysCatalogTableColType, TSERVER_STATE));
   RETURN_NOT_OK(row.SetStringNoCopy(kSysCatalogTableColId, tserver_id));
   enc.Add(RowOperationsPB::DELETE, row);
@@ -1002,7 +1003,7 @@ void SysCatalogTable::ReqAddTablets(
     WriteRequestPB* req) {
   DCHECK(excess_tablets);
   faststring metadata_buf;
-  KuduPartialRow row(&schema_);
+  KuduPartialRow row(schema_.get());
   RowOperationsPBEncoder enc(req->mutable_row_operations());
   size_t req_size = req->ByteSizeLong();
   for (auto it = tablets.begin(); it != tablets.end(); ++it) {
@@ -1029,7 +1030,7 @@ void SysCatalogTable::ReqUpdateTablets(
     WriteRequestPB* req) {
   DCHECK(excess_tablets);
   faststring metadata_buf;
-  KuduPartialRow row(&schema_);
+  KuduPartialRow row(schema_.get());
   RowOperationsPBEncoder enc(req->mutable_row_operations());
   size_t req_size = req->ByteSizeLong();
   for (auto it = tablets.begin(); it != tablets.end(); ++it) {
@@ -1062,7 +1063,7 @@ void SysCatalogTable::ReqDeleteTablets(
     vector<scoped_refptr<TabletInfo>>* excess_tablets,
     WriteRequestPB* req) {
   DCHECK(excess_tablets);
-  KuduPartialRow row(&schema_);
+  KuduPartialRow row(schema_.get());
   RowOperationsPBEncoder enc(req->mutable_row_operations());
   size_t req_size = req->ByteSizeLong();
   for (auto it = tablets.begin(); it != tablets.end(); ++it) {
@@ -1096,7 +1097,7 @@ Status SysCatalogTable::ChunkedWrite(
       RETURN_NOT_OK(SyncWrite(*req));
       req->Clear();
       req->set_tablet_id(kSysCatalogTabletId);
-      RETURN_NOT_OK(SchemaToPB(schema_, req->mutable_schema()));
+      RETURN_NOT_OK(SchemaToPB(*schema_.get(), req->mutable_schema()));
     }
     input = std::move(excess);
   } while (!input.empty());
@@ -1109,7 +1110,7 @@ void SysCatalogTable::ReqSetNotificationLogEventId(WriteRequestPB* req, int64_t 
   faststring metadata_buf;
   pb_util::SerializeToString(pb, &metadata_buf);
 
-  KuduPartialRow row(&schema_);
+  KuduPartialRow row(schema_.get());
   RowOperationsPBEncoder enc(req->mutable_row_operations());
   CHECK_OK(row.SetInt8(kSysCatalogTableColType, HMS_NOTIFICATION_LOG));
   CHECK_OK(row.SetStringNoCopy(kSysCatalogTableColId, kLatestNotificationLogEntryIdRowId));

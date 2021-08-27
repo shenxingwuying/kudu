@@ -28,6 +28,7 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
+#include "kudu/common/row_operations.pb.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol-test-util.h"
 #include "kudu/common/wire_protocol.h"
@@ -120,7 +121,8 @@ void ExactlyOnceSemanticsITest::WriteRowsAndCollectResponses(Sockaddr address,
 
   rpc::RpcController controller;
 
-  const Schema schema = GetSimpleTestSchema();
+  const SchemaRefPtr schema_ptr = GetSimpleTestSchema();
+  const Schema& schema = *schema_ptr.get();
 
   std::shared_ptr<rpc::Messenger> client_messenger;
   rpc::MessengerBuilder bld("Client");
@@ -148,7 +150,7 @@ void ExactlyOnceSemanticsITest::WriteRowsAndCollectResponses(Sockaddr address,
     if (i % 3 != 0) {
       for (int j = 0; j < kBatchSize; j++) {
         int row_key = random.Next() % kNumDifferentRows;
-        AddTestRowToPB(RowOperationsPB::INSERT, schema, row_key, row_key, "",
+        AddTestRowToPB(RowOperationsPB::INSERT, schema_ptr, row_key, row_key, "",
                        request.mutable_row_operations());
       }
     }

@@ -32,6 +32,7 @@
 #include "kudu/common/partition.h"
 #include "kudu/common/schema.h"
 #include "kudu/gutil/port.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/stl_util.h"
 #include "kudu/integration-tests/cluster_itest_util.h"
 #include "kudu/integration-tests/mini_cluster_fs_inspector.h"
@@ -118,8 +119,8 @@ TEST_F(CreateTableToolTest, TestCreateTable) {
     ASSERT_OK(client->OpenTable(table_name, &table));
     ASSERT_EQ(table->name(), table_name);
     ASSERT_EQ(table->schema().ToString(), schema);
-    ASSERT_EQ(table->partition_schema().DebugString(KuduSchema::ToSchema(
-        table->schema())), partition);
+    SchemaRefPtr schema_ptr = KuduSchema::ToSchema(table->schema());
+    ASSERT_EQ(table->partition_schema().DebugString(*schema_ptr.get()), partition);
     ASSERT_EQ(table->extra_configs(), extra_configs);
   };
 

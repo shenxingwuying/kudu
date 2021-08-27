@@ -100,11 +100,11 @@ class MajorDeltaCompaction {
   FsManager* const fs_manager_;
 
   // TODO: doc me
-  const Schema base_schema_;
+  const SchemaRefPtr base_schema_;
 
   // The computed partial schema which includes only the columns being
   // compacted.
-  Schema partial_schema_;
+  SchemaRefPtr partial_schema_;
 
   // The column ids to compact.
   const std::vector<ColumnId> column_ids_;

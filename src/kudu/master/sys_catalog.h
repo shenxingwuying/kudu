@@ -273,7 +273,7 @@ class SysCatalogTable {
 
   // Return the schema of the table.
   // NOTE: This is the "server-side" schema, so it must have the column IDs.
-  Schema BuildTableSchema();
+  SchemaRefPtr BuildTableSchema();
 
   // Returns 'Status::OK()' if the WriteOp completed
   Status SyncWrite(const tserver::WriteRequestPB& req);
@@ -381,8 +381,8 @@ class SysCatalogTable {
   static const char* const kInjectedFailureStatusMsg;
 
   // Table schema, without IDs, used to send messages to the TabletReplica
-  Schema schema_;
-  Schema key_schema_;
+  SchemaRefPtr schema_;
+  SchemaRefPtr key_schema_;
 
   MetricRegistry* metric_registry_;
 

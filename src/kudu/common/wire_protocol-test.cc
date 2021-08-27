@@ -42,6 +42,7 @@
 #include "kudu/common/types.h"
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/gutil/port.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/gutil/walltime.h"
 #include "kudu/util/bitmap.h"
@@ -68,12 +69,12 @@ namespace kudu {
 class WireProtocolTest : public KuduTest {
  public:
   WireProtocolTest()
-      : schema_({ ColumnSchema("string", STRING),
+      : schema_(new Schema({ ColumnSchema("string", STRING),
                   ColumnSchema("nullable_string", STRING, /* is_nullable=*/true),
                   ColumnSchema("int", INT32),
                   ColumnSchema("nullable_int", INT32, /* is_nullable=*/true),
                   ColumnSchema("int64", INT64) },
-        1),
+        1)),
         test_data_arena_(4096) {
   }
 
@@ -116,7 +117,7 @@ class WireProtocolTest : public KuduTest {
   }
 
  protected:
-  Schema schema_;
+  SchemaRefPtr schema_;
   Arena test_data_arena_;
 };
 
@@ -165,7 +166,7 @@ TEST_F(WireProtocolTest, TestBadStatusWithPosixCode) {
 TEST_F(WireProtocolTest, TestSchemaRoundTrip) {
   google::protobuf::RepeatedPtrField<ColumnSchemaPB> pbs;
 
-  ASSERT_OK(SchemaToColumnPBs(schema_, &pbs));
+  ASSERT_OK(SchemaToColumnPBs(*schema_.get(), &pbs));
   ASSERT_EQ(5, pbs.size());
 
   // Column 0.
@@ -200,10 +201,11 @@ TEST_F(WireProtocolTest, TestSchemaRoundTrip) {
   EXPECT_FALSE(pbs.Get(4).is_nullable());
 
   // Convert back to a Schema object and verify they're identical.
-  Schema schema2;
+  SchemaRefPtr schema2_ptr(new Schema);
+  Schema& schema2 = *schema2_ptr.get();
   ASSERT_OK(ColumnPBsToSchema(pbs, &schema2));
-  EXPECT_EQ(schema_.ToString(), schema2.ToString());
-  EXPECT_EQ(schema_.num_key_columns(), schema2.num_key_columns());
+  EXPECT_EQ(schema_->ToString(), schema2.ToString());
+  EXPECT_EQ(schema_->num_key_columns(), schema2.num_key_columns());
 }
 
 // Test that, when non-contiguous key columns are passed, an error Status
@@ -229,7 +231,8 @@ TEST_F(WireProtocolTest, TestBadSchema_NonContiguousKey) {
   col_pb->set_type(STRING);
   col_pb->set_is_key(true);
 
-  Schema schema;
+  SchemaRefPtr schema_ptr(new Schema);
+  Schema& schema = *schema_ptr.get();
   Status s = ColumnPBsToSchema(pbs, &schema);
   ASSERT_STR_CONTAINS(s.ToString(), "Got out-of-order key column");
 }
@@ -257,7 +260,8 @@ TEST_F(WireProtocolTest, TestBadSchema_DuplicateColumnName) {
   col_pb->set_type(STRING);
   col_pb->set_is_key(false);
 
-  Schema schema;
+  SchemaRefPtr schema_ptr(new Schema);
+  Schema& schema = *schema_ptr.get();
   Status s = ColumnPBsToSchema(pbs, &schema);
   ASSERT_EQ("Invalid argument: Duplicate column name: c0", s.ToString());
 }
@@ -265,7 +269,7 @@ TEST_F(WireProtocolTest, TestBadSchema_DuplicateColumnName) {
 // Create a block of rows and ensure that it can be converted to and from protobuf.
 TEST_F(WireProtocolTest, TestRowBlockToRowwisePB) {
   RowBlockMemory mem(1024);
-  RowBlock block(&schema_, 30, &mem);
+  RowBlock block(schema_.get(), 30, &mem);
   FillRowBlockWithTestRows(&block);
 
   // Convert to PB.
@@ -281,7 +285,7 @@ TEST_F(WireProtocolTest, TestRowBlockToRowwisePB) {
 
   vector<const uint8_t*> row_ptrs;
   Slice direct_sidecar = direct;
-  ASSERT_OK(ExtractRowsFromRowBlockPB(schema_, pb, indirect,
+  ASSERT_OK(ExtractRowsFromRowBlockPB(*schema_.get(), pb, indirect,
                                       &direct_sidecar, &row_ptrs));
   ASSERT_EQ(block.selection_vector()->CountSelected(), row_ptrs.size());
   int dst_row_idx = 0;
@@ -289,9 +293,9 @@ TEST_F(WireProtocolTest, TestRowBlockToRowwisePB) {
     if (!block.selection_vector()->IsRowSelected(i)) {
       continue;
     }
-    ConstContiguousRow row_roundtripped(&schema_, row_ptrs[dst_row_idx]);
-    EXPECT_EQ(schema_.DebugRow(block.row(i)),
-              schema_.DebugRow(row_roundtripped));
+    ConstContiguousRow row_roundtripped(schema_.get(), row_ptrs[dst_row_idx]);
+    EXPECT_EQ(schema_->DebugRow(block.row(i)),
+              schema_->DebugRow(row_roundtripped));
     dst_row_idx++;
   }
 }
@@ -305,12 +309,12 @@ TEST_F(WireProtocolTest, TestRowBlockToColumnarPB) {
   RowBlockMemory mem(1024);
   std::list<RowBlock> blocks;
   for (int i = 0; i < kNumBlocks; i++) {
-    blocks.emplace_back(&schema_, 30, &mem);
+    blocks.emplace_back(schema_.get(), 30, &mem);
     FillRowBlockWithTestRows(&blocks.back());
   }
 
   // Convert all of the RowBlocks to a single serialized (concatenated) columnar format.
-  ColumnarSerializedBatch batch(schema_, schema_, kBatchSizeBytes);
+  ColumnarSerializedBatch batch(*schema_.get(), *schema_.get(), kBatchSizeBytes);
   for (const auto& block : blocks) {
     batch.AddRowBlock(block);
   }
@@ -326,9 +330,9 @@ TEST_F(WireProtocolTest, TestRowBlockToColumnarPB) {
       SCOPED_TRACE(src_row_idx);
       SCOPED_TRACE(dst_row_idx);
       const auto& row = block.row(src_row_idx);
-      for (int c = 0; c < schema_.num_columns(); c++) {
+      for (int c = 0; c < schema_->num_columns(); c++) {
         SCOPED_TRACE(c);
-        const auto& col = schema_.column(c);
+        const auto& col = schema_->column(c);
         const auto& serialized_col = batch.columns()[c];
         if (col.is_nullable()) {
           bool expect_null = row.is_null(c);;
@@ -369,12 +373,12 @@ TEST_F(WireProtocolTest, TestColumnarRowBlockToPBWithPadding) {
   RowBlockMemory mem(1024);
   // Create a schema with multiple UNIXTIME_MICROS columns in different
   // positions.
-  Schema tablet_schema({ ColumnSchema("key", UNIXTIME_MICROS),
+  SchemaRefPtr tablet_schema(new Schema({ ColumnSchema("key", UNIXTIME_MICROS),
                          ColumnSchema("col1", STRING),
                          ColumnSchema("col2", UNIXTIME_MICROS),
                          ColumnSchema("col3", INT32, true /* nullable */),
-                         ColumnSchema("col4", UNIXTIME_MICROS, true /* nullable */)}, 1);
-  RowBlock block(&tablet_schema, kNumRows, &mem);
+                         ColumnSchema("col4", UNIXTIME_MICROS, true /* nullable */)}, 1));
+  RowBlock block(tablet_schema.get(), kNumRows, &mem);
   block.selection_vector()->SetAllTrue();
 
   for (int i = 0; i < block.nrows(); i++) {
@@ -394,12 +398,12 @@ TEST_F(WireProtocolTest, TestColumnarRowBlockToPBWithPadding) {
   }
 
   // Have the projection schema have columns in a different order from the table schema.
-  Schema proj_schema({ ColumnSchema("col1", STRING),
+  SchemaRefPtr proj_schema_ptr(new Schema({ ColumnSchema("col1", STRING),
                        ColumnSchema("key",  UNIXTIME_MICROS),
                        ColumnSchema("col2", UNIXTIME_MICROS),
                        ColumnSchema("col4", UNIXTIME_MICROS, true /* nullable */),
-                       ColumnSchema("col3", INT32, true /* nullable */)}, 0);
-
+                       ColumnSchema("col3", INT32, true /* nullable */)}, 0));
+  Schema& proj_schema = *proj_schema_ptr.get();
   // Convert to PB.
   faststring direct, indirect;
   int num_rows = SerializeRowBlock(block, &proj_schema, &direct, &indirect,
@@ -497,7 +501,8 @@ class WireProtocolBenchmark :
                                   c.type,
                                   /*nullable=*/c.null_fraction >= 0);
     }
-    CHECK_OK(benchmark_schema_.Reset(std::move(column_schemas), 0));
+    benchmark_schema_ = new Schema();
+    CHECK_OK(benchmark_schema_->Reset(std::move(column_schemas), 0));
   }
 
   void FillRowBlockForBenchmark(const BenchmarkColumnsSpec& spec,
@@ -507,8 +512,8 @@ class WireProtocolBenchmark :
     test_data_arena_.Reset();
     for (int i = 0; i < block->nrows(); i++) {
       RowBlockRow row = block->row(i);
-      for (int j = 0; j < benchmark_schema_.num_columns(); j++) {
-        const ColumnSchema& column_schema = benchmark_schema_.column(j);
+      for (int j = 0; j < benchmark_schema_->num_columns(); j++) {
+        const ColumnSchema& column_schema = benchmark_schema_->column(j);
         DataType type = spec.columns[j].type;
         bool is_null = rng.NextDoubleFraction() <= spec.columns[j].null_fraction;
         if (column_schema.is_nullable()) {
@@ -577,7 +582,7 @@ class WireProtocolBenchmark :
                     double select_rate) {
     ResetBenchmarkSchema(spec);
     RowBlockMemory mem(1024);
-    RowBlock block(&benchmark_schema_, 1000, &mem);
+    RowBlock block(benchmark_schema_.get(), 1000, &mem);
     // Regardless of the config, use a constant number of selected cells for the test by
     // looping the conversion an appropriate number of times.
     const int64_t kNumCellsToConvert = AllowSlowTests() ? 100000000 : 1000000;
@@ -601,7 +606,7 @@ class WireProtocolBenchmark :
   }
 
  protected:
-  Schema benchmark_schema_;
+  SchemaRefPtr benchmark_schema_;
 };
 
 TEST_P(WireProtocolBenchmark, TestRowBlockToPBBenchmark) {
@@ -665,7 +670,8 @@ INSTANTIATE_TEST_SUITE_P(
 // Test that trying to extract rows from an invalid block correctly returns
 // Corruption statuses.
 TEST_F(WireProtocolTest, TestInvalidRowBlock) {
-  Schema schema({ ColumnSchema("col1", STRING) }, 1);
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("col1", STRING) }, 1));
+  Schema& schema = *schema_ptr.get();
   RowwiseRowBlockPB pb;
   vector<const uint8_t*> row_ptrs;
 
@@ -689,7 +695,8 @@ TEST_F(WireProtocolTest, TestInvalidRowBlock) {
 // This is the sort of result that is returned from a scan with an empty
 // projection (a COUNT(*) query).
 TEST_F(WireProtocolTest, TestBlockWithNoColumns) {
-  Schema empty(std::vector<ColumnSchema>(), 0);
+  SchemaRefPtr empty_ptr(new Schema(std::vector<ColumnSchema>(), 0));
+  Schema& empty = *empty_ptr.get();
   RowBlockMemory mem(1024);
   RowBlock block(&empty, 1000, &mem);
   block.selection_vector()->SetAllTrue();
@@ -794,7 +801,8 @@ TEST_F(WireProtocolTest, TestInvalidReadAndWriteDefault) {
 TEST_F(WireProtocolTest, TestColumnPredicateInList) {
   ColumnSchema col1("col1", INT32);
   vector<ColumnSchema> cols = { col1 };
-  Schema schema(cols, 1);
+  SchemaRefPtr schema_ptr(new Schema(cols, 1));
+  Schema& schema = *schema_ptr.get();
   RowBlockMemory mem(1024);
   boost::optional<ColumnPredicate> predicate;
 
@@ -852,7 +860,7 @@ TEST_F(WireProtocolTest, TestColumnPredicateInList) {
 class BFWireProtocolTest : public KuduTest {
  public:
   BFWireProtocolTest()
-      : schema_({ ColumnSchema("col1", INT32)}, 1),
+      : schema_(new Schema({ ColumnSchema("col1", INT32)}, 1)),
         arena_(1024),
         allocator_(&arena_),
         n_keys_(100),
@@ -876,7 +884,7 @@ class BFWireProtocolTest : public KuduTest {
   }
 
 protected:
-  Schema schema_;
+  SchemaRefPtr schema_;
   Arena arena_;
   ArenaBlockBloomFilterBufferAllocator allocator_;
   int n_keys_;
@@ -886,13 +894,13 @@ protected:
 
 TEST_F(BFWireProtocolTest, TestColumnPredicateBloomFilter) {
   boost::optional<ColumnPredicate> predicate;
-  ColumnSchema col1 = schema_.column(0);
+  ColumnSchema col1 = schema_->column(0);
   { // Single BloomFilter predicate.
     kudu::ColumnPredicate ibf =
         kudu::ColumnPredicate::InBloomFilter(col1, {&b1_}, nullptr, nullptr);
     ColumnPredicatePB pb;
     NO_FATALS(ColumnPredicateToPB(ibf, &pb));
-    ASSERT_OK(ColumnPredicateFromPB(schema_, &arena_, pb, &predicate));
+    ASSERT_OK(ColumnPredicateFromPB(*schema_.get(), &arena_, pb, &predicate));
     ASSERT_EQ(predicate->predicate_type(), PredicateType::InBloomFilter);
     ASSERT_EQ(predicate, ibf);
   }
@@ -902,7 +910,7 @@ TEST_F(BFWireProtocolTest, TestColumnPredicateBloomFilter) {
         kudu::ColumnPredicate::InBloomFilter(col1, {&b1_, &b2_}, nullptr, nullptr);
     ColumnPredicatePB pb;
     NO_FATALS(ColumnPredicateToPB(ibf, &pb));
-    ASSERT_OK(ColumnPredicateFromPB(schema_, &arena_, pb, &predicate));
+    ASSERT_OK(ColumnPredicateFromPB(*schema_.get(), &arena_, pb, &predicate));
     ASSERT_EQ(predicate->predicate_type(), PredicateType::InBloomFilter);
     ASSERT_EQ(predicate, ibf);
   }
@@ -910,13 +918,13 @@ TEST_F(BFWireProtocolTest, TestColumnPredicateBloomFilter) {
 
 TEST_F(BFWireProtocolTest, TestColumnPredicateBloomFilterWithBound) {
   boost::optional<ColumnPredicate> predicate;
-  ColumnSchema col1 = schema_.column(0);
+  ColumnSchema col1 = schema_->column(0);
   { // Simply BloomFilter with lower bound.
     int lower = 1;
     auto ibf = kudu::ColumnPredicate::InBloomFilter(col1, {&b1_}, &lower, nullptr);
     ColumnPredicatePB pb;
     NO_FATALS(ColumnPredicateToPB(ibf, &pb));
-    ASSERT_OK(ColumnPredicateFromPB(schema_, &arena_, pb, &predicate));
+    ASSERT_OK(ColumnPredicateFromPB(*schema_.get(), &arena_, pb, &predicate));
     ASSERT_EQ(predicate->predicate_type(), PredicateType::InBloomFilter);
     ASSERT_EQ(predicate, ibf);
   }
@@ -926,7 +934,7 @@ TEST_F(BFWireProtocolTest, TestColumnPredicateBloomFilterWithBound) {
     auto ibf = kudu::ColumnPredicate::InBloomFilter(col1, {&b1_}, nullptr, &upper);
     ColumnPredicatePB pb;
     NO_FATALS(ColumnPredicateToPB(ibf, &pb));
-    ASSERT_OK(ColumnPredicateFromPB(schema_, &arena_, pb, &predicate));
+    ASSERT_OK(ColumnPredicateFromPB(*schema_.get(), &arena_, pb, &predicate));
     ASSERT_EQ(predicate->predicate_type(), PredicateType::InBloomFilter);
     ASSERT_EQ(predicate, ibf);
   }
@@ -937,7 +945,7 @@ TEST_F(BFWireProtocolTest, TestColumnPredicateBloomFilterWithBound) {
     auto ibf = kudu::ColumnPredicate::InBloomFilter(col1, {&b1_}, &lower, &upper);
     ColumnPredicatePB pb;
     NO_FATALS(ColumnPredicateToPB(ibf, &pb));
-    ASSERT_OK(ColumnPredicateFromPB(schema_, &arena_, pb, &predicate));
+    ASSERT_OK(ColumnPredicateFromPB(*schema_.get(), &arena_, pb, &predicate));
     ASSERT_EQ(predicate->predicate_type(), PredicateType::InBloomFilter);
     ASSERT_EQ(predicate, ibf);
   }
@@ -949,7 +957,7 @@ TEST_F(BFWireProtocolTest, TestColumnPredicateBloomFilterWithBound) {
                                                     &upper);
     ColumnPredicatePB pb;
     NO_FATALS(ColumnPredicateToPB(ibf, &pb));
-    ASSERT_OK(ColumnPredicateFromPB(schema_, &arena_, pb, &predicate));
+    ASSERT_OK(ColumnPredicateFromPB(*schema_.get(), &arena_, pb, &predicate));
     ASSERT_EQ(predicate->predicate_type(), PredicateType::InBloomFilter);
     ASSERT_EQ(predicate->bloom_filters().size(), ibf.bloom_filters().size());
     ASSERT_EQ(predicate, ibf);

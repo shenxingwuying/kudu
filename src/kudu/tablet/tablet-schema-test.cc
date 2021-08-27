@@ -29,6 +29,7 @@
 #include "kudu/common/iterator.h"
 #include "kudu/common/partial_row.h"
 #include "kudu/common/schema.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/tablet/local_tablet_writer.h"
 #include "kudu/tablet/tablet-test-util.h"
@@ -53,7 +54,7 @@ class TestTabletSchema : public KuduTabletTest {
     : KuduTabletTest(CreateBaseSchema()) {
   }
 
-  void InsertRows(const Schema& schema, size_t first_key, size_t nrows) {
+  void InsertRows(const SchemaRefPtr& schema, size_t first_key, size_t nrows) {
     for (size_t i = first_key; i < nrows; ++i) {
       InsertRow(schema, i);
 
@@ -65,30 +66,30 @@ class TestTabletSchema : public KuduTabletTest {
     }
   }
 
-  void InsertRow(const Schema& schema, size_t key) {
-    LocalTabletWriter writer(tablet().get(), &schema);
-    KuduPartialRow row(&schema);
+  void InsertRow(const SchemaRefPtr& schema, size_t key) {
+    LocalTabletWriter writer(tablet().get(), schema.get());
+    KuduPartialRow row(schema.get());
     CHECK_OK(row.SetInt32(0, key));
     CHECK_OK(row.SetInt32(1, key));
     ASSERT_OK(writer.Insert(row));
   }
 
-  void DeleteRow(const Schema& schema, size_t key) {
-    LocalTabletWriter writer(tablet().get(), &schema);
-    KuduPartialRow row(&schema);
+  void DeleteRow(const SchemaRefPtr& schema, size_t key) {
+    LocalTabletWriter writer(tablet().get(), schema.get());
+    KuduPartialRow row(schema.get());
     CHECK_OK(row.SetInt32(0, key));
     ASSERT_OK(writer.Delete(row));
   }
 
-  void MutateRow(const Schema& schema, size_t key, size_t col_idx, int32_t new_val) {
-    LocalTabletWriter writer(tablet().get(), &schema);
-    KuduPartialRow row(&schema);
+  void MutateRow(const SchemaRefPtr& schema, size_t key, size_t col_idx, int32_t new_val) {
+    LocalTabletWriter writer(tablet().get(), schema.get());
+    KuduPartialRow row(schema.get());
     CHECK_OK(row.SetInt32(0, key));
     CHECK_OK(row.SetInt32(col_idx, new_val));
     ASSERT_OK(writer.Update(row));
   }
 
-  void VerifyTabletRows(const Schema& projection,
+  void VerifyTabletRows(const SchemaRefPtr& projection,
                         const std::vector<std::pair<string, string> >& keys) {
     typedef std::pair<string, string> StringPair;
 
@@ -108,9 +109,9 @@ class TestTabletSchema : public KuduTabletTest {
   }
 
  private:
-  Schema CreateBaseSchema() {
-    return Schema({ ColumnSchema("key", INT32),
-                    ColumnSchema("c1", INT32) }, 1);
+  SchemaRefPtr CreateBaseSchema() {
+    return make_scoped_refptr(new Schema({ ColumnSchema("key", INT32),
+                    ColumnSchema("c1", INT32) }, 1));
   }
 };
 
@@ -118,15 +119,15 @@ class TestTabletSchema : public KuduTabletTest {
 // the original schema. Verify that the server reject the request.
 TEST_F(TestTabletSchema, TestRead) {
   const size_t kNumRows = 10;
-  Schema projection({ ColumnSchema("key", INT32),
+  SchemaRefPtr projection_ptr(new Schema({ ColumnSchema("key", INT32),
                       ColumnSchema("c2", INT64),
                       ColumnSchema("c3", STRING) },
-                    1);
+                    1));
 
   InsertRows(client_schema_, 0, kNumRows);
 
   unique_ptr<RowwiseIterator> iter;
-  ASSERT_OK(tablet()->NewRowIterator(projection, &iter));
+  ASSERT_OK(tablet()->NewRowIterator(projection_ptr, &iter));
 
   Status s = iter->Init(nullptr);
   ASSERT_TRUE(s.IsInvalidArgument());
@@ -146,10 +147,10 @@ TEST_F(TestTabletSchema, TestWrite) {
   const int32_t c2_write_default = 5;
   const int32_t c2_read_default = 7;
 
-  SchemaBuilder builder(tablet()->metadata()->schema());
+  SchemaBuilder builder(*tablet()->metadata()->schema().get());
   ASSERT_OK(builder.AddColumn("c2", INT32, false, &c2_read_default, &c2_write_default));
   AlterSchema(builder.Build());
-  Schema s2 = builder.BuildWithoutIds();
+  SchemaRefPtr s2 = builder.BuildWithoutIds();
 
   // Insert with base/old schema
   size_t s2Key = kNumBaseRows + 1;
@@ -189,10 +190,10 @@ TEST_F(TestTabletSchema, TestReInsert) {
   const int32_t c2_write_default = 5;
   const int32_t c2_read_default = 7;
 
-  SchemaBuilder builder(tablet()->metadata()->schema());
+  SchemaBuilder builder(*tablet()->metadata()->schema().get());
   ASSERT_OK(builder.AddColumn("c2", INT32, false, &c2_read_default, &c2_write_default));
   AlterSchema(builder.Build());
-  Schema s2 = builder.BuildWithoutIds();
+  SchemaRefPtr s2 = builder.BuildWithoutIds();
 
   // Insert with base/old schema
   size_t s2Key = 1;
@@ -219,10 +220,10 @@ TEST_F(TestTabletSchema, TestRenameProjection) {
   InsertRow(client_schema_, 1);
 
   // Switch schema to s2
-  SchemaBuilder builder(tablet()->metadata()->schema());
+  SchemaBuilder builder(*tablet()->metadata()->schema().get());
   ASSERT_OK(builder.RenameColumn("c1", "c1_renamed"));
   AlterSchema(builder.Build());
-  Schema s2 = builder.BuildWithoutIds();
+  SchemaRefPtr s2 = builder.BuildWithoutIds();
 
   // Insert with the s2 schema after AlterSchema(s2)
   InsertRow(s2, 2);
@@ -260,13 +261,13 @@ TEST_F(TestTabletSchema, TestDeleteAndReAddColumn) {
   VerifyTabletRows(client_schema_, keys);
 
   // Switch schema to s2
-  SchemaBuilder builder(tablet()->metadata()->schema());
+  SchemaBuilder builder(*tablet()->metadata()->schema().get());
   ASSERT_OK(builder.RemoveColumn("c1"));
   // NOTE this new 'c1' will have a different id from the previous one
   //      so the data added to the previous 'c1' will not be visible.
   ASSERT_OK(builder.AddNullableColumn("c1", INT32));
   AlterSchema(builder.Build());
-  Schema s2 = builder.BuildWithoutIds();
+  SchemaRefPtr s2 = builder.BuildWithoutIds();
 
   // Verify that the new 'c1' have the default value
   keys.clear();
@@ -279,15 +280,15 @@ TEST_F(TestTabletSchema, TestModifyEmptyMemRowSet) {
   std::vector<std::pair<string, string> > keys;
 
   // Switch schema to s2
-  SchemaBuilder builder(tablet()->metadata()->schema());
+  SchemaBuilder builder(*tablet()->metadata()->schema().get());
   ASSERT_OK(builder.AddNullableColumn("c2", INT32));
   AlterSchema(builder.Build());
-  Schema s2 = builder.BuildWithoutIds();
+  SchemaRefPtr s2 = builder.BuildWithoutIds();
 
   // Verify we can insert some new data.
   // Inserts the row "(2, 2, 2)"
-  LocalTabletWriter writer(tablet().get(), &s2);
-  KuduPartialRow row(&s2);
+  LocalTabletWriter writer(tablet().get(), s2.get());
+  KuduPartialRow row(s2.get());
   CHECK_OK(row.SetInt32(0, 2));
   CHECK_OK(row.SetInt32(1, 2));
   CHECK_OK(row.SetInt32(2, 2));

@@ -45,6 +45,7 @@
 #include "kudu/client/write_op.h"
 #include "kudu/common/common.pb.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/metadata.pb.h"
@@ -1669,7 +1670,7 @@ TEST_F(AdminCliTest, TestListTablesDetail) {
 
   // Add another table to test multiple tables output.
   const string kAnotherTableId = "TestAnotherTable";
-  auto client_schema = KuduSchema::FromSchema(schema_);
+  auto client_schema = KuduSchema::FromSchema(*schema_.get());
   unique_ptr<KuduTableCreator> table_creator(client_->NewTableCreator());
   ASSERT_OK(table_creator->table_name(kAnotherTableId)
            .schema(&client_schema)

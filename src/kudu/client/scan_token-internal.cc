@@ -60,6 +60,10 @@
 #include "kudu/util/slice.h"
 #include "kudu/util/status.h"
 
+namespace kudu {
+class ColumnPredicate;
+} // namespace kudu
+
 using std::string;
 using std::map;
 using std::unique_ptr;
@@ -68,7 +72,6 @@ using strings::Substitute;
 
 namespace kudu {
 
-class ColumnPredicate;
 using master::GetTableLocationsResponsePB;
 using master::TableIdentifierPB;
 using master::TabletLocationsPB;
@@ -126,7 +129,8 @@ Status KuduScanToken::Data::PBIntoScanner(KuduClient* client,
   sp::shared_ptr<KuduTable> table;
   if (message.has_table_metadata()) {
     const TableMetadataPB& metadata = message.table_metadata();
-    Schema schema;
+    SchemaRefPtr schema_ptr(new Schema);
+    Schema& schema = *schema_ptr.get();
     RETURN_NOT_OK(SchemaFromPB(metadata.schema(), &schema));
     KuduSchema kudu_schema(schema);
     PartitionSchema partition_schema;
@@ -198,7 +202,7 @@ Status KuduScanToken::Data::PBIntoScanner(KuduClient* client,
     client->data_->StoreAuthzToken(table->id(), message.authz_token());
   }
 
-  Schema* schema = table->schema().schema_;
+  SchemaRefPtr schema = *table->schema().schema_;
 
   unique_ptr<KuduScanner> scan_builder(new KuduScanner(table.get()));
 
@@ -233,7 +237,7 @@ Status KuduScanToken::Data::PBIntoScanner(KuduClient* client,
   ScanConfiguration* configuration = scan_builder->data_->mutable_configuration();
   for (const ColumnPredicatePB& pb : message.column_predicates()) {
     boost::optional<ColumnPredicate> predicate;
-    RETURN_NOT_OK(ColumnPredicateFromPB(*schema, configuration->arena(), pb, &predicate));
+    RETURN_NOT_OK(ColumnPredicateFromPB(*schema.get(), configuration->arena(), pb, &predicate));
     configuration->AddConjunctPredicate(std::move(*predicate));
   }
 
@@ -339,10 +343,10 @@ Status KuduScanTokenBuilder::Data::Build(vector<KuduScanToken*>* tokens) {
     table_pb.set_owner(table->owner());
     table_pb.set_comment(table->comment());
     SchemaPB schema_pb;
-    RETURN_NOT_OK(SchemaToPB(KuduSchema::ToSchema(table->schema()), &schema_pb));
+    RETURN_NOT_OK(SchemaToPB(*KuduSchema::ToSchema(table->schema()).get(), &schema_pb));
     *table_pb.mutable_schema() = std::move(schema_pb);
     PartitionSchemaPB partition_schema_pb;
-    RETURN_NOT_OK(table->partition_schema().ToPB(KuduSchema::ToSchema(table->schema()),
+    RETURN_NOT_OK(table->partition_schema().ToPB(*KuduSchema::ToSchema(table->schema()).get(),
                                                  &partition_schema_pb));
     table_pb.mutable_partition_schema()->CopyFrom(partition_schema_pb);
     table_pb.mutable_extra_configs()->insert(table->extra_configs().begin(),
@@ -367,7 +371,7 @@ Status KuduScanTokenBuilder::Data::Build(vector<KuduScanToken*>* tokens) {
   if (include_table_metadata_) {
     for (const ColumnSchema& col : configuration_.projection()->columns()) {
       int column_idx;
-      table->schema().schema_->FindColumn(col.name(), &column_idx);
+      (*table->schema().schema_)->FindColumn(col.name(), &column_idx);
       pb.mutable_projected_column_idx()->Add(column_idx);
     }
   } else {
@@ -435,7 +439,7 @@ Status KuduScanTokenBuilder::Data::Build(vector<KuduScanToken*>* tokens) {
   MonoTime deadline = MonoTime::Now() + client->default_admin_operation_timeout();
 
   PartitionPruner pruner;
-  pruner.Init(*table->schema().schema_, table->partition_schema(), configuration_.spec());
+  pruner.Init(*table->schema().schema_->get(), table->partition_schema(), configuration_.spec());
   while (pruner.HasMorePartitionKeyRanges()) {
     scoped_refptr<internal::RemoteTablet> tablet;
     Synchronizer sync;

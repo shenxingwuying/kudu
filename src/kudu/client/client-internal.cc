@@ -613,17 +613,20 @@ Status KuduClient::Data::GetTableSchema(KuduClient* client,
   rpc.SendRpc();
   RETURN_NOT_OK(sync.Wait());
   // Parse the server schema out of the response.
-  unique_ptr<Schema> new_schema(new Schema);
-  RETURN_NOT_OK(SchemaFromPB(resp.schema(), new_schema.get()));
+  scoped_refptr<Schema>* new_schema = new scoped_refptr<Schema>(new Schema);
+  RETURN_NOT_OK(SchemaFromPB(resp.schema(), new_schema->get()));
 
   // Parse the server partition schema out of the response.
   PartitionSchema new_partition_schema;
   RETURN_NOT_OK(PartitionSchema::FromPB(resp.partition_schema(),
-                                        *new_schema,
+                                        *new_schema->get(),
                                         &new_partition_schema));
   if (schema) {
     delete schema->schema_;
-    schema->schema_ = new_schema.release();
+    schema->schema_ = new_schema;
+  } else {
+    delete new_schema;
+    new_schema = nullptr;
   }
   if (partition_schema) {
     *partition_schema = std::move(new_partition_schema);

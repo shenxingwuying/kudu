@@ -18,8 +18,8 @@
 #include "kudu/consensus/log.h"
 
 #include <algorithm>
-#include <cstddef>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -33,6 +33,7 @@
 #include <glog/stl_logging.h>
 #include <gtest/gtest.h>
 
+#include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol-test-util.h"
 #include "kudu/common/wire_protocol.h"
 #include "kudu/consensus/consensus.pb.h"
@@ -136,7 +137,8 @@ class LogTest : public LogTestBase {
     LogSegmentHeaderPB header;
     header.set_sequence_number(sequence_number);
     header.set_tablet_id(kTestTablet);
-    SchemaToPB(GetSimpleTestSchema(), header.mutable_schema());
+    SchemaRefPtr schema(GetSimpleTestSchema());
+    SchemaToPB(*schema.get(), header.mutable_schema());
 
     LogSegmentFooterPB footer;
     footer.set_num_entries(10);

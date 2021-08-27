@@ -87,11 +87,11 @@ class TestMemRowSet : public KuduTest {
     : op_id_(consensus::MaximumOpId()),
       log_anchor_registry_(new LogAnchorRegistry()),
       schema_(CreateSchema()),
-      key_schema_(schema_.CreateKeyProjection()),
+      key_schema_(schema_->CreateKeyProjection()),
       clock_(Timestamp::kInitialTimestamp) {
   }
 
-  static Schema CreateSchema() {
+  static SchemaRefPtr CreateSchema() {
     unique_ptr<SchemaBuilder> sb(CreateSchemaBuilder());
     return sb->Build();
   }
@@ -126,7 +126,7 @@ class TestMemRowSet : public KuduTest {
 
   Status CheckRowPresent(const MemRowSet &mrs,
                          const string &key, bool *present) {
-    RowBuilder rb(&key_schema_);
+    RowBuilder rb(key_schema_.get());
     rb.AddString(Slice(key));
     Arena arena(64);
     RowSetKeyProbe probe(rb.row(), &arena);
@@ -136,7 +136,7 @@ class TestMemRowSet : public KuduTest {
   }
 
   Status InsertRows(MemRowSet *mrs, int num_rows) {
-    RowBuilder rb(&schema_);
+    RowBuilder rb(schema_.get());
     char keybuf[256];
     for (uint32_t i = 0; i < num_rows; i++) {
       rb.Reset();
@@ -151,7 +151,7 @@ class TestMemRowSet : public KuduTest {
 
   Status InsertRow(MemRowSet *mrs, const string &key, uint32_t val) {
     ScopedOp op(&mvcc_, clock_.Now());
-    RowBuilder rb(&schema_);
+    RowBuilder rb(schema_.get());
     rb.AddString(key);
     rb.AddUint32(val);
     op.StartApplying();
@@ -169,9 +169,9 @@ class TestMemRowSet : public KuduTest {
 
     mutation_buf_.clear();
     RowChangeListEncoder update(&mutation_buf_);
-    update.AddColumnUpdate(schema_.column(1), schema_.column_id(1), &new_val);
+    update.AddColumnUpdate(schema_->column(1), schema_->column_id(1), &new_val);
 
-    RowBuilder rb(&key_schema_);
+    RowBuilder rb(key_schema_.get());
     rb.AddString(Slice(key));
     Arena arena(64);
     RowSetKeyProbe probe(rb.row(), &arena);
@@ -195,7 +195,7 @@ class TestMemRowSet : public KuduTest {
     RowChangeListEncoder update(&mutation_buf_);
     update.SetToDelete();
 
-    RowBuilder rb(&key_schema_);
+    RowBuilder rb(key_schema_.get());
     rb.AddString(Slice(key));
     Arena arena(64);
     RowSetKeyProbe probe(rb.row(), &arena);
@@ -216,7 +216,7 @@ class TestMemRowSet : public KuduTest {
     CHECK_OK(iter->Init(nullptr));
 
     RowBlockMemory mem(1024);
-    RowBlock block(&schema_, 100, &mem);
+    RowBlock block(schema_.get(), 100, &mem);
     int fetched = 0;
     while (iter->HasNext()) {
       mem.Reset();
@@ -230,7 +230,7 @@ class TestMemRowSet : public KuduTest {
   bool CheckRowsAtSnapshot(MemRowSet* mrs, const MvccSnapshot& snap, int expected_rows) {
     RowIteratorOptions opts;
     opts.snap_to_include = snap;
-    opts.projection = &schema_;
+    opts.projection = schema_;
     return expected_rows == ScanAndCount(mrs, opts);
   }
 
@@ -240,7 +240,7 @@ class TestMemRowSet : public KuduTest {
     RowIteratorOptions opts;
     opts.snap_to_exclude = snap_to_exc;
     opts.snap_to_include = snap_to_inc;
-    opts.projection = &schema_;
+    opts.projection = schema_;
     return expected_rows == ScanAndCount(mrs, opts);
   }
 
@@ -282,8 +282,8 @@ class TestMemRowSet : public KuduTest {
   scoped_refptr<LogAnchorRegistry> log_anchor_registry_;
 
   faststring mutation_buf_;
-  const Schema schema_;
-  const Schema key_schema_;
+  const SchemaRefPtr schema_;
+  const SchemaRefPtr key_schema_;
   clock::LogicalClock clock_;
   MvccManager mvcc_;
 };
@@ -306,13 +306,13 @@ TEST_F(TestMemRowSet, TestInsertAndIterate) {
   // be "goodbye" because 'g' sorts before 'h'
   ASSERT_TRUE(iter->HasNext());
   MRSRow row = iter->GetCurrentRow();
-  EXPECT_EQ(R"((string key="goodbye world", uint32 val=54321))", schema_.DebugRow(row));
+  EXPECT_EQ(R"((string key="goodbye world", uint32 val=54321))", schema_->DebugRow(row));
 
   // Next row should be 'hello world'
   ASSERT_TRUE(iter->Next());
   ASSERT_TRUE(iter->HasNext());
   row = iter->GetCurrentRow();
-  EXPECT_EQ(R"((string key="hello world", uint32 val=12345))", schema_.DebugRow(row));
+  EXPECT_EQ(R"((string key="hello world", uint32 val=12345))", schema_->DebugRow(row));
 
   ASSERT_FALSE(iter->Next());
   ASSERT_FALSE(iter->HasNext());
@@ -324,10 +324,11 @@ TEST_F(TestMemRowSet, TestInsertAndIterateCompoundKey) {
   ASSERT_OK(builder.AddKeyColumn("key1", STRING));
   ASSERT_OK(builder.AddKeyColumn("key2", INT32));
   ASSERT_OK(builder.AddColumn("val", UINT32));
-  Schema compound_key_schema = builder.Build();
+  SchemaRefPtr compound_key_schema_ptr = builder.Build();
+  Schema& compound_key_schema = *compound_key_schema_ptr.get();
 
   shared_ptr<MemRowSet> mrs;
-  ASSERT_OK(MemRowSet::Create(0, compound_key_schema, log_anchor_registry_.get(),
+  ASSERT_OK(MemRowSet::Create(0, compound_key_schema_ptr, log_anchor_registry_.get(),
                               MemTracker::GetRootTracker(), &mrs));
 
   RowBuilder rb(&compound_key_schema);
@@ -511,7 +512,7 @@ TEST_F(TestMemRowSet, TestDelete) {
 
   // Verify that iterating the rowset at the first snapshot shows the row.
   RowIteratorOptions opts;
-  opts.projection = &schema_;
+  opts.projection = schema_;
   opts.snap_to_include = snapshot_before_delete;
   ASSERT_OK(DumpRowSet(*mrs, opts, &rows));
   ASSERT_EQ(1, rows.size());
@@ -548,7 +549,7 @@ TEST_F(TestMemRowSet, TestMemRowSetInsertCountAndScan) {
 
   for (int i = 0; i < FLAGS_num_scan_passes; i++) {
     RowIteratorOptions opts;
-    opts.projection = &schema_;
+    opts.projection = schema_;
     opts.snap_to_include = MvccSnapshot(Timestamp(0));
     LOG_TIMING(INFO, "Scanning rows where none are committed") {
       ASSERT_EQ(0, ScanAndCount(mrs.get(), opts));
@@ -574,7 +575,7 @@ TEST_F(TestMemRowSet, TestInsertionMVCC) {
     {
       ScopedOp op(&mvcc_, clock_.Now());
       op.StartApplying();
-      RowBuilder rb(&schema_);
+      RowBuilder rb(schema_.get());
       char keybuf[256];
       rb.Reset();
       snprintf(keybuf, sizeof(keybuf), "op%d", i);
@@ -592,7 +593,7 @@ TEST_F(TestMemRowSet, TestInsertionMVCC) {
 
   ASSERT_EQ(5, snapshots.size());
   RowIteratorOptions opts;
-  opts.projection = &schema_;
+  opts.projection = schema_;
   for (int i = 0; i < 5; i++) {
     SCOPED_TRACE(i);
     // Each snapshot 'i' is taken after row 'i' was committed.
@@ -636,7 +637,7 @@ TEST_F(TestMemRowSet, TestUpdateMVCC) {
   // Validate that each snapshot returns the expected value
   ASSERT_EQ(6, snapshots.size());
   RowIteratorOptions opts;
-  opts.projection = &schema_;
+  opts.projection = schema_;
   for (int i = 0; i <= 5; i++) {
     SCOPED_TRACE(i);
     vector<string> rows;
@@ -701,7 +702,8 @@ TEST_P(ParameterizedTestMemRowSet, TestScanSnapToExclude) {
                               /*is_nullable=*/false,
                               &kFalse, /*write_default=*/nullptr));
     }
-    Schema projection = sb->Build();
+    SchemaRefPtr projection_ptr = sb->Build();
+    Schema& projection = *projection_ptr.get();
     RowIteratorOptions opts;
     opts.projection = &projection;
     opts.snap_to_include = include;
@@ -766,7 +768,7 @@ TEST_F(TestMemRowSet, TestScanIncludeDeletedRows) {
   ASSERT_OK(GenerateTestData(mrs.get()));
 
   RowIteratorOptions opts;
-  opts.projection = &schema_;
+  opts.projection = schema_;
   opts.snap_to_include = MvccSnapshot::CreateSnapshotIncludingAllOps();
   ASSERT_EQ(4, ScanAndCount(mrs.get(), opts));
 
@@ -787,7 +789,8 @@ TEST_F(TestMemRowSet, TestScanVirtualColumnIsDeleted) {
   ASSERT_OK(sb.AddColumn("deleted", IS_DELETED,
                          /*is_nullable=*/false,
                          &kFalse, /*write_default=*/nullptr));
-  Schema projection = sb.Build();
+  SchemaRefPtr projection_ptr = sb.Build();
+  Schema& projection = *projection_ptr.get();
 
   RowIteratorOptions opts;
   opts.projection = &projection;

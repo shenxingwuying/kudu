@@ -112,7 +112,8 @@ TEST_F(CreateTableITest, TestCreateWhenMajorityOfReplicasFailCreation) {
   // This won't succeed because we can't create enough replicas to get
   // a quorum.
   unique_ptr<client::KuduTableCreator> table_creator(client_->NewTableCreator());
-  auto client_schema = KuduSchema::FromSchema(GetSimpleTestSchema());
+  SchemaRefPtr schema_ptr(GetSimpleTestSchema());
+  auto client_schema = KuduSchema::FromSchema(*schema_ptr.get());
   ASSERT_OK(table_creator->table_name(kTableName)
             .schema(&client_schema)
             .set_range_partition_columns({ "key" })
@@ -198,7 +199,8 @@ TEST_F(CreateTableITest, TestSpreadReplicasEvenly) {
   NO_FATALS(StartCluster({}, {}, kNumServers));
 
   unique_ptr<client::KuduTableCreator> table_creator(client_->NewTableCreator());
-  auto client_schema = KuduSchema::FromSchema(GetSimpleTestSchema());
+  SchemaRefPtr schema_ptr(GetSimpleTestSchema());
+  auto client_schema = KuduSchema::FromSchema(*schema_ptr.get());
   ASSERT_OK(table_creator->table_name(kTableName)
             .schema(&client_schema)
             .set_range_partition_columns({ "key" })
@@ -269,10 +271,11 @@ TEST_F(CreateTableITest, TestSpreadReplicasEvenlyWithDimension) {
   // We have five tablet servers.
   NO_FATALS(StartCluster({}, master_flags, kNumServers / 2));
 
-  Schema schema = Schema({ ColumnSchema("key1", INT32),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("key1", INT32),
                            ColumnSchema("key2", INT32),
                            ColumnSchema("int_val", INT32),
-                           ColumnSchema("string_val", STRING, true) }, 2);
+                           ColumnSchema("string_val", STRING, true) }, 2));
+  Schema& schema = *schema_ptr.get();
   auto client_schema = KuduSchema::FromSchema(schema);
 
   auto create_table_func = [](KuduClient* client,
@@ -398,8 +401,8 @@ TEST_F(CreateTableITest, TestSpreadReplicasEvenlyWithDimension) {
 static void LookUpRandomKeysLoop(const std::shared_ptr<master::MasterServiceProxy>& master,
                                  const char* table_name,
                                  AtomicBool* quit) {
-  Schema schema(GetSimpleTestSchema());
-  auto client_schema = KuduSchema::FromSchema(GetSimpleTestSchema());
+  SchemaRefPtr schema_ptr(GetSimpleTestSchema());
+  auto client_schema = KuduSchema::FromSchema(*schema_ptr.get());
   unique_ptr<KuduPartialRow> r(client_schema.NewRow());
 
   while (!quit->Load()) {
@@ -463,8 +466,9 @@ TEST_F(CreateTableITest, TestCreateTableWithDeadTServers) {
           "--tserver_unresponsive_timeout_ms=5000" }));
   cluster_->ShutdownNodes(ClusterNodes::TS_ONLY);
 
-  Schema schema(GetSimpleTestSchema());
-  auto client_schema = KuduSchema::FromSchema(GetSimpleTestSchema());
+  SchemaRefPtr schema_ptr(GetSimpleTestSchema());
+  Schema& schema = *schema_ptr.get();
+  auto client_schema = KuduSchema::FromSchema(schema);
   unique_ptr<client::KuduTableCreator> table_creator(client_->NewTableCreator());
 
   // Don't bother waiting for table creation to finish; it'll never happen

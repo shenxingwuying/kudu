@@ -46,10 +46,11 @@ namespace tablet {
 // The partition schema will have no hash components, and a single range
 // component over the primary key columns. The partition will cover the
 // entire partition-key space.
-static std::pair<PartitionSchema, Partition> CreateDefaultPartition(const Schema& schema) {
+static std::pair<PartitionSchema, Partition> CreateDefaultPartition(
+    const SchemaRefPtr& schema) {
   // Create a default partition schema.
   PartitionSchema partition_schema;
-  CHECK_OK(PartitionSchema::FromPB(PartitionSchemaPB(), schema, &partition_schema));
+  CHECK_OK(PartitionSchema::FromPB(PartitionSchemaPB(), *schema.get(), &partition_schema));
 
   // Create the tablet partitions.
   std::vector<Partition> partitions;
@@ -77,11 +78,11 @@ class TabletHarness {
     ClockType clock_type;
   };
 
-  TabletHarness(const Schema& schema, Options options)
-      : options_(std::move(options)), schema_(schema) {}
+  TabletHarness(SchemaRefPtr schema, Options options)
+      : options_(std::move(options)), schema_ptr_(schema) {}
 
   Status Create(bool first_time) {
-    std::pair<PartitionSchema, Partition> partition(CreateDefaultPartition(schema_));
+    std::pair<PartitionSchema, Partition> partition(CreateDefaultPartition(schema_ptr_));
 
     // Build the Tablet
     fs_manager_.reset(new FsManager(options_.env, FsManagerOpts(options_.root_dir)));
@@ -95,7 +96,7 @@ class TabletHarness {
                                                options_.tablet_id,
                                                "KuduTableTest",
                                                "KuduTableTestId",
-                                               schema_,
+                                               schema_ptr_,
                                                partition.first,
                                                partition.second,
                                                TABLET_DATA_READY,
@@ -158,7 +159,7 @@ class TabletHarness {
   scoped_refptr<MetricEntity> metric_entity_;
 
   std::unique_ptr<clock::Clock> clock_;
-  Schema schema_;
+  SchemaRefPtr schema_ptr_;
   std::unique_ptr<FsManager> fs_manager_;
   std::shared_ptr<Tablet> tablet_;
 };

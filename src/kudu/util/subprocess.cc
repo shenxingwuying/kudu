@@ -484,7 +484,6 @@ Status Subprocess::Start() {
     for (const auto& env : env_) {
       ignore_result(setenv(env.first.c_str(), env.second.c_str(), 1 /* overwrite */));
     }
-
     execvp(program_.c_str(), &argv_ptrs[0]);
     int err = errno;
     RAW_LOG(ERROR, "could not exec '%s': [%d]", program_.c_str(), err);

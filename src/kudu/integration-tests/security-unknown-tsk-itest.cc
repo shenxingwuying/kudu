@@ -36,6 +36,7 @@
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/client/write_op.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/schema.h"
 #include "kudu/gutil/stl_util.h"
 #include "kudu/gutil/walltime.h"
 #include "kudu/integration-tests/test_workload.h"
@@ -92,7 +93,7 @@ class SecurityUnknownTskTest : public KuduTest {
   SecurityUnknownTskTest()
       : num_tablet_servers_(3),
         heartbeat_interval_ms_(100),
-        schema_(KuduSchema::FromSchema(CreateKeyValueTestSchema())) {
+        schema_(KuduSchema::FromSchema(*CreateKeyValueTestSchema().get())) {
 
     // Make the ts->master heartbeat interval shorter to run the test faster.
     FLAGS_heartbeat_interval_ms = heartbeat_interval_ms_;

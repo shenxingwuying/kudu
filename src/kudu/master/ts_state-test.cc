@@ -26,6 +26,7 @@
 #include <gtest/gtest.h>
 
 #include "kudu/common/common.pb.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol-test-util.h"
 #include "kudu/common/wire_protocol.h"
 #include "kudu/common/wire_protocol.pb.h"
@@ -141,7 +142,8 @@ class TServerStateTest : public KuduTest {
     CreateTableResponsePB resp;
     CreateTableRequestPB req;
     req.set_name(table_name);
-    RETURN_NOT_OK(SchemaToPB(GetSimpleTestSchema(), req.mutable_schema()));
+    SchemaRefPtr schema_ptr(GetSimpleTestSchema());
+    RETURN_NOT_OK(SchemaToPB(*schema_ptr.get(), req.mutable_schema()));
 
     RETURN_NOT_OK(proxy_->CreateTable(req, &resp, &rpc));
     if (resp.has_error()) {

@@ -41,8 +41,8 @@
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet_metadata.h"
 #include "kudu/util/monotime.h"
-#include "kudu/util/status.h"
 #include "kudu/util/scoped_cleanup.h"
+#include "kudu/util/status.h"
 #include "kudu/util/test_macros.h"
 
 using std::string;
@@ -75,7 +75,7 @@ TEST_P(DiffScanTest, TestDiffScan) {
 
   MvccSnapshot snap1(*tablet->mvcc_manager());
 
-  LocalTabletWriter writer(tablet.get(), &client_schema_);
+  LocalTabletWriter writer(tablet.get(), client_schema_.get());
   constexpr int64_t kRowKey = 1;
   ASSERT_OK(InsertTestRow(&writer, kRowKey, 1));
   ASSERT_OK(tablet->Flush());
@@ -104,7 +104,7 @@ TEST_P(DiffScanTest, TestDiffScan) {
   opts.include_deleted_rows = include_deleted_rows;
 
   static const bool kIsDeletedDefault = false;
-  SchemaBuilder builder(tablet->metadata()->schema());
+  SchemaBuilder builder(*tablet->metadata()->schema().get());
   if (order_mode == ORDERED) {
     // Define our diff scan to start from snap1.
     // NOTE: it isn't critical to set this given the default is -Inf, but it
@@ -119,8 +119,8 @@ TEST_P(DiffScanTest, TestDiffScan) {
                                 /*read_default=*/ &kIsDeletedDefault,
                                 /*write_default=*/ nullptr));
   }
-  Schema projection = builder.BuildWithoutIds();
-  opts.projection = &projection;
+  SchemaRefPtr projection = builder.BuildWithoutIds();
+  opts.projection = projection;
 
   unique_ptr<RowwiseIterator> row_iterator;
   ASSERT_OK(tablet->NewRowIterator(std::move(opts),
@@ -168,7 +168,7 @@ TEST_F(OrderedDiffScanWithDeletesTest, TestKudu3108) {
   auto tablet = this->tablet();
   auto tablet_id = tablet->tablet_id();
 
-  LocalTabletWriter writer(tablet.get(), &client_schema_);
+  LocalTabletWriter writer(tablet.get(), client_schema_.get());
   ASSERT_OK(InsertTestRow(&writer, 1, 1));
   ASSERT_OK(tablet->Flush());
 
@@ -188,13 +188,13 @@ TEST_F(OrderedDiffScanWithDeletesTest, TestKudu3108) {
   opts.order = ORDERED;
   opts.include_deleted_rows = true;
   static const bool kIsDeletedDefault = false;
-  SchemaBuilder builder(tablet->metadata()->schema());
+  SchemaBuilder builder(*tablet->metadata()->schema().get());
   ASSERT_OK(builder.AddColumn("deleted", IS_DELETED,
                               /*is_nullable=*/ false,
                               /*read_default=*/ &kIsDeletedDefault,
                               /*write_default=*/ nullptr));
-  Schema projection = builder.BuildWithoutIds();
-  opts.projection = &projection;
+  SchemaRefPtr projection_ptr = builder.BuildWithoutIds();
+  opts.projection = projection_ptr;
 
   // We should be able to iterate through the rows without issue.
   unique_ptr<RowwiseIterator> row_iterator;
@@ -213,7 +213,7 @@ TEST_F(OrderedDiffScanWithDeletesTest, TestKudu3108) {
 TEST_F(OrderedDiffScanWithDeletesTest, TestDiffScanAfterDeltaFlushRacesWithBatchUpdate) {
   auto tablet = this->tablet();
   auto tablet_id = tablet->tablet_id();
-  LocalTabletWriter writer(tablet.get(), &client_schema_);
+  LocalTabletWriter writer(tablet.get(), client_schema_.get());
   constexpr int64_t kRowKey = 1;
   ASSERT_OK(InsertTestRow(&writer, kRowKey, 1));
   MvccSnapshot snap1(*tablet->mvcc_manager());
@@ -247,8 +247,9 @@ TEST_F(OrderedDiffScanWithDeletesTest, TestDiffScanAfterDeltaFlushRacesWithBatch
   opts.snap_to_exclude = snap1;
   opts.snap_to_include = snap2;
   opts.order = ORDERED;;
-  SchemaBuilder builder(tablet->metadata()->schema());
-  Schema projection = builder.BuildWithoutIds();
+  SchemaBuilder builder(*tablet->metadata()->schema().get());
+  SchemaRefPtr projection_ptr = builder.BuildWithoutIds();
+  Schema& projection = *projection_ptr.get();
   opts.projection = &projection;
 
   unique_ptr<RowwiseIterator> row_iterator;

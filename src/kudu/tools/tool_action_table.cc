@@ -39,16 +39,17 @@
 #include "kudu/client/client-internal.h"
 #include "kudu/client/client.h"
 #include "kudu/client/replica_controller-internal.h"
-#include "kudu/client/table_alterer-internal.h"
 #include "kudu/client/scan_batch.h"
 #include "kudu/client/scan_predicate.h"
 #include "kudu/client/schema.h"
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
+#include "kudu/client/table_alterer-internal.h"
 #include "kudu/client/value.h"
 #include "kudu/common/partial_row.h"
 #include "kudu/common/partition.h"
 #include "kudu/common/schema.h"
 #include "kudu/gutil/map-util.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/stl_util.h"
 #include "kudu/gutil/strings/join.h"
 #include "kudu/gutil/strings/numbers.h"
@@ -260,10 +261,10 @@ Status DescribeTable(const RunnerContext& context) {
     auto range_partition_str =
         partition_schema.RangePartitionDebugString(partition.begin().range_key(),
                                                    partition.end().range_key(),
-                                                   schema_internal);
+                                                   *schema_internal.get());
     partition_strs.emplace_back(std::move(range_partition_str));
   }
-  cout << partition_schema.DisplayString(schema_internal, partition_strs)
+  cout << partition_schema.DisplayString(*schema_internal.get(), partition_strs)
        << endl;
 
   // The owner.
@@ -740,7 +741,8 @@ Status ModifyRangePartition(const RunnerContext& context, PartitionAction action
   unique_ptr<KuduPartialRow> upper_bound(schema.NewRow());
 
   vector<pair<string, KuduColumnSchema::DataType>> range_col_names_and_types;
-  const Schema& schema_tmp = KuduSchema::ToSchema(schema);
+  const SchemaRefPtr schema_tmp_ptr = KuduSchema::ToSchema(schema);
+  Schema& schema_tmp = *schema_tmp_ptr.get();
   const auto& partition_schema = table->partition_schema();
   vector<int32_t> key_indexes;
   RETURN_NOT_OK(partition_schema.GetRangeSchemaColumnIndexes(schema_tmp, &key_indexes));

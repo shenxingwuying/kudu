@@ -17,6 +17,7 @@
 
 #include <memory>
 
+#include "kudu/common/schema.h"
 #include "kudu/consensus/consensus_meta_manager.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/tablet/tablet-harness.h"
@@ -28,8 +29,6 @@
 #include "kudu/util/threadpool.h"
 
 namespace kudu {
-
-class Schema;
 
 namespace consensus {
 struct ConsensusBootstrapInfo;
@@ -47,7 +46,7 @@ namespace tablet {
 
 class TabletReplicaTestBase : public KuduTabletTest {
  public:
-  explicit TabletReplicaTestBase(const Schema& schema)
+  explicit TabletReplicaTestBase(const SchemaRefPtr& schema)
       : KuduTabletTest(schema, TabletHarness::Options::ClockType::HYBRID_CLOCK),
         dns_resolver_(new DnsResolver) {}
 

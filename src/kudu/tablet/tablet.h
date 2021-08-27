@@ -229,11 +229,11 @@ class Tablet {
   // Create a new row iterator which yields the rows as of the current MVCC
   // state of this tablet.
   // The returned iterator is not initialized.
-  Status NewRowIterator(const Schema& projection,
+  Status NewRowIterator(const SchemaRefPtr& projection,
                         std::unique_ptr<RowwiseIterator>* iter) const;
 
   // Like above, but returns an ordered iterator.
-  Status NewOrderedRowIterator(const Schema& projection,
+  Status NewOrderedRowIterator(const SchemaRefPtr& projection,
                                std::unique_ptr<RowwiseIterator>* iter) const;
 
   // Create a new row iterator using specific iterator options.
@@ -411,13 +411,13 @@ class Tablet {
   // has a very small number of rows.
   Status DebugDump(std::vector<std::string> *lines = NULL);
 
-  const Schema* schema() const {
-    return &metadata_->schema();
+  const SchemaRefPtr schema() const {
+    return metadata_->schema();
   }
 
   // Returns a reference to the key projection of the tablet schema.
   // The schema keys are immutable.
-  const Schema& key_schema() const { return key_schema_; }
+  const Schema& key_schema() const { return *key_schema_.get(); }
 
   // Return the MVCC manager for this tablet.
   MvccManager* mvcc_manager() { return &mvcc_; }
@@ -756,7 +756,7 @@ class Tablet {
   // released after the schema change has been applied.
   mutable rw_semaphore schema_lock_;
 
-  const Schema key_schema_;
+  const SchemaRefPtr key_schema_;
 
   scoped_refptr<TabletMetadata> metadata_;
 
@@ -898,7 +898,7 @@ class Tablet::Iterator : public RowwiseIterator {
 
   std::string ToString() const OVERRIDE;
 
-  const Schema &schema() const OVERRIDE;
+  const SchemaRefPtr schema() const OVERRIDE;
 
   virtual void GetIteratorStats(std::vector<IteratorStats>* stats) const OVERRIDE;
 
@@ -921,7 +921,7 @@ class Tablet::Iterator : public RowwiseIterator {
 
   const Tablet* tablet_;
   fs::IOContext io_context_;
-  Schema projection_;
+  SchemaRefPtr projection_;
   RowIteratorOptions opts_;
   std::unique_ptr<RowwiseIterator> iter_;
 };

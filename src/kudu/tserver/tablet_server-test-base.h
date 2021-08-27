@@ -96,7 +96,7 @@ class TabletServerTestBase : public KuduTest {
   void BuildTestRow(int index, KuduPartialRow* row);
 
   void DrainScannerToStrings(const std::string& scanner_id,
-                             const Schema& projection,
+                             const SchemaRefPtr& projection,
                              std::vector<std::string>* results,
                              TabletServerServiceProxy* proxy = nullptr,
                              uint32_t call_seq_id = 1);
@@ -111,7 +111,7 @@ class TabletServerTestBase : public KuduTest {
   Status ShutdownAndRebuildTablet(int num_data_dirs = 1);
 
   // Verifies that a set of expected rows (key, value) is present in the tablet.
-  void VerifyRows(const Schema& schema, const std::vector<KeyValue>& expected);
+  void VerifyRows(const SchemaRefPtr& schema, const std::vector<KeyValue>& expected);
 
   // Verifies that the given scan request fails with the specified error
   // code/message.
@@ -121,7 +121,7 @@ class TabletServerTestBase : public KuduTest {
 
   // Verifies that a simple scan request with the given projection fails with
   // the specified error code/message.
-  void VerifyScanRequestFailure(const Schema& projection,
+  void VerifyScanRequestFailure(const SchemaRefPtr& projection,
                                 TabletServerErrorPB::Code expected_code,
                                 const char *expected_message);
 
@@ -137,8 +137,8 @@ class TabletServerTestBase : public KuduTest {
   static const char* kTabletId;
 
  protected:
-  const Schema schema_;
-  Schema key_schema_;
+  SchemaRefPtr schema_;
+  SchemaRefPtr key_schema_;
   std::unique_ptr<RowBuilder> rb_;
 
   std::shared_ptr<rpc::Messenger> client_messenger_;

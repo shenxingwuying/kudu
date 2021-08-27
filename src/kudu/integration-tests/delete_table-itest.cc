@@ -41,6 +41,7 @@
 #include "kudu/client/schema.h"
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/common/partial_row.h"
+#include "kudu/common/row_operations.pb.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol-test-util.h"
 #include "kudu/common/wire_protocol.h"
@@ -1118,7 +1119,8 @@ TEST_F(DeleteTableITest, TestUnknownTabletsAreNotDeleted) {
 
   NO_FATALS(StartCluster(extra_ts_flags, extra_master_flags, kNumTabletServers));
 
-  Schema schema(GetSimpleTestSchema());
+  SchemaRefPtr schema_ptr(GetSimpleTestSchema());
+  Schema& schema = *schema_ptr.get();
   client::KuduSchema client_schema(client::KuduSchema::FromSchema(schema));
   unique_ptr<KuduTableCreator> creator(client_->NewTableCreator());
   ASSERT_OK(creator->table_name("test")
@@ -1370,7 +1372,8 @@ TEST_P(DeleteTableTombstonedParamTest, TestTabletTombstone) {
   // several fault injection points.
   const int kNumTablets = 2;
   vector<const KuduPartialRow*> split_rows;
-  Schema schema(GetSimpleTestSchema());
+  SchemaRefPtr schema_ptr(GetSimpleTestSchema());
+  Schema& schema = *schema_ptr.get();
   client::KuduSchema client_schema(client::KuduSchema::FromSchema(schema));
   KuduPartialRow* split_row = client_schema.NewRow();
   ASSERT_OK(split_row->SetInt32(0, numeric_limits<int32_t>::max() / kNumTablets));

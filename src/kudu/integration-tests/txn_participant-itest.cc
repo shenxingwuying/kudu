@@ -74,6 +74,10 @@
 #include "kudu/util/test_util.h"
 
 DECLARE_bool(enable_txn_partition_lock);
+namespace kudu {
+class Schema;
+}  // namespace kudu
+
 DECLARE_bool(raft_enable_pre_election);
 DECLARE_double(leader_failure_max_missed_heartbeat_periods);
 DECLARE_int32(consensus_inject_latency_ms_in_notifications);
@@ -1319,7 +1323,8 @@ TEST_F(TxnParticipantElectionStormITest, TestFrequentElections) {
     WriteRequestPB req;
     req.set_txn_id(txn_id);
     req.set_tablet_id(tablet_id);
-    const auto& schema = GetSimpleTestSchema();
+    const auto& schema_ptr = GetSimpleTestSchema();
+    const Schema& schema = *schema_ptr.get();
     RETURN_NOT_OK(SchemaToPB(schema, req.mutable_schema()));
     KuduPartialRow row(&schema);
     RETURN_NOT_OK(row.SetInt32(0, row_id));

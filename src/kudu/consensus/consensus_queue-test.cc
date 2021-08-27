@@ -239,7 +239,7 @@ class ConsensusQueueTest : public KuduTest {
   }
 
  protected:
-  const Schema schema_;
+  SchemaRefPtr schema_;
   MetricRegistry metric_registry_;
   scoped_refptr<MetricEntity> metric_entity_server_;
   scoped_refptr<MetricEntity> metric_entity_tablet_;

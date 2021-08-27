@@ -27,6 +27,7 @@
 #include "kudu/common/row_changelist.h"
 #include "kudu/common/rowblock.h"
 #include "kudu/common/schema.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/util/faststring.h"
 #include "kudu/util/hexdump.h"
@@ -47,7 +48,7 @@ class TestRowChangeList : public KuduTest {
     schema_(CreateSchema())
   {}
 
-  static Schema CreateSchema() {
+  static SchemaRefPtr CreateSchema() {
     SchemaBuilder builder;
     CHECK_OK(builder.AddKeyColumn("col1", STRING));
     CHECK_OK(builder.AddColumn("col2", STRING));
@@ -57,7 +58,7 @@ class TestRowChangeList : public KuduTest {
   }
 
  protected:
-  Schema schema_;
+  SchemaRefPtr schema_;
 };
 
 TEST_F(TestRowChangeList, TestEncodeDecodeUpdates) {
@@ -69,21 +70,21 @@ TEST_F(TestRowChangeList, TestEncodeDecodeUpdates) {
   Slice update2("update2");
   uint32_t update3 = 12345;
 
-  int c0_id = schema_.column_id(0);
-  int c1_id = schema_.column_id(1);
-  int c2_id = schema_.column_id(2);
-  int c3_id = schema_.column_id(3);
+  int c0_id = schema_->column_id(0);
+  int c1_id = schema_->column_id(1);
+  int c2_id = schema_->column_id(2);
+  int c3_id = schema_->column_id(3);
 
-  rcl.AddColumnUpdate(schema_.column(0), c0_id, &update1);
-  rcl.AddColumnUpdate(schema_.column(1), c1_id, &update2);
-  rcl.AddColumnUpdate(schema_.column(2), c2_id, &update3);
-  rcl.AddColumnUpdate(schema_.column(3), c3_id, nullptr);
+  rcl.AddColumnUpdate(schema_->column(0), c0_id, &update1);
+  rcl.AddColumnUpdate(schema_->column(1), c1_id, &update2);
+  rcl.AddColumnUpdate(schema_->column(2), c2_id, &update3);
+  rcl.AddColumnUpdate(schema_->column(3), c3_id, nullptr);
 
   LOG(INFO) << "Encoded: " << HexDump(buf);
 
   // Read it back.
   EXPECT_EQ(R"(SET col1="update1", col2="update2", col3=12345, col4=NULL)",
-            RowChangeList(Slice(buf)).ToString(schema_));
+            RowChangeList(Slice(buf)).ToString(*schema_.get()));
 
   RowChangeListDecoder decoder((RowChangeList(buf)));
   ASSERT_OK(decoder.Init());
@@ -110,6 +111,7 @@ TEST_F(TestRowChangeList, TestEncodeDecodeUpdates) {
 
   ASSERT_FALSE(decoder.HasNext());
 
+  SchemaRefPtr schema_ptr(new Schema());
   // ToString() with unknown columns should still be able to parse
   // the whole changelist.
   EXPECT_EQ(Substitute("SET [unknown column id $0]=update1, "
@@ -117,7 +119,7 @@ TEST_F(TestRowChangeList, TestEncodeDecodeUpdates) {
                        "[unknown column id $2]=90\\x00\\x00, "
                        "[unknown column id $3]=NULL",
                        c0_id, c1_id, c2_id, c3_id),
-            RowChangeList(Slice(buf)).ToString(Schema()));
+            RowChangeList(Slice(buf)).ToString(*schema_ptr.get()));
 }
 
 TEST_F(TestRowChangeList, TestDeletes) {
@@ -130,7 +132,7 @@ TEST_F(TestRowChangeList, TestDeletes) {
   LOG(INFO) << "Encoded: " << HexDump(buf);
 
   // Read it back.
-  EXPECT_EQ(string("DELETE"), RowChangeList(Slice(buf)).ToString(schema_));
+  EXPECT_EQ(string("DELETE"), RowChangeList(Slice(buf)).ToString(*schema_.get()));
 
   RowChangeListDecoder decoder((RowChangeList(buf)));
   ASSERT_OK(decoder.Init());
@@ -145,7 +147,7 @@ TEST_F(TestRowChangeList, TestReinserts) {
 
   {
     // Reinserts include indirect data, so it should be ok to make the RowBuilder a scoped var.
-    RowBuilder rb(&schema_);
+    RowBuilder rb(schema_.get());
     rb.AddString(Slice("hello"));
     rb.AddString(Slice("world"));
     rb.AddUint32(12345);
@@ -159,7 +161,7 @@ TEST_F(TestRowChangeList, TestReinserts) {
   // Note that col1 (hello) is not present in the output string as it's part of the primary
   // key which not encoded in the REINSERT mutation.
   EXPECT_EQ(string(R"(REINSERT col2="world", col3=12345, col4=NULL)"),
-            RowChangeList(Slice(buf)).ToString(schema_));
+            RowChangeList(Slice(buf)).ToString(*schema_.get()));
 
   RowChangeListDecoder reinsert_1_dec((RowChangeList(buf)));
   ASSERT_OK(reinsert_1_dec.Init());
@@ -168,9 +170,9 @@ TEST_F(TestRowChangeList, TestReinserts) {
   faststring buf2;
   RowChangeListEncoder reinsert_2_enc(&buf2);
   {
-    RowBlock block(&schema_, 1, nullptr);
+    RowBlock block(schema_.get(), 1, nullptr);
     RowBlockRow dst_row = block.row(0);
-    RowBuilder rb(&schema_);
+    RowBuilder rb(schema_.get());
     rb.AddString(Slice("hello"));
     rb.AddString(Slice("mundo"));
     rb.AddUint32(54321);
@@ -181,13 +183,13 @@ TEST_F(TestRowChangeList, TestReinserts) {
                                                        static_cast<Arena*>(nullptr),
                                                        &reinsert_2_enc));
     // The row should now match reinsert 1
-    ASSERT_STR_CONTAINS(schema_.DebugRow(dst_row),
+    ASSERT_STR_CONTAINS(schema_->DebugRow(dst_row),
         R"((string col1="hello", string col2="world", uint32 col3=12345, uint32 col4=NULL))");
   }
 
   // And reinsert 2 should contain the original state of the row.
   EXPECT_EQ(R"(REINSERT col2="mundo", col3=54321, col4=1)",
-            RowChangeList(Slice(buf2)).ToString(schema_));
+            RowChangeList(Slice(buf2)).ToString(*schema_.get()));
 }
 
 TEST_F(TestRowChangeList, TestInvalid_EmptySlice) {
@@ -214,12 +216,12 @@ TEST_F(TestRowChangeList, TestInvalid_SetNullForNonNullableColumn) {
 
   // Set column 0 = NULL
   rcl.SetToUpdate();
-  rcl.EncodeColumnMutationRaw(schema_.column_id(0), true, Slice());
+  rcl.EncodeColumnMutationRaw(schema_->column_id(0), true, Slice());
 
   ASSERT_EQ("[invalid update: Corruption: decoded set-to-NULL "
             "for non-nullable column: col1 STRING NOT NULL, "
             "before corruption: SET ]",
-            RowChangeList(Slice(buf)).ToString(schema_));
+            RowChangeList(Slice(buf)).ToString(*schema_.get()));
 }
 
 TEST_F(TestRowChangeList, TestInvalid_SetWrongSizeForIntColumn) {
@@ -228,12 +230,12 @@ TEST_F(TestRowChangeList, TestInvalid_SetWrongSizeForIntColumn) {
   // Set column id 2 = \xff
   // (column id 2 is UINT32, so should be 4 bytes)
   rcl.SetToUpdate();
-  rcl.EncodeColumnMutationRaw(schema_.column_id(2), false, Slice("\xff"));
+  rcl.EncodeColumnMutationRaw(schema_->column_id(2), false, Slice("\xff"));
 
   ASSERT_EQ("[invalid update: Corruption: invalid value \\xff "
             "for column col3 UINT32 NOT NULL, "
             "before corruption: SET ]",
-            RowChangeList(Slice(buf)).ToString(schema_));
+            RowChangeList(Slice(buf)).ToString(*schema_.get()));
 }
 
 } // namespace kudu

@@ -334,7 +334,8 @@ class FuzzTest : public KuduTest {
     FLAGS_tserver_txn_write_op_handling_enabled = false;
   }
 
-  void CreateTabletAndStartClusterWithSchema(const Schema& schema) {
+  void CreateTabletAndStartClusterWithSchema(const SchemaRefPtr& schema_ptr) {
+    const Schema& schema = *schema_ptr.get();
     schema_ =  KuduSchema::FromSchema(schema);
     KuduTest::SetUp();
 
@@ -1518,7 +1519,8 @@ TEST_F(FuzzTest, TestRandomFuzzPksOnly) {
   // Disable the partition lock as there are concurrent transactions.
   // TODO(awong): update this when implementing finer grained locking.
   FLAGS_enable_txn_partition_lock = false;
-  CreateTabletAndStartClusterWithSchema(Schema({ColumnSchema("key", INT32)}, 1));
+  CreateTabletAndStartClusterWithSchema(
+      make_scoped_refptr(new Schema({ColumnSchema("key", INT32)}, 1)));
   SeedRandom();
   vector<TestOp> test_ops;
   GenerateTestCase(&test_ops, AllowSlowTests() ? 1000 : 50, TestOpSets::PK_ONLY);
@@ -1799,7 +1801,8 @@ TEST_F(FuzzTest, TestUpsert_PKOnlyOps) {
 // only primary keys end up as empty change lists. We were previously
 // crashing when a changelist was empty.
 TEST_F(FuzzTest, TestUpsert_PKOnlySchema) {
-  CreateTabletAndStartClusterWithSchema(Schema({ColumnSchema("key", INT32)}, 1));
+  CreateTabletAndStartClusterWithSchema(
+      make_scoped_refptr(new Schema({ColumnSchema("key", INT32)}, 1)));
   RunFuzzCase({
       {TEST_UPSERT_PK_ONLY, 1},
       {TEST_DELETE, 1},

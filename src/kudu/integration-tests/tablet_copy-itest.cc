@@ -40,6 +40,7 @@
 #include "kudu/client/schema.h"
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/common/partial_row.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol-test-util.h"
 #include "kudu/common/wire_protocol.h"
 #include "kudu/common/wire_protocol.pb.h"
@@ -634,7 +635,7 @@ TEST_F(TabletCopyITest, TestConcurrentTabletCopys) {
   // Create a table with several tablets. These will all be simultaneously
   // copied to a single target node from the same leader host.
   const int kNumTablets = 10;
-  KuduSchema client_schema(KuduSchema::FromSchema(GetSimpleTestSchema()));
+  KuduSchema client_schema(KuduSchema::FromSchema(*GetSimpleTestSchema().get()));
   vector<const KuduPartialRow*> splits;
   for (int i = 0; i < kNumTablets - 1; i++) {
     KuduPartialRow* row = client_schema.NewRow();

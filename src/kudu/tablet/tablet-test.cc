@@ -38,11 +38,11 @@
 #include "kudu/common/iterator.h"
 #include "kudu/common/key_range.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/row_operations.pb.h"
 #include "kudu/common/rowblock.h"
 #include "kudu/common/rowblock_memory.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/timestamp.h"
-#include "kudu/common/wire_protocol.pb.h"
 #include "kudu/fs/block_id.h"
 #include "kudu/fs/block_manager.h"
 #include "kudu/gutil/port.h"
@@ -133,9 +133,9 @@ TYPED_TEST(TestTablet, TestFlush) {
   // Make sure the files were created as expected.
   RowSetMetadata* rowset_meta = tablet_meta->GetRowSetForTests(0);
   CHECK(rowset_meta) << "No row set found";
-  ASSERT_TRUE(rowset_meta->HasDataForColumnIdForTests(this->schema_.column_id(0)));
-  ASSERT_TRUE(rowset_meta->HasDataForColumnIdForTests(this->schema_.column_id(1)));
-  ASSERT_TRUE(rowset_meta->HasDataForColumnIdForTests(this->schema_.column_id(2)));
+  ASSERT_TRUE(rowset_meta->HasDataForColumnIdForTests(this->schema_->column_id(0)));
+  ASSERT_TRUE(rowset_meta->HasDataForColumnIdForTests(this->schema_->column_id(1)));
+  ASSERT_TRUE(rowset_meta->HasDataForColumnIdForTests(this->schema_->column_id(2)));
   ASSERT_TRUE(rowset_meta->HasBloomDataBlockForTests());
 
   // check that undo deltas are present
@@ -163,7 +163,7 @@ TYPED_TEST(TestTablet, TestInsertsAndMutationsAreUndoneWithMVCCAfterFlush) {
   vector<MvccSnapshot> snaps;
   snaps.push_back(MvccSnapshot(*this->tablet()->mvcc_manager()));
 
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
   for (int i = 0; i < 5; i++) {
     this->InsertTestRows(i, 1, 0);
     DVLOG(1) << "Inserted row=" << i << ", row_idx=" << i << ", val=0";
@@ -237,7 +237,7 @@ TYPED_TEST(TestTablet, TestGhostRowsOnDiskRowSets) {
   // Create a few INSERT/DELETE pairs on-disk by writing and flushing.
   // Each of the resulting rowsets has a single row which is a "ghost" since its
   // redo data has the DELETE.
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
 
   for (int i = 0; i < 3; i++) {
     CHECK_OK(this->InsertTestRow(&writer, 0, 0));
@@ -261,7 +261,7 @@ TYPED_TEST(TestTablet, TestGhostRowsOnDiskRowSets) {
 // Test that inserting a row which already exists causes an AlreadyPresent
 // error
 TYPED_TEST(TestTablet, TestInsertDuplicateKey) {
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
 
   CHECK_OK(this->InsertTestRow(&writer, 12345, 0));
   ASSERT_FALSE(writer.last_op_result().has_failed_status());
@@ -294,7 +294,7 @@ TYPED_TEST(TestTablet, TestInsertDuplicateKey) {
 //   new reinsert in a new MRS, flush that MRS and compact the row
 //   DRS together, all while preserving the full row history.
 TYPED_TEST(TestTablet, TestReinserts) {
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
 
   vector<MvccSnapshot> snaps;
   // In the first snap there's no row.
@@ -351,7 +351,7 @@ TYPED_TEST(TestTablet, TestReinserts) {
 
 // Test flushes and compactions dealing with deleted rows.
 TYPED_TEST(TestTablet, TestDeleteWithFlushAndCompact) {
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
   CHECK_OK(this->InsertTestRow(&writer, 0, 0));
   ASSERT_OK(this->DeleteTestRow(&writer, 0));
   ASSERT_EQ(0L, writer.last_op_result().mutated_stores(0).mrs_id());
@@ -413,7 +413,7 @@ TYPED_TEST(TestTablet, TestDeleteWithFlushAndCompact) {
 
 // Test flushes dealing with REINSERT mutations in the MemRowSet.
 TYPED_TEST(TestTablet, TestFlushWithReinsert) {
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
   // Insert, delete, and re-insert a row in the MRS.
 
   CHECK_OK(this->InsertTestRow(&writer, 0, 0));
@@ -433,7 +433,7 @@ TYPED_TEST(TestTablet, TestFlushWithReinsert) {
 // Test flushes dealing with REINSERT mutations if they arrive in the middle
 // of a flush.
 TYPED_TEST(TestTablet, TestReinsertDuringFlush) {
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
   // Insert/delete/insert/delete in MemRowStore.
 
   CHECK_OK(this->InsertTestRow(&writer, 0, 0));
@@ -453,7 +453,7 @@ TYPED_TEST(TestTablet, TestReinsertDuringFlush) {
     explicit MyCommonHooks(TestFixture *test) : test_(test) {}
 
     Status PostWriteSnapshot() OVERRIDE {
-      LocalTabletWriter writer(test_->tablet().get(), &test_->client_schema());
+      LocalTabletWriter writer(test_->tablet().get(), test_->client_schema().get());
       test_->InsertTestRow(&writer, 0, 1);
       CHECK_OK(test_->DeleteTestRow(&writer, 0));
       CHECK_EQ(1, writer.last_op_result().mutated_stores_size());
@@ -490,7 +490,7 @@ TYPED_TEST(TestTablet, TestRowIteratorSimple) {
   const int kInMemRowSet = 3;
 
   // Put a row in disk rowset 1 (insert and flush)
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
   CHECK_OK(this->InsertTestRow(&writer, kInRowSet1, 0));
   ASSERT_OK(this->tablet()->Flush());
 
@@ -509,7 +509,7 @@ TYPED_TEST(TestTablet, TestRowIteratorSimple) {
   ASSERT_TRUE(iter->HasNext());
 
   RowBlockMemory mem;
-  RowBlock block(&this->schema_, 100, &mem);
+  RowBlock block(this->schema_.get(), 100, &mem);
 
   // First call to CopyNextRows should fetch the whole memrowset.
   ASSERT_OK_FAST(iter->NextBlock(&block));
@@ -551,8 +551,8 @@ TYPED_TEST(TestTablet, TestRowIteratorOrdered) {
   // Create interleaved keys in each rowset, so they are clearly not in order
   const int kNumRows = 128;
   const int kNumBatches = 4;
-  LOG(INFO) << "Schema: " << this->schema_.ToString();
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+  LOG(INFO) << "Schema: " << this->schema_->ToString();
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
   for (int i = 0; i < kNumBatches; i++) {
     ASSERT_OK(this->tablet()->Flush());
     for (int j = 0; j < kNumRows; j++) {
@@ -572,7 +572,7 @@ TYPED_TEST(TestTablet, TestRowIteratorOrdered) {
       const int rowsPerBlock = kNumRows / numBlocks;
       // Make a new ordered iterator for the current snapshot.
       RowIteratorOptions opts;
-      opts.projection = &this->client_schema_;
+      opts.projection = this->client_schema_;
       opts.snap_to_include = snap;
       opts.order = ORDERED;
       unique_ptr<RowwiseIterator> iter;
@@ -584,14 +584,14 @@ TYPED_TEST(TestTablet, TestRowIteratorOrdered) {
       RowBlockMemory mem;
       for (int i = 0; i < numBlocks; i++) {
         mem.Reset();
-        RowBlock block(&this->schema_, rowsPerBlock, &mem);
+        RowBlock block(this->schema_.get(), rowsPerBlock, &mem);
         ASSERT_TRUE(iter->HasNext());
         ASSERT_OK(iter->NextBlock(&block));
         ASSERT_EQ(rowsPerBlock, block.nrows()) << "unexpected number of rows returned";
         for (int j = 0; j < rowsPerBlock; j++) {
           RowBlockRow row = block.row(j);
           auto encoded(make_shared<faststring>());
-          this->client_schema_.EncodeComparableKey(row, encoded.get());
+          this->client_schema_->EncodeComparableKey(row, encoded.get());
           rows.push_back(std::move(encoded));
         }
       }
@@ -650,7 +650,7 @@ TYPED_TEST(TestTablet, TestRowIteratorComplex) {
   uint64_t max_rows = this->ClampRowCount(FLAGS_testiterator_num_inserts);
 
   // Put a row in disk rowset 1 (insert and flush)
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
   for (int32_t i = 0; i < max_rows; i++) {
     ASSERT_OK_FAST(this->InsertTestRow(&writer, i, 0));
 
@@ -679,8 +679,8 @@ TYPED_TEST(TestTablet, TestRowIteratorComplex) {
 
   // Now iterate the tablet and make sure the rows show up.
   unique_ptr<RowwiseIterator> iter;
-  const Schema& schema = this->client_schema_;
-  ASSERT_OK(this->tablet()->NewRowIterator(schema, &iter));
+  const Schema& schema = *this->client_schema_.get();
+  ASSERT_OK(this->tablet()->NewRowIterator(this->client_schema_, &iter));
   ASSERT_OK(iter->Init(nullptr));
   LOG(INFO) << "Created iter: " << iter->ToString();
 
@@ -754,8 +754,8 @@ TYPED_TEST(TestTablet, TestInsertsPersist) {
 }
 
 TYPED_TEST(TestTablet, TestInsertIgnore) {
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
-  KuduPartialRow row(&this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
+  KuduPartialRow row(this->client_schema_.get());
   vector<string> rows;
 
   // Single batch, insert then insert ingore of same row, operation should succeed
@@ -801,8 +801,8 @@ TYPED_TEST(TestTablet, TestInsertIgnore) {
 }
 
 TYPED_TEST(TestTablet, TestUpdateIgnore) {
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
-  KuduPartialRow row(&this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
+  KuduPartialRow row(this->client_schema_.get());
   vector<string> rows;
 
   // update ignore a missing row, operation should succeed.
@@ -833,8 +833,8 @@ TYPED_TEST(TestTablet, TestUpdateIgnore) {
 }
 
 TYPED_TEST(TestTablet, TestDeleteIgnore) {
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
-  KuduPartialRow row(&this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
+  KuduPartialRow row(this->client_schema_.get());
   vector<string> rows;
 
   // delete ignore a missing row, operation should succeed.
@@ -856,7 +856,7 @@ TYPED_TEST(TestTablet, TestDeleteIgnore) {
 
   // delete ignore an existing row, implements normal delete.
   ops.clear();
-  KuduPartialRow delete_row(&this->client_schema_);
+  KuduPartialRow delete_row(this->client_schema_.get());
   this->setup_.BuildRowKey(&delete_row, 0);
   ops.emplace_back(LocalTabletWriter::RowOp(RowOperationsPB::DELETE_IGNORE, &delete_row));
   ASSERT_OK(writer.WriteBatch(ops));
@@ -896,7 +896,7 @@ TYPED_TEST(TestTablet, TestUpsert) {
 // the most recent value.
 TYPED_TEST(TestTablet, TestMultipleUpdates) {
   // Insert and update several times in MemRowSet
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
   CHECK_OK(this->InsertTestRow(&writer, 0, 0));
   ASSERT_OK(this->UpdateTestRow(&writer, 0, 1));
   ASSERT_EQ(1, writer.last_op_result().mutated_stores_size());
@@ -963,7 +963,7 @@ TYPED_TEST(TestTablet, TestCompaction) {
     ASSERT_EQ(1, this->tablet()->CurrentMrsIdForTests());
     ASSERT_TRUE(
       this->tablet()->metadata()->GetRowSetForTests(0)->HasDataForColumnIdForTests(
-          this->schema_.column_id(0)));
+          this->schema_->column_id(0)));
   }
 
   LOG_TIMING(INFO, "Inserting rows") {
@@ -977,7 +977,7 @@ TYPED_TEST(TestTablet, TestCompaction) {
     ASSERT_EQ(2, this->tablet()->CurrentMrsIdForTests());
     ASSERT_TRUE(
       this->tablet()->metadata()->GetRowSetForTests(1)->HasDataForColumnIdForTests(
-          this->schema_.column_id(0)));
+          this->schema_->column_id(0)));
   }
 
   LOG_TIMING(INFO, "Inserting rows") {
@@ -991,7 +991,7 @@ TYPED_TEST(TestTablet, TestCompaction) {
     ASSERT_EQ(3, this->tablet()->CurrentMrsIdForTests());
     ASSERT_TRUE(
       this->tablet()->metadata()->GetRowSetForTests(2)->HasDataForColumnIdForTests(
-          this->schema_.column_id(0)));
+          this->schema_->column_id(0)));
   }
 
   // Issue compaction
@@ -1005,7 +1005,7 @@ TYPED_TEST(TestTablet, TestCompaction) {
 
     const RowSetMetadata *rowset_meta = this->tablet()->metadata()->GetRowSetForTests(3);
     ASSERT_TRUE(rowset_meta != nullptr);
-    ASSERT_TRUE(rowset_meta->HasDataForColumnIdForTests(this->schema_.column_id(0)));
+    ASSERT_TRUE(rowset_meta->HasDataForColumnIdForTests(this->schema_->column_id(0)));
     ASSERT_TRUE(rowset_meta->HasBloomDataBlockForTests());
   }
 
@@ -1054,7 +1054,7 @@ class MyCommonHooks : public Tablet::FlushCompactCommonHooks {
         i_(0) {
   }
   Status DoHook(MutationType expected_mutation_type) {
-    LocalTabletWriter writer(test_->tablet().get(), &test_->client_schema());
+    LocalTabletWriter writer(test_->tablet().get(), test_->client_schema().get());
     RETURN_NOT_OK(test_->DeleteTestRow(&writer, i_));
 
     switch (expected_mutation_type) {
@@ -1391,21 +1391,21 @@ TEST_F(TestTabletStringKey, TestSplitKeyRange) {
     EncodedKey* l_enc_key = nullptr;
     EncodedKey* u_enc_key = nullptr;
     Arena arena(256);
-    KuduPartialRow lower_bound(&this->schema_);
+    KuduPartialRow lower_bound(this->schema_.get());
     CHECK_OK(lower_bound.SetString("key", "1"));
     CHECK_OK(lower_bound.SetInt32("key_idx", 0));
     CHECK_OK(lower_bound.SetInt32("val", 0));
     string l_encoded;
     ASSERT_OK(lower_bound.EncodeRowKey(&l_encoded));
-    ASSERT_OK(EncodedKey::DecodeEncodedString(this->schema_, &arena, l_encoded, &l_enc_key));
+    ASSERT_OK(EncodedKey::DecodeEncodedString(*this->schema_.get(), &arena, l_encoded, &l_enc_key));
 
-    KuduPartialRow upper_bound(&this->schema_);
+    KuduPartialRow upper_bound(this->schema_.get());
     CHECK_OK(upper_bound.SetString("key", "4"));
     CHECK_OK(upper_bound.SetInt32("key_idx", 0));
     CHECK_OK(upper_bound.SetInt32("val", 0));
     string u_encoded;
     ASSERT_OK(upper_bound.EncodeRowKey(&u_encoded));
-    ASSERT_OK(EncodedKey::DecodeEncodedString(this->schema_, &arena, u_encoded, &u_enc_key));
+    ASSERT_OK(EncodedKey::DecodeEncodedString(*this->schema_.get(), &arena, u_encoded, &u_enc_key));
     // split key range in [1, 4)
     {
       vector<KeyRange> result = {
@@ -1564,50 +1564,50 @@ TEST_F(TestTabletStringKey, TestSplitKeyRangeWithMinimumValueRowSet) {
 }
 
 TYPED_TEST(TestTablet, TestDiffScanUnobservableOperations) {
-  LocalTabletWriter writer(this->tablet().get(), &this->client_schema());
+  LocalTabletWriter writer(this->tablet().get(), this->client_schema().get());
   vector<LocalTabletWriter::RowOp> ops;
 
   // Row 0: INSERT -> DELETE.
 
-  KuduPartialRow insert_row0(&this->client_schema());
+  KuduPartialRow insert_row0(this->client_schema().get());
   this->setup_.BuildRow(&insert_row0, 0);
   ops.emplace_back(RowOperationsPB::INSERT, &insert_row0);
 
-  KuduPartialRow delete_row0(&this->client_schema());
+  KuduPartialRow delete_row0(this->client_schema().get());
   this->setup_.BuildRowKey(&delete_row0, 0);
   ops.emplace_back(RowOperationsPB::DELETE, &delete_row0);
 
   // Row 1: INSERT -> UPDATE -> DELETE.
 
-  KuduPartialRow insert_row1(&this->client_schema());
+  KuduPartialRow insert_row1(this->client_schema().get());
   this->setup_.BuildRow(&insert_row1, 1);
   ops.emplace_back(RowOperationsPB::INSERT, &insert_row1);
 
-  KuduPartialRow update_row1(&this->client_schema());
+  KuduPartialRow update_row1(this->client_schema().get());
   this->setup_.BuildRowKey(&update_row1, 1);
-  int col_idx = this->client_schema().num_key_columns() == 1 ? 2 : 3;
+  int col_idx = this->client_schema()->num_key_columns() == 1 ? 2 : 3;
   ASSERT_OK(update_row1.SetInt32(col_idx, 10));
   ops.emplace_back(RowOperationsPB::UPDATE, &update_row1);
 
-  KuduPartialRow delete_row1(&this->client_schema());
+  KuduPartialRow delete_row1(this->client_schema().get());
   this->setup_.BuildRowKey(&delete_row1, 1);
   ops.emplace_back(RowOperationsPB::DELETE, &delete_row1);
 
   // Row 2: INSERT -> DELETE -> REINSERT -> DELETE.
 
-  KuduPartialRow insert_row2(&this->client_schema());
+  KuduPartialRow insert_row2(this->client_schema().get());
   this->setup_.BuildRow(&insert_row2, 2);
   ops.emplace_back(RowOperationsPB::INSERT, &insert_row2);
 
-  KuduPartialRow first_delete_row2(&this->client_schema());
+  KuduPartialRow first_delete_row2(this->client_schema().get());
   this->setup_.BuildRowKey(&first_delete_row2, 2);
   ops.emplace_back(RowOperationsPB::DELETE, &first_delete_row2);
 
-  KuduPartialRow reinsert_row2(&this->client_schema());
+  KuduPartialRow reinsert_row2(this->client_schema().get());
   this->setup_.BuildRow(&reinsert_row2, 2);
   ops.emplace_back(RowOperationsPB::INSERT, &reinsert_row2);
 
-  KuduPartialRow second_delete_row2(&this->client_schema());
+  KuduPartialRow second_delete_row2(this->client_schema().get());
   this->setup_.BuildRowKey(&second_delete_row2, 2);
   ops.emplace_back(RowOperationsPB::DELETE, &second_delete_row2);
 
@@ -1619,15 +1619,16 @@ TYPED_TEST(TestTablet, TestDiffScanUnobservableOperations) {
   // are deleted at all times.
   auto diff_scan_no_rows = [&]() {
     // Create a projection with an IS_DELETED virtual column.
-    vector<ColumnSchema> col_schemas(this->client_schema().columns());
+    vector<ColumnSchema> col_schemas(this->client_schema()->columns());
     bool read_default = false;
     col_schemas.emplace_back("is_deleted", IS_DELETED, /*is_nullable=*/ false,
                              &read_default);
-    Schema projection(col_schemas, this->client_schema().num_key_columns());
+    SchemaRefPtr projection_ptr(
+        new Schema(col_schemas, this->client_schema()->num_key_columns()));
 
     // Do the diff scan.
     RowIteratorOptions opts;
-    opts.projection = &projection;
+    opts.projection = projection_ptr;
     opts.snap_to_exclude = MvccSnapshot(Timestamp(1));
     opts.snap_to_include = MvccSnapshot(Timestamp(2));
     opts.include_deleted_rows = true;

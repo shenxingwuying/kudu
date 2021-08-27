@@ -41,6 +41,7 @@
 #include "kudu/client/client.h"
 #include "kudu/client/schema.h"
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
+#include "kudu/common/schema.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/consensus.proxy.h"
 #include "kudu/consensus/quorum_util.h"
@@ -67,10 +68,6 @@
 #include "kudu/util/status.h"
 #include "kudu/util/test_macros.h"
 #include "kudu/util/test_util.h"
-
-namespace kudu {
-class Schema;
-}  // namespace kudu
 
 DECLARE_int32(num_replicas);
 DECLARE_int32(num_tablet_servers);
@@ -496,7 +493,7 @@ TEST_P(RebalanceParamTest, Rebalance) {
   NO_FATALS(BuildAndStart(kTserverFlags, kMasterFlags));
 
   ASSERT_OK(CreateUnbalancedTables(
-      cluster_.get(), client_.get(), schema_, table_name_pattern, kNumTables,
+      cluster_.get(), client_.get(), *schema_.get(), table_name_pattern, kNumTables,
       kRepFactor, kRepFactor + 1, kNumTservers, kTserverUnresponsiveMs));
 
   // Workloads aren't run for 3-2-3 replica movement with RF = 1 because
@@ -627,7 +624,7 @@ class RebalancingTest : public tserver::TabletServerIntegrationTestBase {
 
     if (location_info.empty()) {
       ASSERT_OK(CreateUnbalancedTables(
-          cluster_.get(), client_.get(), schema_, kTableNamePattern,
+          cluster_.get(), client_.get(), *schema_.get(), kTableNamePattern,
           num_tables_, rep_factor_, rep_factor_ + 1, num_tservers_,
           tserver_unresponsive_ms_, created_tables_names));
     } else {
@@ -668,7 +665,7 @@ class RebalancingTest : public tserver::TabletServerIntegrationTestBase {
     // Wait for the catalog manager to understand that not all tablet servers
     // are available.
     SleepFor(MonoDelta::FromMilliseconds(5 * tserver_unresponsive_ms_ / 4));
-    RETURN_NOT_OK(CreateTables(cluster_.get(), client_.get(), schema_,
+    RETURN_NOT_OK(CreateTables(cluster_.get(), client_.get(), *schema_.get(),
                                table_name_pattern, num_tables_, rep_factor_,
                                table_names));
     // Start tablet servers at the excluded locations.
@@ -712,7 +709,7 @@ class RebalancingTest : public tserver::TabletServerIntegrationTestBase {
     // Wait for the catalog manager to understand that not all tablet servers
     // are available.
     SleepFor(MonoDelta::FromMilliseconds(5 * tserver_unresponsive_ms_ / 4));
-    RETURN_NOT_OK(CreateTables(cluster_.get(), client_.get(), schema_,
+    RETURN_NOT_OK(CreateTables(cluster_.get(), client_.get(), *schema_.get(),
                                table_name_pattern, num_tables_, rep_factor_,
                                table_names));
     // Start tablet servers at the excluded locations.
@@ -894,7 +891,7 @@ TEST_P(DDLDuringRebalancingTest, TablesCreatedAndDeletedDuringRebalancing) {
   CountDownLatch run_latch(1);
 
   thread creator([&]() {
-    auto client_schema = KuduSchema::FromSchema(schema_);
+    auto client_schema = KuduSchema::FromSchema(*schema_.get());
     for (auto idx = 0; ; ++idx) {
       if (run_latch.WaitFor(MonoDelta::FromMilliseconds(500))) {
         break;
@@ -1498,7 +1495,7 @@ TEST_P(RebalancerAndSingleReplicaTablets, SingleReplicasStayOrMove) {
 
   // Create few tables with their tablet replicas landing only on those
   // (kRepFactor + 1) running tablet servers.
-  auto client_schema = KuduSchema::FromSchema(schema_);
+  auto client_schema = KuduSchema::FromSchema(*schema_.get());
   for (auto i = 0; i < kNumTables; ++i) {
     const string table_name = Substitute(table_name_pattern, i);
     unique_ptr<KuduTableCreator> table_creator(client_->NewTableCreator());

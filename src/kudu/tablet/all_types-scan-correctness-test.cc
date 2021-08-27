@@ -35,6 +35,7 @@
 #include "kudu/common/scan_spec.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/types.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/stringprintf.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/tablet/local_tablet_writer.h"
@@ -78,7 +79,7 @@ static const int kStrlen = 10;
 
 struct RowOpsBase {
   RowOpsBase(DataType type, EncodingType encoding) : type_(type), encoding_(encoding) {
-    schema_ = Schema({ColumnSchema("key", INT32),
+    schema_ = new Schema({ColumnSchema("key", INT32),
                      ColumnSchema("val_a", type, true, nullptr, nullptr,
                          ColumnStorageAttributes(encoding, DEFAULT_COMPRESSION)),
                      ColumnSchema("val_b", type, true, nullptr, nullptr,
@@ -87,8 +88,8 @@ struct RowOpsBase {
   }
   DataType type_;
   EncodingType encoding_;
-  Schema schema_;
-  Schema altered_schema_;
+  SchemaRefPtr schema_;
+  SchemaRefPtr altered_schema_;
 };
 
 template<typename KeyTypeWrapper>
@@ -129,13 +130,14 @@ struct SliceTypeRowOps : public RowOpsBase {
     return &slices_[cur++];
   }
 
-  ColumnPredicate GenerateRangePredicate(const Schema& schema, size_t col, int lower, int upper) {
+  ColumnPredicate GenerateRangePredicate(const SchemaRefPtr& schema,
+                                         size_t col, int lower, int upper) {
     // Key predicate strings and slices in scope in a vector.
     strs_[cur] = LeftZeroPadded(lower, 10);
     strs_[cur + 1] = LeftZeroPadded(upper, 10);
     slices_[cur] = Slice(strs_[cur]);
     slices_[cur + 1] = Slice(strs_[cur + 1]);
-    auto pred = ColumnPredicate::Range(schema.column(col), &slices_[cur], &slices_[cur + 1]);
+    auto pred = ColumnPredicate::Range(schema->column(col), &slices_[cur], &slices_[cur + 1]);
     cur += 2;
     return pred;
   }
@@ -175,10 +177,11 @@ struct NumTypeRowOps : public RowOpsBase {
     return &nums_[cur++];
   }
 
-  ColumnPredicate GenerateRangePredicate(const Schema& schema, size_t col, int lower, int upper) {
+  ColumnPredicate GenerateRangePredicate(const SchemaRefPtr& schema,
+                                         size_t col, int lower, int upper) {
     nums_[cur] = lower;
     nums_[cur + 1] = upper;
-    auto pred = ColumnPredicate::Range(schema.column(col), &nums_[cur], &nums_[cur + 1]);
+    auto pred = ColumnPredicate::Range(schema->column(col), &nums_[cur], &nums_[cur + 1]);
     cur += 2;
     return pred;
   }
@@ -290,8 +293,8 @@ public:
     base_nrows_ = nrows;
     base_cardinality_ = cardinality;
     base_null_upper_ = null_upper;
-    LocalTabletWriter writer(tablet().get(), &client_schema_);
-    KuduPartialRow row(&client_schema_);
+    LocalTabletWriter writer(tablet().get(), client_schema_.get());
+    KuduPartialRow row(client_schema_.get());
     for (int i = 0; i < nrows; i++) {
       CHECK_OK(row.SetInt32(0, i));
 
@@ -317,8 +320,8 @@ public:
     base_nrows_ = nrows;
     base_cardinality_ = cardinality;
     base_null_upper_ = null_upper;
-    LocalTabletWriter writer(tablet().get(), &client_schema_);
-    KuduPartialRow row(&client_schema_);
+    LocalTabletWriter writer(tablet().get(), client_schema_.get());
+    KuduPartialRow row(client_schema_.get());
     int val = 0;
     for (int i = 0; i < nrows;) {
       CHECK_OK(row.SetInt32(0, i));
@@ -341,8 +344,8 @@ public:
   // Adds the above pattern to the table with keys starting after the base rows.
   void FillAlteredTestTablet(int nrows) {
     added_nrows_ = nrows;
-    LocalTabletWriter writer(tablet().get(), &altered_schema_);
-    KuduPartialRow row(&altered_schema_);
+    LocalTabletWriter writer(tablet().get(), altered_schema_.get());
+    KuduPartialRow row(altered_schema_.get());
     for (int i = 0; i < nrows; i++) {
       CHECK_OK(row.SetInt32(0, base_nrows_ + i));
       if (i % base_cardinality_ < base_null_upper_) {
@@ -363,11 +366,11 @@ public:
     } else {
       default_ptr = rowops_.GenerateElement(read_default);
     }
-    SchemaBuilder builder(tablet()->metadata()->schema());
+    SchemaBuilder builder(*tablet()->metadata()->schema().get());
     builder.RemoveColumn("val_c");
     ASSERT_OK(builder.AddColumn("val_c", rowops_.type_, true, default_ptr, nullptr));
     AlterSchema(builder.Build());
-    altered_schema_ = Schema({ColumnSchema("key", INT32),
+    altered_schema_ = new Schema({ColumnSchema("key", INT32),
                      ColumnSchema("val_a", rowops_.type_, true, nullptr, nullptr,
                          ColumnStorageAttributes(rowops_.encoding_, DEFAULT_COMPRESSION)),
                      ColumnSchema("val_b", rowops_.type_, true, nullptr, nullptr,
@@ -378,12 +381,13 @@ public:
 
   // Scan the results of a query. Set "count" to the number of results satisfying the predicates.
   // ScanSpec must have all desired predicates already added to it.
-  void ScanWithSpec(const Schema& schema, ScanSpec spec, int* count) {
+  void ScanWithSpec(const SchemaRefPtr& schema_ptr, ScanSpec spec, int* count) {
     Arena arena(1024);
     *count = 0;
+    Schema& schema = *schema_ptr.get();
     spec.OptimizeScan(schema, &arena, true);
     unique_ptr<RowwiseIterator> iter;
-    ASSERT_OK(tablet()->NewRowIterator(schema, &iter));
+    ASSERT_OK(tablet()->NewRowIterator(schema_ptr, &iter));
     ASSERT_OK(iter->Init(&spec));
     ASSERT_TRUE(spec.predicates().empty()) << "Should have accepted all predicate.";
     ASSERT_OK(SilentIterateToStringList(iter.get(), count));
@@ -437,7 +441,7 @@ public:
 
     {
       ScanSpec spec;
-      auto pred = ColumnPredicate::IsNotNull(schema_.column(kColB));
+      auto pred = ColumnPredicate::IsNotNull(schema_->column(kColB));
       spec.AddPredicate(pred);
       LOG_TIMING(INFO, "IsNotNull") {
         ScanWithSpec(schema_, spec, &count);
@@ -450,7 +454,7 @@ public:
 
     {
       ScanSpec spec;
-      auto pred = ColumnPredicate::IsNull(schema_.column(kColB));
+      auto pred = ColumnPredicate::IsNull(schema_->column(kColB));
       spec.AddPredicate(pred);
       LOG_TIMING(INFO, "IsNull") {
         ScanWithSpec(schema_, spec, &count);
@@ -503,7 +507,7 @@ public:
     }
     {
       ScanSpec spec;
-      auto pred = ColumnPredicate::IsNotNull(schema_.column(kColB));
+      auto pred = ColumnPredicate::IsNotNull(schema_->column(kColB));
       spec.AddPredicate(pred);
       ScanWithSpec(schema_, spec, &count);
       int expected_count = ExpectedCountSequential(base_nrows_, base_cardinality_, base_null_upper_,
@@ -513,7 +517,7 @@ public:
     }
     {
       ScanSpec spec;
-      auto pred = ColumnPredicate::IsNull(schema_.column(kColB));
+      auto pred = ColumnPredicate::IsNull(schema_->column(kColB));
       spec.AddPredicate(pred);
       ScanWithSpec(schema_, spec, &count);
       int expected_count =
@@ -547,7 +551,7 @@ public:
       ScanSpec spec;
       // val_b >= kLower && val_b <= kUpper && val_c is null
       auto pred_b = rowops_.GenerateRangePredicate(altered_schema_, kColB, kLower, kUpper);
-      auto pred_c = ColumnPredicate::IsNull(altered_schema_.column(kColC));
+      auto pred_c = ColumnPredicate::IsNull(altered_schema_->column(kColC));
       spec.AddPredicate(pred_b);
       spec.AddPredicate(pred_c);
       ScanWithSpec(altered_schema_, spec, &count);
@@ -566,7 +570,7 @@ public:
       ScanSpec spec;
       // val_b >= kLower && val_b <= kUpper && val_c is not null
       auto pred_b = rowops_.GenerateRangePredicate(altered_schema_, kColB, kLower, kUpper);
-      auto pred_c = ColumnPredicate::IsNotNull(altered_schema_.column(kColC));
+      auto pred_c = ColumnPredicate::IsNotNull(altered_schema_->column(kColC));
       spec.AddPredicate(pred_b);
       spec.AddPredicate(pred_c);
       ScanWithSpec(altered_schema_, spec, &count);
@@ -617,7 +621,7 @@ public:
       ScanSpec spec;
       // val_b >= kLower && val_b <= kUpper && val_c is null
       auto pred_b = rowops_.GenerateRangePredicate(altered_schema_, kColB, kLower, kUpper);
-      auto pred_c = ColumnPredicate::IsNull(altered_schema_.column(kColC));
+      auto pred_c = ColumnPredicate::IsNull(altered_schema_->column(kColC));
       spec.AddPredicate(pred_b);
       spec.AddPredicate(pred_c);
       ScanWithSpec(altered_schema_, spec, &count);
@@ -634,7 +638,7 @@ public:
       ScanSpec spec;
       // val_b >= kLower && val_b <= kUpper && val_c is not null
       auto pred_b = rowops_.GenerateRangePredicate(altered_schema_, kColB, kLower, kUpper);
-      auto pred_c = ColumnPredicate::IsNotNull(altered_schema_.column(kColC));
+      auto pred_c = ColumnPredicate::IsNotNull(altered_schema_->column(kColC));
       spec.AddPredicate(pred_b);
       spec.AddPredicate(pred_c);
       ScanWithSpec(altered_schema_, spec, &count);
@@ -705,8 +709,8 @@ public:
 
 protected:
   RowOps rowops_;
-  Schema schema_;
-  Schema altered_schema_;
+  SchemaRefPtr schema_;
+  SchemaRefPtr altered_schema_;
   int base_nrows_;
   int base_cardinality_;
   int base_null_upper_;

@@ -109,7 +109,7 @@ using tablet::WriteOpState;
 class TabletCopyTest : public KuduTabletTest {
  public:
   TabletCopyTest()
-      : KuduTabletTest(Schema({ ColumnSchema("key", STRING),
+      : KuduTabletTest(new Schema({ ColumnSchema("key", STRING),
                                 ColumnSchema("val", INT32) }, 1)),
         dns_resolver_(new DnsResolver) {
     CHECK_OK(ThreadPoolBuilder("prepare").Build(&prepare_pool_));
@@ -137,7 +137,7 @@ class TabletCopyTest : public KuduTabletTest {
                         fs_manager(),
                         /*file_cache=*/ nullptr,
                         tablet()->tablet_id(),
-                        *tablet()->schema(),
+                        tablet()->schema(),
                         /*schema_version=*/ 0,
                         /*metric_entity=*/ nullptr,
                         &log));
@@ -200,10 +200,10 @@ class TabletCopyTest : public KuduTabletTest {
     for (int32_t i = 0; i < 1000; i++) {
       WriteRequestPB req;
       req.set_tablet_id(tablet_replica_->tablet_id());
-      ASSERT_OK(SchemaToPB(client_schema_, req.mutable_schema()));
+      ASSERT_OK(SchemaToPB(*client_schema_.get(), req.mutable_schema()));
       RowOperationsPB* data = req.mutable_row_operations();
       RowOperationsPBEncoder enc(data);
-      KuduPartialRow row(&client_schema_);
+      KuduPartialRow row(client_schema_.get());
 
       string key = Substitute("key$0", i);
       ASSERT_OK(row.SetStringNoCopy(0, key));

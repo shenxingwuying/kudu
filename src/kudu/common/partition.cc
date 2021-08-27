@@ -547,7 +547,7 @@ Status PartitionSchema::CreatePartitions(
     const vector<KuduPartialRow>& split_rows,
     const vector<pair<KuduPartialRow, KuduPartialRow>>& range_bounds,
     const vector<HashSchema>& range_hash_schemas,
-    const Schema& schema,
+    const SchemaRefPtr& schema,
     vector<Partition>* partitions) const {
   const auto& hash_encoder = GetKeyEncoder<string>(GetTypeInfo(UINT32));
 
@@ -568,23 +568,23 @@ Status PartitionSchema::CreatePartitions(
 
   std::unordered_set<int> range_column_idxs;
   for (const ColumnId& column_id : range_schema_.column_ids) {
-    int column_idx = schema.find_column_by_id(column_id);
+    int column_idx = schema->find_column_by_id(column_id);
     if (column_idx == Schema::kColumnNotFound) {
       return Status::InvalidArgument(Substitute("range partition column ID $0 "
                                                 "not found in table schema.", column_id));
     }
     if (!InsertIfNotPresent(&range_column_idxs, column_idx)) {
       return Status::InvalidArgument("duplicate column in range partition",
-                                     schema.column(column_idx).name());
+                                     schema->column(column_idx).name());
     }
   }
 
   RangesWithHashSchemas bounds_with_hash_schemas;
   vector<string> splits;
-  RETURN_NOT_OK(EncodeRangeBounds(range_bounds, range_hash_schemas, schema,
+  RETURN_NOT_OK(EncodeRangeBounds(range_bounds, range_hash_schemas, *schema.get(),
                                   &bounds_with_hash_schemas));
-  RETURN_NOT_OK(EncodeRangeSplits(split_rows, schema, &splits));
-  RETURN_NOT_OK(SplitRangeBounds(schema, splits, &bounds_with_hash_schemas));
+  RETURN_NOT_OK(EncodeRangeSplits(split_rows, *schema.get(), &splits));
+  RETURN_NOT_OK(SplitRangeBounds(*schema.get(), splits, &bounds_with_hash_schemas));
 
   // Even if no hash partitioning for a table is specified, there must be at
   // least one element in 'base_hash_partitions': it's used to build the result

@@ -1299,7 +1299,6 @@ void CatalogManager::PrepareForLeadershipTask() {
         // Not an error at all.
         return s;
       }
-
       {
         std::lock_guard<simple_spinlock> l(state_lock_);
         if (state_ == kClosing) {
@@ -1803,7 +1802,8 @@ Status CatalogManager::CreateTable(const CreateTableRequestPB* orig_req,
     }
   }
 
-  Schema client_schema;
+  SchemaRefPtr client_schema_ptr(new Schema);
+  Schema& client_schema = *client_schema_ptr.get();
   RETURN_NOT_OK(SchemaFromPB(req.schema(), &client_schema));
 
   RETURN_NOT_OK(SetupError(
@@ -1813,7 +1813,8 @@ Status CatalogManager::CreateTable(const CreateTableRequestPB* orig_req,
     return SetupError(Status::InvalidArgument("user requests should not have Column IDs"),
                       resp, MasterErrorPB::INVALID_SCHEMA);
   }
-  const Schema schema = client_schema.CopyWithColumnIds();
+  SchemaRefPtr schema_ptr = client_schema.CopyWithColumnIds();
+  Schema& schema = *schema_ptr.get();
 
   // If the client did not set a partition schema in the create table request,
   // the default partition schema (no hash bucket components and a range
@@ -1888,9 +1889,8 @@ Status CatalogManager::CreateTable(const CreateTableRequestPB* orig_req,
 
   // Create partitions based on specified partition schema and split rows.
   vector<Partition> partitions;
-  RETURN_NOT_OK(partition_schema.CreatePartitions(
-      split_rows, range_bounds, range_hash_schemas, schema, &partitions));
-
+  RETURN_NOT_OK(partition_schema.CreatePartitions(split_rows, range_bounds,
+                                                  range_hash_schemas, schema_ptr, &partitions));
   // Check the restriction on the same number of hash dimensions across all the
   // ranges.
   //
@@ -2464,11 +2464,12 @@ Status CatalogManager::DeleteTable(const DeleteTableRequestPB& req,
 }
 
 Status CatalogManager::ApplyAlterSchemaSteps(const SysTablesEntryPB& current_pb,
-                                             vector<AlterTableRequestPB::Step> steps,
-                                             Schema* new_schema,
+                                             const vector<AlterTableRequestPB::Step>& steps,
+                                             SchemaRefPtr* new_schema,
                                              ColumnId* next_col_id) {
   const SchemaPB& current_schema_pb = current_pb.schema();
-  Schema cur_schema;
+  SchemaRefPtr cur_schema_ptr = make_scoped_refptr(new Schema());
+  Schema& cur_schema = *cur_schema_ptr.get();
   RETURN_NOT_OK(SchemaFromPB(current_schema_pb, &cur_schema));
 
   SchemaBuilder builder(cur_schema);
@@ -2554,7 +2555,8 @@ Status CatalogManager::ApplyAlterPartitioningSteps(
     vector<scoped_refptr<TabletInfo>>* tablets_to_drop) {
 
   // Get the table's schema as it's known to the catalog manager.
-  Schema schema;
+  SchemaRefPtr schema_ptr(new Schema);
+  Schema& schema = *schema_ptr.get();
   RETURN_NOT_OK(SchemaFromPB(l.data().pb.schema(), &schema));
   // Build current PartitionSchema for the table.
   PartitionSchema partition_schema;
@@ -2608,7 +2610,8 @@ Status CatalogManager::ApplyAlterPartitioningSteps(
 
     vector<Partition> partitions;
     RETURN_NOT_OK(partition_schema.CreatePartitions(
-        {}, {{ *ops[0].split_row, *ops[1].split_row }}, {}, schema, &partitions));
+        {}, {{ *ops[0].split_row, *ops[1].split_row }}, {}, schema_ptr, &partitions));
+
     switch (step.type()) {
       case AlterTableRequestPB::ADD_RANGE_PARTITION: {
         for (const Partition& partition : partitions) {
@@ -2826,7 +2829,8 @@ Status CatalogManager::AlterTableRpc(const AlterTableRequestPB& req,
           resp, MasterErrorPB::TABLE_ALREADY_PRESENT);
     }
 
-    Schema schema;
+    SchemaRefPtr schema_ptr(new Schema);
+    Schema& schema = *schema_ptr.get();
     RETURN_NOT_OK(SchemaFromPB(l.data().pb.schema(), &schema));
 
     // Rename the table in the HMS.
@@ -3037,7 +3041,7 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
   }
 
   // 3. Calculate and validate new schema for the on-disk state, not persisted yet.
-  Schema new_schema;
+  SchemaRefPtr new_schema(nullptr);
   ColumnId next_col_id = ColumnId(l.data().pb.next_column_id());
 
   // Apply the alter steps. Note that there may be no steps, in which case this
@@ -3049,12 +3053,12 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
         resp, MasterErrorPB::INVALID_SCHEMA));
 
   DCHECK_NE(next_col_id, 0);
-  DCHECK_EQ(new_schema.find_column_by_id(next_col_id),
+  DCHECK_EQ(new_schema->find_column_by_id(next_col_id),
             static_cast<int>(Schema::kColumnNotFound));
 
   // Just validate the schema, not the name, owner, or comment (validated below).
   RETURN_NOT_OK(SetupError(
-        ValidateClientSchema(none, none, none, new_schema),
+        ValidateClientSchema(none, none, none, *new_schema.get()),
         resp, MasterErrorPB::INVALID_SCHEMA));
 
   // 4. Validate and try to acquire the new table name.
@@ -3129,7 +3133,8 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
   vector<scoped_refptr<TabletInfo>> tablets_to_drop;
   if (!alter_partitioning_steps.empty()) {
     TRACE("Apply alter partitioning");
-    Schema client_schema;
+    SchemaRefPtr client_schema_ptr(new Schema);
+    Schema& client_schema = *client_schema_ptr.get();
     RETURN_NOT_OK(SetupError(SchemaFromPB(req.schema(), &client_schema),
           resp, MasterErrorPB::UNKNOWN_ERROR));
     RETURN_NOT_OK(SetupError(
@@ -3191,7 +3196,7 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
     l.mutable_data()->pb.mutable_fully_applied_schema()->CopyFrom(l.data().pb.schema());
   }
   if (has_schema_changes) {
-    CHECK_OK(SchemaToPB(new_schema, l.mutable_data()->pb.mutable_schema()));
+    CHECK_OK(SchemaToPB(*new_schema.get(), l.mutable_data()->pb.mutable_schema()));
   }
   if (has_metadata_changes) {
     l.mutable_data()->pb.set_version(l.mutable_data()->pb.version() + 1);
@@ -3309,7 +3314,8 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
     DCHECK(!req.has_new_table_name());
     auto s = hms_catalog_->AlterTable(
         table->id(), normalized_table_name, normalized_table_name,
-        GetClusterId(), l.mutable_data()->owner(), new_schema, l.mutable_data()->comment());
+        GetClusterId(), l.mutable_data()->owner(), *new_schema.get(),
+        l.mutable_data()->comment());
     if (PREDICT_TRUE(s.ok())) {
       LOG(INFO) << Substitute(
           "altered HMS schema for table $0", table->ToString());

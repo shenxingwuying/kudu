@@ -1362,8 +1362,10 @@ TEST_F(ToolTest, TestActionMissingRequiredArg) {
 TEST_F(ToolTest, TestFsCheck) {
   const string kTestDir = GetTestPath("test");
   const string kTabletId = "ffffffffffffffffffffffffffffffff";
-  const Schema kSchema(GetSimpleTestSchema());
-  const Schema kSchemaWithIds(SchemaBuilder(kSchema).Build());
+  const SchemaRefPtr kSchemaPtr(GetSimpleTestSchema());
+  const Schema& kSchema = *kSchemaPtr.get();
+  const SchemaRefPtr kSchemaWithIdsPtr(SchemaBuilder(kSchema).Build());
+  const Schema& kSchemaWithIds = *kSchemaWithIdsPtr.get();
 
   // Create a local replica, flush some rows a few times, and collect all
   // of the created block IDs.
@@ -1371,7 +1373,7 @@ TEST_F(ToolTest, TestFsCheck) {
   {
     TabletHarness::Options opts(kTestDir);
     opts.tablet_id = kTabletId;
-    TabletHarness harness(kSchemaWithIds, opts);
+    TabletHarness harness(kSchemaWithIdsPtr, opts);
     ASSERT_OK(harness.Create(true));
     ASSERT_OK(harness.Open());
     LocalTabletWriter writer(harness.tablet().get(), &kSchema);
@@ -2001,8 +2003,9 @@ TEST_F(ToolTest, TestFsDumpBlock) {
 TEST_F(ToolTest, TestWalDump) {
   const string kTestDir = GetTestPath("test");
   const string kTestTablet = "ffffffffffffffffffffffffffffffff";
-  const Schema kSchema(GetSimpleTestSchema());
-  const Schema kSchemaWithIds(SchemaBuilder(kSchema).Build());
+  const SchemaRefPtr kSchemaPtr = GetSimpleTestSchema();
+  const Schema& kSchema = *kSchemaPtr.get();
+  const SchemaRefPtr kSchemaWithIdsPtr = SchemaBuilder(kSchema).Build();
 
   FsManager fs(env_, FsManagerOpts(kTestDir));
   ASSERT_OK(fs.CreateInitialFileSystemLayout());
@@ -2014,7 +2017,7 @@ TEST_F(ToolTest, TestWalDump) {
                         &fs,
                         /*file_cache*/nullptr,
                         kTestTablet,
-                        kSchemaWithIds,
+                        kSchemaWithIdsPtr,
                         0, // schema_version
                         /*metric_entity*/nullptr,
                         &log));
@@ -2027,7 +2030,7 @@ TEST_F(ToolTest, TestWalDump) {
     replicate->get()->set_timestamp(1);
     WriteRequestPB* write = replicate->get()->mutable_write_request();
     ASSERT_OK(SchemaToPB(kSchema, write->mutable_schema()));
-    AddTestRowToPB(RowOperationsPB::INSERT, kSchema,
+    AddTestRowToPB(RowOperationsPB::INSERT, kSchemaPtr,
                    opid.index(),
                    0,
                    "this is a test insert",
@@ -2119,8 +2122,9 @@ TEST_F(ToolTest, TestLocalReplicaDumpDataDirs) {
   constexpr const char* const kTestTablet = "ffffffffffffffffffffffffffffffff";
   constexpr const char* const kTestTableId = "test-table";
   constexpr const char* const kTestTableName = "test-fs-data-dirs-dump-table";
-  const Schema kSchema(GetSimpleTestSchema());
-  const Schema kSchemaWithIds(SchemaBuilder(kSchema).Build());
+  const SchemaRefPtr kSchemaPtr = GetSimpleTestSchema();
+  const Schema& kSchema = *kSchemaPtr.get();
+  const SchemaRefPtr kSchemaWithIdsPtr = SchemaBuilder(kSchema).Build();
 
   FsManagerOpts opts;
   opts.wal_root = GetTestPath("wal");
@@ -2134,11 +2138,11 @@ TEST_F(ToolTest, TestLocalReplicaDumpDataDirs) {
   ASSERT_OK(fs.Open());
 
   pair<PartitionSchema, Partition> partition = tablet::CreateDefaultPartition(
-        kSchemaWithIds);
+        kSchemaWithIdsPtr);
   scoped_refptr<TabletMetadata> meta;
   ASSERT_OK(TabletMetadata::CreateNew(
       &fs, kTestTablet, kTestTableName, kTestTableId,
-      kSchemaWithIds, partition.first, partition.second,
+      kSchemaWithIdsPtr, partition.first, partition.second,
       tablet::TABLET_DATA_READY,
       /*tombstone_last_logged_opid=*/ boost::none,
       /*supports_live_row_count=*/ true,
@@ -2165,18 +2169,19 @@ TEST_F(ToolTest, TestLocalReplicaDumpMeta) {
   constexpr const char* const kTestTableId = "test-table";
   constexpr const char* const kTestTableName = "test-fs-meta-dump-table";
   const string kTestDir = GetTestPath("test");
-  const Schema kSchema(GetSimpleTestSchema());
-  const Schema kSchemaWithIds(SchemaBuilder(kSchema).Build());
+  const SchemaRefPtr kSchemaPtr = GetSimpleTestSchema();
+  const Schema& kSchema = *kSchemaPtr.get();
+  const SchemaRefPtr kSchemaWithIdsPtr = SchemaBuilder(kSchema).Build();
 
   FsManager fs(env_, FsManagerOpts(kTestDir));
   ASSERT_OK(fs.CreateInitialFileSystemLayout());
   ASSERT_OK(fs.Open());
 
   pair<PartitionSchema, Partition> partition = tablet::CreateDefaultPartition(
-        kSchemaWithIds);
+        kSchemaWithIdsPtr);
   scoped_refptr<TabletMetadata> meta;
   TabletMetadata::CreateNew(&fs, kTestTablet, kTestTableName, kTestTableId,
-                  kSchemaWithIds, partition.first, partition.second,
+                  kSchemaWithIdsPtr, partition.first, partition.second,
                   tablet::TABLET_DATA_READY,
                   /*tombstone_last_logged_opid=*/ boost::none,
                   /*supports_live_row_count=*/ true,
@@ -2194,7 +2199,7 @@ TEST_F(ToolTest, TestLocalReplicaDumpMeta) {
   // Verify the contents of the metadata output
   SCOPED_TRACE(stdout);
   string debug_str = meta->partition_schema()
-      .PartitionDebugString(meta->partition(), meta->schema());
+      .PartitionDebugString(meta->partition(), *meta->schema().get());
   StripWhiteSpace(&debug_str);
   ASSERT_STR_CONTAINS(stdout, debug_str);
   debug_str = Substitute("Table name: $0 Table id: $1",
@@ -2202,7 +2207,7 @@ TEST_F(ToolTest, TestLocalReplicaDumpMeta) {
   ASSERT_STR_CONTAINS(stdout, debug_str);
   debug_str = Substitute("Schema (version=$0):", meta->schema_version());
   ASSERT_STR_CONTAINS(stdout, debug_str);
-  debug_str = meta->schema().ToString();
+  debug_str = meta->schema()->ToString();
   StripWhiteSpace(&debug_str);
   ASSERT_STR_CONTAINS(stdout, debug_str);
 
@@ -2216,8 +2221,9 @@ TEST_F(ToolTest, TestLocalReplicaDumpMeta) {
 
 TEST_F(ToolTest, TestFsDumpTree) {
   const string kTestDir = GetTestPath("test");
-  const Schema kSchema(GetSimpleTestSchema());
-  const Schema kSchemaWithIds(SchemaBuilder(kSchema).Build());
+  const SchemaRefPtr kSchemaPtr = GetSimpleTestSchema();
+  const Schema& kSchema = *kSchemaPtr.get();
+  const SchemaRefPtr kSchemaWithIdsPtr = SchemaBuilder(kSchema).Build();
 
   FsManager fs(env_, FsManagerOpts(kTestDir));
   ASSERT_OK(fs.CreateInitialFileSystemLayout());
@@ -2243,12 +2249,14 @@ TEST_F(ToolTest, TestLocalReplicaOps) {
   ObjectIdGenerator generator;
   const string kTestTablet = "ffffffffffffffffffffffffffffffff";
   const int kRowId = 100;
-  const Schema kSchema(GetSimpleTestSchema());
-  const Schema kSchemaWithIds(SchemaBuilder(kSchema).Build());
+  const SchemaRefPtr kSchemaPtr = GetSimpleTestSchema();
+  const Schema& kSchema = *kSchemaPtr.get();
+  const SchemaRefPtr kSchemaWithIdsPtr = SchemaBuilder(kSchema).Build();
+  const Schema& kSchemaWithIds = *kSchemaWithIdsPtr.get();
 
   TabletHarness::Options opts(kTestDir);
   opts.tablet_id = kTestTablet;
-  TabletHarness harness(kSchemaWithIds, opts);
+  TabletHarness harness(kSchemaWithIdsPtr, opts);
   ASSERT_OK(harness.Create(true));
   ASSERT_OK(harness.Open());
   LocalTabletWriter writer(harness.tablet().get(), &kSchema);
@@ -2345,7 +2353,7 @@ TEST_F(ToolTest, TestLocalReplicaOps) {
 
     SCOPED_TRACE(stdout);
     debug_str = meta->partition_schema()
-        .PartitionDebugString(meta->partition(), meta->schema());
+        .PartitionDebugString(meta->partition(), *meta->schema().get());
     StripWhiteSpace(&debug_str);
     ASSERT_STR_CONTAINS(stdout, debug_str);
     debug_str = Substitute("Table name: $0 Table id: $1",
@@ -2354,7 +2362,7 @@ TEST_F(ToolTest, TestLocalReplicaOps) {
     debug_str = Substitute("Schema (version=$0):", meta->schema_version());
     StripWhiteSpace(&debug_str);
     ASSERT_STR_CONTAINS(stdout, debug_str);
-    debug_str = meta->schema().ToString();
+    debug_str = meta->schema()->ToString();
     StripWhiteSpace(&debug_str);
     ASSERT_STR_CONTAINS(stdout, debug_str);
 
@@ -2541,7 +2549,7 @@ void ToolTest::RunLoadgen(int num_tservers,
   NO_FATALS(StartExternalMiniCluster(std::move(opts)));
   if (!table_name.empty()) {
     constexpr const char* const kKeyColumnName = "key";
-    static const Schema kSchema = Schema(
+    static const SchemaRefPtr kSchemaPtr = new Schema(
       {
         ColumnSchema(kKeyColumnName, INT64),
         ColumnSchema("bool_val", BOOL),
@@ -2564,6 +2572,7 @@ void ToolTest::RunLoadgen(int num_tservers,
         ColumnSchema("string_val", STRING),
         ColumnSchema("binary_val", BINARY),
       }, 1);
+    static const Schema& kSchema = *kSchemaPtr.get();
 
     shared_ptr<KuduClient> client;
     ASSERT_OK(cluster_->CreateClient(nullptr, &client));
@@ -3788,6 +3797,93 @@ TEST_F(ToolTest, TestLocalReplicaCMetaOps) {
       ASSERT_STR_MATCHES(lines[i], Substitute("tablet: $0, peers: $1",
                                               tablet_ids[i], ts_uuids[0]));
     }
+  }
+}
+
+void StartStandaloneTserver(std::shared_ptr<MiniTabletServer>& tablet_server, int index) {
+  uint16_t ts_rpc_port = 0;
+  string bind_ip = GetBindIpForDaemon(10, kDefaultBindMode);
+  tablet_server = std::make_shared<MiniTabletServer>(
+      JoinPathSegments(GetTestDataDirectory(), Substitute("external_ts_$0", index)),
+      HostPort(bind_ip, ts_rpc_port),
+      1);
+
+  CHECK_OK(tablet_server->Start());
+  CHECK_OK(tablet_server->WaitStarted());
+}
+
+void CheckReplicas(MiniTabletServer* internal_ts, int offset, int step) {
+  vector<string> remote_tablet_ids = internal_ts->ListTablets();
+  sort(remote_tablet_ids.begin(), remote_tablet_ids.end());
+
+  std::shared_ptr<MiniTabletServer> external_ts;
+  NO_FATALS(StartStandaloneTserver(external_ts, offset));
+  external_ts->Shutdown();
+
+  const string& cmd = Substitute(
+      "local_replica clone $0 --fs_wal_dir=$1 --fs_data_dirs=$2 --num_clone_processes=$3"
+      " --current_bucket=$4 --rewrite_config",
+      internal_ts->bound_rpc_addr().ToString(),
+      external_ts->options()->fs_opts.wal_root,
+      JoinStrings(external_ts->options()->fs_opts.data_roots, ","),
+      step,
+      offset);
+  CHECK_OK(RunActionPrependStdoutStderr(cmd));
+
+  vector<string> local_tablet_ids;
+  CHECK_OK(external_ts->Start());
+  CHECK_OK(external_ts->WaitStarted());
+  CHECK_OK(external_ts->server()->fs_manager()->ListTabletIds(&local_tablet_ids));
+  sort(local_tablet_ids.begin(), local_tablet_ids.end());
+  CHECK_LE(remote_tablet_ids.size() / step, local_tablet_ids.size());
+  CHECK_GE(remote_tablet_ids.size() / step + 1, local_tablet_ids.size());
+  for (int i = offset; i < remote_tablet_ids.size(); i += step) {
+    const auto& remote_tablet_id = remote_tablet_ids[i];
+    scoped_refptr<tablet::TabletReplica> external_replica;
+    CHECK(external_ts->server()->tablet_manager()->LookupTablet(
+        remote_tablet_id, &external_replica));
+
+    scoped_refptr<tablet::TabletReplica> internal_replica;
+    CHECK(internal_ts->server()->tablet_manager()->LookupTablet(
+        remote_tablet_id, &internal_replica));
+
+    CHECK(external_replica->tablet()->schema()->Equals(
+        *(internal_replica->tablet()->schema()).get()));
+    CHECK(external_replica->tablet()->metadata()->partition_schema() ==
+        internal_replica->tablet()->metadata()->partition_schema());
+
+    // Simply compare data.
+    CHECK_EQ(external_replica->tablet()->OnDiskDataSize(),
+             internal_replica->tablet()->OnDiskDataSize());
+
+    uint64_t er_count = 0;
+    uint64_t ir_count = 0;
+    CHECK_OK(external_replica->tablet()->CountLiveRows(&er_count));
+    CHECK_OK(internal_replica->tablet()->CountLiveRows(&ir_count));
+    CHECK_EQ(ir_count, er_count);
+  }
+}
+
+// Test for 'local_replica clone' functionality.
+TEST_F(ToolTest, TestLocalReplicaCloneOps) {
+  NO_FATALS(StartMiniCluster());
+
+  // TestWorkLoad.Setup() internally generates a table.
+  TestWorkload workload(mini_cluster_.get());
+  workload.set_num_replicas(1);
+  workload.set_num_tablets(10);
+  workload.Setup();
+  workload.Start();
+  while (workload.rows_inserted() < (AllowSlowTests() ? 1000000 : 1000)) {
+    SleepFor(MonoDelta::FromMilliseconds(10));
+  }
+  workload.StopAndJoin();
+
+  MiniTabletServer* internal_ts = mini_cluster_->mini_tablet_server(0);
+
+  int local_ts_count = 5;
+  for (int i = 0; i < local_ts_count; ++i) {
+    CheckReplicas(internal_ts, i, local_ts_count);
   }
 }
 
@@ -5163,7 +5259,7 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("default.control", &control));
   ASSERT_OK(hms_catalog.CreateTable(
         control->id(), control->name(), kudu_client->cluster_id(), kUsername,
-        KuduSchema::ToSchema(control->schema()), control->comment()));
+        *KuduSchema::ToSchema(control->schema()).get(), control->comment()));
 
   // Control case: the check tool should not flag this external synchronized table.
   shared_ptr<KuduTable> control_external;
@@ -5171,7 +5267,8 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("default.control_external", &control_external));
   ASSERT_OK(hms_catalog.CreateTable(
       control_external->id(), control_external->name(), kudu_client->cluster_id(),
-      kUsername, KuduSchema::ToSchema(control_external->schema()), control_external->comment(),
+      kUsername, *KuduSchema::ToSchema(control_external->schema()).get(),
+      control_external->comment(),
       HmsClient::kExternalTable));
   hive::Table hms_control_external;
   ASSERT_OK(hms_client.GetTable("default", "control_external", &hms_control_external));
@@ -5187,7 +5284,8 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("default.UPPERCASE", &test_uppercase));
   ASSERT_OK(hms_catalog.CreateTable(
         test_uppercase->id(), test_uppercase->name(), kudu_client->cluster_id(),
-        kUsername, KuduSchema::ToSchema(test_uppercase->schema()), test_uppercase->comment()));
+        kUsername, *KuduSchema::ToSchema(test_uppercase->schema()).get(),
+        test_uppercase->comment()));
 
   // Test case: inconsistent schema.
   shared_ptr<KuduTable> inconsistent_schema;
@@ -5195,7 +5293,7 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("default.inconsistent_schema", &inconsistent_schema));
   ASSERT_OK(hms_catalog.CreateTable(
         inconsistent_schema->id(), inconsistent_schema->name(), kudu_client->cluster_id(),
-        kUsername, SchemaBuilder().Build(), inconsistent_schema->comment()));
+        kUsername, *SchemaBuilder().Build().get(), inconsistent_schema->comment()));
 
   // Test case: inconsistent name.
   shared_ptr<KuduTable> inconsistent_name;
@@ -5203,7 +5301,8 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("default.inconsistent_name", &inconsistent_name));
   ASSERT_OK(hms_catalog.CreateTable(
       inconsistent_name->id(), "default.inconsistent_name_hms", kudu_client->cluster_id(),
-      kUsername, KuduSchema::ToSchema(inconsistent_name->schema()), inconsistent_name->comment()));
+      kUsername, *KuduSchema::ToSchema(inconsistent_name->schema()).get(),
+      inconsistent_name->comment()));
 
   // Test case: inconsistent cluster id.
   shared_ptr<KuduTable> inconsistent_cluster;
@@ -5211,7 +5310,7 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("default.inconsistent_cluster", &inconsistent_cluster));
   ASSERT_OK(hms_catalog.CreateTable(
       inconsistent_cluster->id(), "default.inconsistent_cluster", "inconsistent_cluster",
-      kUsername, KuduSchema::ToSchema(inconsistent_cluster->schema()),
+      kUsername, *KuduSchema::ToSchema(inconsistent_cluster->schema()).get(),
       inconsistent_cluster->comment()));
 
   // Test case: inconsistent master addresses.
@@ -5225,7 +5324,7 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(invalid_hms_catalog.CreateTable(
         inconsistent_master_addrs->id(), inconsistent_master_addrs->name(),
         kudu_client->cluster_id(), kUsername,
-        KuduSchema::ToSchema(inconsistent_master_addrs->schema()),
+        *KuduSchema::ToSchema(inconsistent_master_addrs->schema()).get(),
         inconsistent_master_addrs->comment()));
 
   // Test case: bad table id.
@@ -5234,18 +5333,18 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("default.bad_id", &bad_id));
   ASSERT_OK(hms_catalog.CreateTable(
       "not_a_table_id", "default.bad_id", kudu_client->cluster_id(),
-      kUsername, KuduSchema::ToSchema(bad_id->schema()), bad_id->comment()));
+      kUsername, *KuduSchema::ToSchema(bad_id->schema()).get(), bad_id->comment()));
 
   // Test case: orphan table in the HMS.
   ASSERT_OK(hms_catalog.CreateTable(
         "orphan-hms-table-id", "default.orphan_hms_table", "orphan-hms-cluster-id",
-        kUsername, SchemaBuilder().Build(), ""));
+        kUsername, *SchemaBuilder().Build().get(), ""));
 
   // Test case: orphan table in the HMS with different, but functionally
   // the same master addresses.
   ASSERT_OK(hms_catalog.CreateTable(
       "orphan-hms-masters-id", "default.orphan_hms_table_masters", "orphan-hms-cluster-id",
-      kUsername, SchemaBuilder().Build(), ""));
+      kUsername, *SchemaBuilder().Build().get(), ""));
   // Reverse the address order and duplicate the addresses.
   vector<string> modified_addrs;
   for (const auto& hp : cluster_->master_rpc_addrs()) {
@@ -5261,7 +5360,7 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(hms_catalog.CreateTable(
       "orphan-hms-table-id-external", "default.orphan_hms_table_external",
       "orphan-hms-cluster-id-external", kUsername,
-      SchemaBuilder().Build(), "", HmsClient::kExternalTable));
+      *SchemaBuilder().Build().get(), "", HmsClient::kExternalTable));
   hive::Table hms_orphan_external;
   ASSERT_OK(hms_client.GetTable("default", "orphan_hms_table_external", &hms_orphan_external));
   hms_orphan_external.parameters[HmsClient::kExternalPurgeKey] = "true";
@@ -5329,7 +5428,8 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("default.no_owner_in_hms", &no_owner_in_hms));
   ASSERT_OK(hms_catalog.CreateTable(
       no_owner_in_hms->id(), no_owner_in_hms->name(), kudu_client->cluster_id(),
-      boost::none, KuduSchema::ToSchema(no_owner_in_hms->schema()), no_owner_in_hms->comment()));
+      boost::none, *KuduSchema::ToSchema(no_owner_in_hms->schema()).get(),
+      no_owner_in_hms->comment()));
 
   // Test case: no owner in Kudu
   shared_ptr<KuduTable> no_owner_in_kudu;
@@ -5337,7 +5437,8 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("default.no_owner_in_kudu", &no_owner_in_kudu));
   ASSERT_OK(hms_catalog.CreateTable(
       no_owner_in_kudu->id(), no_owner_in_kudu->name(), kudu_client->cluster_id(),
-      kUsername, KuduSchema::ToSchema(no_owner_in_kudu->schema()), no_owner_in_kudu->comment()));
+      kUsername, *KuduSchema::ToSchema(no_owner_in_kudu->schema()).get(),
+      no_owner_in_kudu->comment()));
 
   // Test case: different owner in Kudu and HMS
   shared_ptr<KuduTable> different_owner;
@@ -5345,7 +5446,7 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("default.different_owner", &different_owner));
   ASSERT_OK(hms_catalog.CreateTable(
       different_owner->id(), different_owner->name(), kudu_client->cluster_id(),
-      kOtherUsername, KuduSchema::ToSchema(different_owner->schema()),
+      kOtherUsername, *KuduSchema::ToSchema(different_owner->schema()).get(),
       different_owner->comment()));
 
   // Test case: different comment in Kudu and HMS
@@ -5354,7 +5455,7 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("default.different_comment", &different_comment));
   ASSERT_OK(hms_catalog.CreateTable(
       different_comment->id(), different_comment->name(), kudu_client->cluster_id(),
-      different_comment->owner(), KuduSchema::ToSchema(different_comment->schema()),
+      different_comment->owner(), *KuduSchema::ToSchema(different_comment->schema()).get(),
       kOtherComment));
 
   unordered_set<string> consistent_tables = {
@@ -5579,11 +5680,13 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndManualFixHmsMetadata) {
   ASSERT_OK(hms_catalog.CreateTable(
         duplicate_hms_tables->id(), "default.duplicate_hms_tables",
         kudu_client->cluster_id(), kUsername,
-        KuduSchema::ToSchema(duplicate_hms_tables->schema()), duplicate_hms_tables->comment()));
+        *KuduSchema::ToSchema(duplicate_hms_tables->schema()).get(),
+        duplicate_hms_tables->comment()));
   ASSERT_OK(hms_catalog.CreateTable(
         duplicate_hms_tables->id(), "default.duplicate_hms_tables_2",
         kudu_client->cluster_id(), kUsername,
-        KuduSchema::ToSchema(duplicate_hms_tables->schema()), duplicate_hms_tables->comment()));
+        *KuduSchema::ToSchema(duplicate_hms_tables->schema()).get(),
+        duplicate_hms_tables->comment()));
 
   // Test case: Kudu tables Hive-incompatible names.
   ASSERT_OK(CreateKuduTable(kudu_client, "default.hive-incompatible-name"));
@@ -5863,11 +5966,11 @@ TEST_F(ToolTest, TestHmsList) {
   string kUsername = "alice";
   ASSERT_OK(hms_catalog.CreateTable(
       "1", "default.table1", "cluster-id", kUsername,
-      KuduSchema::ToSchema(simple_table->schema()),
+      *KuduSchema::ToSchema(simple_table->schema()).get(),
       "comment 1", hms::HmsClient::kManagedTable));
   ASSERT_OK(hms_catalog.CreateTable(
       "2", "default.table2", "cluster-id", boost::none,
-      KuduSchema::ToSchema(simple_table->schema()),
+      *KuduSchema::ToSchema(simple_table->schema()).get(),
       "", hms::HmsClient::kExternalTable));
 
   // Test the output when HMS integration is disabled.

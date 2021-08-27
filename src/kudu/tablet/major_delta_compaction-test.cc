@@ -57,7 +57,7 @@ using strings::Substitute;
 class TestMajorDeltaCompaction : public KuduRowSetTest {
  public:
   TestMajorDeltaCompaction() :
-      KuduRowSetTest(Schema({ ColumnSchema("key", STRING),
+      KuduRowSetTest(new Schema({ ColumnSchema("key", STRING),
                               ColumnSchema("val1", INT32),
                               ColumnSchema("val2", STRING),
                               ColumnSchema("val3", INT32),
@@ -85,8 +85,8 @@ class TestMajorDeltaCompaction : public KuduRowSetTest {
   // Insert data into tablet_, setting up equivalent state in
   // expected_state_.
   void WriteTestTablet(int nrows) {
-    LocalTabletWriter writer(tablet().get(), &client_schema_);
-    KuduPartialRow ins_row(&client_schema_);
+    LocalTabletWriter writer(tablet().get(), client_schema_.get());
+    KuduPartialRow ins_row(client_schema_.get());
 
     for (int i = 0; i < nrows; i++) {
       ExpectedRow row;
@@ -109,8 +109,8 @@ class TestMajorDeltaCompaction : public KuduRowSetTest {
 
   // Delete the data that was inserted and clear the expected state, end to front.
   void DeleteRows(int nrows) {
-    LocalTabletWriter writer(tablet().get(), &client_schema_);
-    KuduPartialRow del_row(&client_schema_);
+    LocalTabletWriter writer(tablet().get(), client_schema_.get());
+    KuduPartialRow del_row(client_schema_.get());
 
     for (int i = nrows - 1; i >= 0; i--) {
       CHECK_OK(del_row.SetStringNoCopy(0, expected_state_[i].key));
@@ -124,8 +124,8 @@ class TestMajorDeltaCompaction : public KuduRowSetTest {
   // value of 'even'.
   // Makes corresponding updates in expected_state_.
   void UpdateRows(int nrows, bool even) {
-    LocalTabletWriter writer(tablet().get(), &client_schema_);
-    KuduPartialRow prow(&client_schema_);
+    LocalTabletWriter writer(tablet().get(), client_schema_.get());
+    KuduPartialRow prow(client_schema_.get());
     for (int idx = 0; idx < nrows; idx++) {
       ExpectedRow* row = &expected_state_[idx];
       if ((idx % 2 == 0) == even) {
@@ -156,7 +156,7 @@ class TestMajorDeltaCompaction : public KuduRowSetTest {
   void VerifyDataWithMvccAndExpectedState(const MvccSnapshot& snap,
                                           const vector<ExpectedRow>& passed_expected_state) {
       RowIteratorOptions opts;
-      opts.projection = &client_schema_;
+      opts.projection = client_schema_;
       opts.snap_to_include = snap;
       unique_ptr<RowwiseIterator> row_iter;
       ASSERT_OK(tablet()->NewRowIterator(std::move(opts), &row_iter));
@@ -193,9 +193,9 @@ TEST_F(TestMajorDeltaCompaction, TestKudu2656) {
   ASSERT_OK(tablet()->FlushBiggestDMS());
 
   // Major compact some columns.
-  vector<ColumnId> col_ids = { schema_.column_id(1),
-                               schema_.column_id(3),
-                               schema_.column_id(4) };
+  vector<ColumnId> col_ids = { schema_->column_id(1),
+                               schema_->column_id(3),
+                               schema_->column_id(4) };
 
   // Injecting a failure should result in an error, not a crash.
   FLAGS_cfile_inject_corruption = 1.0;
@@ -217,9 +217,9 @@ TEST_F(TestMajorDeltaCompaction, TestCompact) {
 
   shared_ptr<RowSet> rs = all_rowsets.front();
 
-  vector<ColumnId> col_ids_to_compact = { schema_.column_id(1),
-                                          schema_.column_id(3),
-                                          schema_.column_id(4) };
+  vector<ColumnId> col_ids_to_compact = { schema_->column_id(1),
+                                          schema_->column_id(3),
+                                          schema_->column_id(4) };
 
   // We'll run a few rounds of update/compact to make sure
   // that we don't get into some funny state (regression test for
@@ -276,9 +276,9 @@ TEST_F(TestMajorDeltaCompaction, TestUndos) {
   NO_FATALS(VerifyDataWithMvccAndExpectedState(snap, old_state));
 
   // Major compact, check we still have the old data.
-  vector<ColumnId> col_ids_to_compact = { schema_.column_id(1),
-                                          schema_.column_id(3),
-                                          schema_.column_id(4) };
+  vector<ColumnId> col_ids_to_compact = { schema_->column_id(1),
+                                          schema_->column_id(3),
+                                          schema_->column_id(4) };
   ASSERT_OK(tablet()->DoMajorDeltaCompaction(col_ids_to_compact, rs));
   NO_FATALS(VerifyDataWithMvccAndExpectedState(snap, old_state));
 
@@ -319,7 +319,7 @@ TEST_F(TestMajorDeltaCompaction, TestCarryDeletesOver) {
   NO_FATALS(DeleteRows(kNumRows));
   ASSERT_OK(tablet()->FlushBiggestDMS());
 
-  vector<ColumnId> col_ids_to_compact = { schema_.column_id(4) };
+  vector<ColumnId> col_ids_to_compact = { schema_->column_id(4) };
   ASSERT_OK(tablet()->DoMajorDeltaCompaction(col_ids_to_compact, rs));
 
   NO_FATALS(VerifyData());
@@ -365,7 +365,7 @@ TEST_F(TestMajorDeltaCompaction, TestReinserts) {
 
   // Now we'll push some of the updates down.
   shared_ptr<RowSet> rs = all_rowsets.front();
-  vector<ColumnId> col_ids_to_compact = { schema_.column_id(4) };
+  vector<ColumnId> col_ids_to_compact = { schema_->column_id(4) };
   ASSERT_OK(tablet()->DoMajorDeltaCompaction(col_ids_to_compact, rs));
 
   // The data we'll see here is the 3rd batch of inserts, doesn't have updates.

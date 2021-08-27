@@ -51,7 +51,6 @@
 #include "kudu/common/partial_row.h"
 #include "kudu/common/row_operations.h"
 #include "kudu/common/row_operations.pb.h"
-#include "kudu/common/schema.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/consensus.proxy.h"
 #include "kudu/gutil/map-util.h"
@@ -1646,7 +1645,7 @@ TEST_F(TxnOpDispatcherITest, NoPendingWriteOps) {
   for (auto i = 0; i < kNumPartitions; ++i) {
     const auto& tablet_id = replicas[i]->tablet_id();
     const auto schema = KuduSchema::ToSchema(schema_);
-    KuduPartialRow row(&schema);
+    KuduPartialRow row(schema.get());
     ASSERT_OK(row.SetInt64("key", 0));
     ASSERT_OK(row.SetInt32("int_val", 1));
 

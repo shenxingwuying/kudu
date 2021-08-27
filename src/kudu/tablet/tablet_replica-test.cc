@@ -31,10 +31,10 @@
 
 #include "kudu/common/common.pb.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/row_operations.pb.h"
 #include "kudu/common/row_operations.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.h"
-#include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/log.h"
 #include "kudu/consensus/log_anchor_registry.h"
@@ -95,8 +95,8 @@ namespace kudu {
 
 namespace tablet {
 
-static Schema GetTestSchema() {
-  return Schema({ ColumnSchema("key", INT32) }, 1);
+static SchemaRefPtr GetTestSchema() {
+  return make_scoped_refptr(new Schema({ ColumnSchema("key", INT32) }, 1));
 }
 
 class TabletReplicaTest : public TabletReplicaTestBase {
@@ -105,12 +105,14 @@ class TabletReplicaTest : public TabletReplicaTestBase {
       : TabletReplicaTestBase(GetTestSchema()),
         insert_counter_(0),
         delete_counter_(0) {
+
   }
 
  protected:
   // Generate monotonic sequence of key column integers.
-  Status GenerateSequentialInsertRequest(const Schema& schema,
+  Status GenerateSequentialInsertRequest(const SchemaRefPtr& schema_ptr,
                                          WriteRequestPB* write_req) {
+    Schema& schema = *schema_ptr.get();
     write_req->set_tablet_id(tablet()->tablet_id());
     RETURN_NOT_OK(SchemaToPB(schema, write_req->mutable_schema()));
 
@@ -128,7 +130,8 @@ class TabletReplicaTest : public TabletReplicaTestBase {
   // Will assert if you try to delete more rows than you inserted.
   Status GenerateSequentialDeleteRequest(WriteRequestPB* write_req) {
     CHECK_LT(delete_counter_, insert_counter_);
-    Schema schema(GetTestSchema());
+    SchemaRefPtr schema_ptr(GetTestSchema());
+    Schema& schema = *schema_ptr.get();
     write_req->set_tablet_id(tablet()->tablet_id());
     CHECK_OK(SchemaToPB(schema, write_req->mutable_schema()));
 
@@ -540,15 +543,17 @@ TEST_F(TabletReplicaTest, TestRollLogSegmentSchemaOnAlter) {
   ConsensusBootstrapInfo info;
   ASSERT_OK(StartReplicaAndWaitUntilLeader(info));
   SchemaPB orig_schema_pb;
-  ASSERT_OK(SchemaToPB(SchemaBuilder(tablet()->metadata()->schema()).Build(), &orig_schema_pb));
+  SchemaRefPtr schema_ptr = SchemaBuilder(*tablet()->metadata()->schema().get()).Build();
+  ASSERT_OK(SchemaToPB(*schema_ptr.get(), &orig_schema_pb));
   const int orig_schema_version = tablet()->metadata()->schema_version();
 
   // Add a new column.
-  SchemaBuilder builder(tablet()->metadata()->schema());
+  SchemaBuilder builder(*tablet()->metadata()->schema().get());
   ASSERT_OK(builder.AddColumn("new_col", INT32));
-  Schema new_client_schema = builder.BuildWithoutIds();
+  SchemaRefPtr new_client_schema = builder.BuildWithoutIds();
   SchemaPB new_schema;
-  ASSERT_OK(SchemaToPB(builder.Build(), &new_schema));
+  SchemaRefPtr schema1_ptr = builder.Build();
+  ASSERT_OK(SchemaToPB(*schema1_ptr.get(), &new_schema));
   ASSERT_OK(UpdateSchema(new_schema, orig_schema_version + 1));
 
   const auto write = [&] {
@@ -581,15 +586,17 @@ TEST_F(TabletReplicaTest, Kudu2690Test) {
   ConsensusBootstrapInfo info;
   ASSERT_OK(StartReplicaAndWaitUntilLeader(info));
   SchemaPB orig_schema_pb;
-  ASSERT_OK(SchemaToPB(SchemaBuilder(tablet()->metadata()->schema()).Build(), &orig_schema_pb));
+  SchemaRefPtr schema1_ptr = SchemaBuilder(*tablet()->metadata()->schema().get()).Build();
+  ASSERT_OK(SchemaToPB(*schema1_ptr.get(), &orig_schema_pb));
   const int orig_schema_version = tablet()->metadata()->schema_version();
 
   // First things first, add a new column.
-  SchemaBuilder builder(tablet()->metadata()->schema());
+  SchemaBuilder builder(*tablet()->metadata()->schema().get());
   ASSERT_OK(builder.AddColumn("new_col", INT32));
-  Schema new_client_schema = builder.BuildWithoutIds();
+  SchemaRefPtr new_client_schema = builder.BuildWithoutIds();
   SchemaPB new_schema;
-  ASSERT_OK(SchemaToPB(builder.Build(), &new_schema));
+  SchemaRefPtr schema2_ptr = builder.Build();
+  ASSERT_OK(SchemaToPB(*schema2_ptr.get(), &new_schema));
   ASSERT_OK(UpdateSchema(new_schema, orig_schema_version + 1));
 
   // Try to update the schema to an older version. Before the fix for

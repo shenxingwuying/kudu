@@ -199,7 +199,7 @@ TEST_F(TabletHistoryGcTest, TestNoGenerateUndoOnMajorDeltaCompaction) {
   Timestamp post_update_ts[2];
 
   // Mutate all of the rows, setting val=1. Then again for val=2.
-  LocalTabletWriter writer(tablet().get(), &client_schema_);
+  LocalTabletWriter writer(tablet().get(), client_schema_.get());
   for (int val = 1; val <= 2; val++) {
     for (int row_idx = 0; row_idx < TotalNumRows(); row_idx++) {
       ASSERT_OK(UpdateTestRow(&writer, row_idx, val));
@@ -250,9 +250,9 @@ TEST_F(TabletHistoryGcTest, TestMajorDeltaCompactionOnSubsetOfColumns) {
   NO_FATALS(InsertOriginalRows(kNumRowsets, rows_per_rowset_));
   NO_FATALS(VerifyTestRowsWithVerifier(kStartRow, TotalNumRows(), kRowsEqual0));
 
-  LocalTabletWriter writer(tablet().get(), &client_schema_);
+  LocalTabletWriter writer(tablet().get(), client_schema_.get());
   for (int32_t row_key = 0; row_key < TotalNumRows(); row_key++) {
-    KuduPartialRow row(&client_schema_);
+    KuduPartialRow row(client_schema_.get());
     setup_.BuildRowKey(&row, row_key);
     ASSERT_OK_FAST(row.SetInt32(1, 1));
     ASSERT_OK_FAST(row.SetInt32(2, 2));
@@ -268,7 +268,7 @@ TEST_F(TabletHistoryGcTest, TestMajorDeltaCompactionOnSubsetOfColumns) {
   tablet()->GetRowSetsForTests(&rowsets);
   for (int i = 0; i < kNumRowsets; i++) {
     DiskRowSet* drs = down_cast<DiskRowSet*>(rowsets[i].get());
-    vector<ColumnId> col_ids_to_compact = { schema_.column_id(2) };
+    vector<ColumnId> col_ids_to_compact = { schema_->column_id(2) };
     ASSERT_OK(drs->MajorCompactDeltaStoresWithColumnIds(col_ids_to_compact, nullptr,
                                                         tablet()->GetHistoryGcOpts()));
   }
@@ -291,7 +291,7 @@ TEST_F(TabletHistoryGcTest, TestNoGenerateUndoOnMRSFlush) {
   FLAGS_tablet_history_max_age_sec = 100;
 
   Timestamp time_before_insert = clock()->Now();
-  LocalTabletWriter writer(tablet().get(), &client_schema_);
+  LocalTabletWriter writer(tablet().get(), client_schema_.get());
   for (int32_t i = kStartRow; i < TotalNumRows(); i++) {
     ASSERT_OK(InsertTestRow(&writer, i, 0));
   }
@@ -370,7 +370,7 @@ TEST_F(TabletHistoryGcTest, TestRowRemovalGCOnMergeCompaction) {
   NO_FATALS(AddTimeToHybridClock(MonoDelta::FromSeconds(200)));
 
   // Delete all of the rows in the tablet.
-  LocalTabletWriter writer(tablet().get(), &client_schema_);
+  LocalTabletWriter writer(tablet().get(), client_schema_.get());
   for (int row_idx = 0; row_idx < TotalNumRows(); row_idx++) {
     ASSERT_OK(DeleteTestRow(&writer, row_idx));
   }
@@ -407,7 +407,7 @@ TEST_F(TabletHistoryGcTest, TestNoUndoGCUntilAncientHistoryMark) {
   NO_FATALS(AddTimeToHybridClock(MonoDelta::FromSeconds(2)));
 
   // Mutate all of the rows.
-  LocalTabletWriter writer(tablet().get(), &client_schema_);
+  LocalTabletWriter writer(tablet().get(), client_schema_.get());
   for (int row_idx = 0; row_idx < TotalNumRows(); row_idx++) {
     SCOPED_TRACE(Substitute("Row index: $0", row_idx));
     ASSERT_OK(UpdateTestRow(&writer, row_idx, 1));
@@ -437,7 +437,7 @@ TEST_F(TabletHistoryGcTest, TestNoUndoGCUntilAncientHistoryMark) {
 TEST_F(TabletHistoryGcTest, TestGhostRowsNotRevived) {
   FLAGS_tablet_history_max_age_sec = 100;
 
-  LocalTabletWriter writer(tablet().get(), &client_schema_);
+  LocalTabletWriter writer(tablet().get(), client_schema_.get());
   for (int i = 0; i <= 2; i++) {
     ASSERT_OK(InsertTestRow(&writer, 0, i));
     ASSERT_OK(DeleteTestRow(&writer, 0));
@@ -466,7 +466,7 @@ TEST_F(TabletHistoryGcTest, TestGcOnAlternatingRows) {
   FLAGS_tablet_history_max_age_sec = 100;
   rows_per_rowset_ = 5;
 
-  LocalTabletWriter writer(tablet().get(), &client_schema_);
+  LocalTabletWriter writer(tablet().get(), client_schema_.get());
   for (int rowset_id = 0; rowset_id < kNumRowsets; rowset_id++) {
     for (int i = 0; i < rows_per_rowset_; i++) {
       int32_t row_key = rowset_id * rows_per_rowset_ + i;
@@ -525,7 +525,7 @@ TEST_F(TabletHistoryGcTest, TestGcWithConcurrentCompaction) {
     }
 
     Status PostWriteSnapshot() OVERRIDE {
-      LocalTabletWriter writer(test_->tablet().get(), &test_->client_schema());
+      LocalTabletWriter writer(test_->tablet().get(), test_->client_schema().get());
       int offset = offset_.load(std::memory_order_acquire);
       // Update our reinserted row.
       CHECK_OK(test_->UpdateTestRow(&writer, 7, 73 + offset));
@@ -548,7 +548,7 @@ TEST_F(TabletHistoryGcTest, TestGcWithConcurrentCompaction) {
   std::shared_ptr<MyCommonHooks> hooks = std::make_shared<MyCommonHooks>(this);
   tablet()->SetFlushCompactCommonHooksForTests(hooks);
 
-  LocalTabletWriter writer(tablet().get(), &client_schema_);
+  LocalTabletWriter writer(tablet().get(), client_schema_.get());
   for (int i = 0; i < 10; i++) {
     ASSERT_OK(InsertTestRow(&writer, i, i));
   }

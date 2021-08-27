@@ -140,7 +140,9 @@ Status WriteGenerator(const Schema& schema, const SignedTokenPB* token,
   WriteRequestPB req;
   req.set_tablet_id(TabletServerTestBase::kTabletId);
   RETURN_NOT_OK(SchemaToPB(schema, req.mutable_schema()));
-  AddTestRowToPB(RowOperationsPB::INSERT, schema, 1234, 5678, "hello world",
+  AddTestRowToPB(RowOperationsPB::INSERT,
+                 make_scoped_refptr(new Schema(std::move(schema))),
+                 1234, 5678, "hello world",
                  req.mutable_row_operations());
   if (token) {
     *req.mutable_authz_token() = *token;
@@ -302,7 +304,7 @@ TEST_P(AuthzTabletServerTest, TestInvalidAuthzTokens) {
   for (const auto& token_creator : token_creators) {
     RpcController rpc;
     const SignedTokenPB token = token_creator();
-    Status s = send_req(schema_, &token, proxy_.get(), &rpc);
+    Status s = send_req(*schema_.get(), &token, proxy_.get(), &rpc);
     NO_FATALS(CheckInvalidAuthzToken(s, rpc));
   }
 
@@ -310,7 +312,7 @@ TEST_P(AuthzTabletServerTest, TestInvalidAuthzTokens) {
   {
     LOG(INFO) << "Generating request with no authz token";
     RpcController rpc;
-    Status s = send_req(schema_, nullptr, proxy_.get(), &rpc);
+    Status s = send_req(*schema_.get(), nullptr, proxy_.get(), &rpc);
     NO_FATALS(CheckInvalidAuthzToken(s, rpc));
   }
   // Now test a valid token that has no privileges. This is flat-out
@@ -322,7 +324,7 @@ TEST_P(AuthzTabletServerTest, TestInvalidAuthzTokens) {
     empty.set_table_id(kTableId);
     ASSERT_OK(signer_->GenerateAuthzToken(kUser, empty, &token));
     RpcController rpc;
-    Status s = send_req(schema_, &token, proxy_.get(), &rpc);
+    Status s = send_req(*schema_.get(), &token, proxy_.get(), &rpc);
     ASSERT_TRUE(s.IsRemoteError()) << s.ToString();
     ASSERT_STR_CONTAINS(s.ToString(), "Not authorized");
     ASSERT_TRUE(rpc.error_response());
@@ -337,7 +339,7 @@ TEST_P(AuthzTabletServerTest, TestInvalidAuthzTokens) {
     SignedTokenPB token;
     ASSERT_OK(signer_->GenerateAuthzToken(kUser, privilege, &token));
     RpcController rpc;
-    Status s = send_req(schema_, &token, proxy_.get(), &rpc);
+    Status s = send_req(*schema_.get(), &token, proxy_.get(), &rpc);
     NO_FATALS(CheckInvalidAuthzToken(s, rpc));
   }
   // Create a healthy token.
@@ -346,7 +348,7 @@ TEST_P(AuthzTabletServerTest, TestInvalidAuthzTokens) {
     SignedTokenPB token;
     ASSERT_OK(signer_->GenerateAuthzToken(kUser, privilege, &token));
     RpcController rpc;
-    ASSERT_OK(send_req(schema_, &token, proxy_.get(), &rpc));
+    ASSERT_OK(send_req(*schema_.get(), &token, proxy_.get(), &rpc));
     ASSERT_FALSE(rpc.error_response());
   }
 }
@@ -459,11 +461,11 @@ Status CheckNoErrors(const Resp& resp) {
 }
 
 // Generates an encoded key of the given value for the given schema.
-string GenerateEncodedKey(int32_t val, const Schema& schema) {
+string GenerateEncodedKey(int32_t val, const SchemaRefPtr& schema) {
   Arena arena(64);
-  EncodedKeyBuilder builder(&schema, &arena);
-  for (int i = 0; i < schema.num_key_columns(); i++) {
-    DCHECK_EQ(INT32, schema.column(i).type_info()->physical_type());
+  EncodedKeyBuilder builder(schema.get(), &arena);
+  for (int i = 0; i < schema->num_key_columns(); i++) {
+    DCHECK_EQ(INT32, schema->column(i).type_info()->physical_type());
     builder.AddColumnKey(&val);
   }
   EncodedKey* key = builder.BuildEncodedKey();
@@ -515,9 +517,9 @@ class ScanPrivilegeAuthzTest : public AuthzTabletServerTestBase,
 
     // Put together a map from column name to ID so we can put together
     // ID-based tokens based on column names.
-    for (int i = 0; i < schema_.num_columns(); i++) {
-      ColumnId column_id = schema_.column_id(i);
-      EmplaceOrDie(&name_to_id_, schema_.column_by_id(column_id).name(), column_id);
+    for (int i = 0; i < schema_->num_columns(); i++) {
+      ColumnId column_id = schema_->column_id(i);
+      EmplaceOrDie(&name_to_id_, schema_->column_by_id(column_id).name(), column_id);
     }
     ASSERT_OK(mini_server_->AddTestTablet(kScanTableId, kScanTabletId, schema_));
     scoped_refptr<TabletReplica> replica;
@@ -539,7 +541,8 @@ class ScanPrivilegeAuthzTest : public AuthzTabletServerTestBase,
                                        SpecialColumn special_col) const {
     NewScanRequestPB pb;
     pb.set_tablet_id(kScanTabletId);
-    Schema client_schema = schema_.CopyWithoutColumnIds();
+    SchemaRefPtr client_schema_ptr = schema_->CopyWithoutColumnIds();
+    Schema& client_schema = *client_schema_ptr.get();
     if (scan.use_pk) {
       pb.set_order_mode(ORDERED);
       // Ordered scans must be snapshot scans.
@@ -557,7 +560,7 @@ class ScanPrivilegeAuthzTest : public AuthzTabletServerTestBase,
       // game for authorization.
       if (range_predicate == DeprecatedField::USE) {
         ColumnRangePredicatePB* range = pb.add_deprecated_range_predicates();
-        int col_idx = schema_.find_column(col_name);
+        int col_idx = schema_->find_column(col_name);
         ColumnSchemaToPB(client_schema.column(col_idx), range->mutable_column());
         range->mutable_lower_bound()->append(
             reinterpret_cast<char*>(&inclusive_lower_bound), sizeof(inclusive_lower_bound));
@@ -580,7 +583,7 @@ class ScanPrivilegeAuthzTest : public AuthzTabletServerTestBase,
           scan.projected_cols, &prng_);
     }
     for (const auto& col_name : scan.projected_cols) {
-      int col_idx = schema_.find_column(col_name);
+      int col_idx = schema_->find_column(col_name);
       auto* projected_column = pb.add_projected_columns();
       if (misnamed_col && col_name == *misnamed_col) {
         CHECK(special_col == SpecialColumn::MISNAMED);
@@ -613,7 +616,8 @@ class ScanPrivilegeAuthzTest : public AuthzTabletServerTestBase,
     cols.insert(scan.predicated_cols.begin(), scan.predicated_cols.end());
     SplitKeyRangeRequestPB split_pb;
     split_pb.set_tablet_id(kScanTabletId);
-    Schema client_schema = schema_.CopyWithoutColumnIds();
+    SchemaRefPtr client_schema_ptr = schema_->CopyWithoutColumnIds();
+    Schema& client_schema = *client_schema_ptr.get();
 
     // Determine which column to sabotage if needed.
     boost::optional<string> misnamed_col;
@@ -702,7 +706,7 @@ class ScanPrivilegeAuthzTest : public AuthzTabletServerTestBase,
   }
 
  protected:
-  Schema schema_;
+  SchemaRefPtr schema_;
 
   // The column names, the first `kNumKeys` of which are keys.
   vector<string> col_names_;
@@ -1103,7 +1107,7 @@ class WritePrivilegeAuthzTest : public AuthzTabletServerTestBase {
                               const WritePrivileges& privileges) const {
     WriteRequestPB req;
     req.set_tablet_id(kTabletId);
-    CHECK_OK(SchemaToPB(schema_, req.mutable_schema()));
+    CHECK_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
     RowOperationsPB* data = req.mutable_row_operations();
     for (const auto& write : write_ops) {
       const auto& op_type = write.op_type;

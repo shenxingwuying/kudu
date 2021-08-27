@@ -30,6 +30,7 @@
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/client/write_op.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/schema.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/mini-cluster/external_mini_cluster.h"
 #include "kudu/tablet/key_value_test_schema.h"
@@ -146,7 +147,7 @@ TEST_F(ClientFailoverOnNegotiationTimeoutITest, Kudu1580ConnectToTServer) {
       MonoDelta::FromMilliseconds(kTimeoutMs), kNegotiationTimeout);
   ASSERT_NE(nullptr, client.get());
   unique_ptr<KuduTableCreator> table_creator(client->NewTableCreator());
-  KuduSchema schema(KuduSchema::FromSchema(CreateKeyValueTestSchema()));
+  KuduSchema schema(KuduSchema::FromSchema(*CreateKeyValueTestSchema().get()));
   ASSERT_OK(table_creator->table_name(kTableName)
       .schema(&schema)
       .add_hash_partitions({ "key" }, kNumTabletServers)

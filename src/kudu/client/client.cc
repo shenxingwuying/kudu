@@ -931,7 +931,7 @@ Status KuduTableCreator::Create() {
   if (data_->comment_ != boost::none) {
     req.set_comment(data_->comment_.get());
   }
-  RETURN_NOT_OK_PREPEND(SchemaToPB(*data_->schema_->schema_, req.mutable_schema(),
+  RETURN_NOT_OK_PREPEND(SchemaToPB(*data_->schema_->schema_->get(), req.mutable_schema(),
                                    SCHEMA_PB_WITHOUT_WRITE_DEFAULT),
                         "Invalid schema");
 
@@ -1288,7 +1288,7 @@ Status KuduTable::ListPartitions(vector<Partition>* partitions) {
   auto& client = data_->client_;
   const auto deadline = MonoTime::Now() + client->default_admin_operation_timeout();
   PartitionPruner pruner;
-  pruner.Init(*data_->schema_.schema_, data_->partition_schema_, ScanSpec());
+  pruner.Init(*data_->schema_.schema_->get(), data_->partition_schema_, ScanSpec());
   while (pruner.HasMorePartitionKeyRanges()) {
     scoped_refptr<client::internal::RemoteTablet> tablet;
     Synchronizer sync;
@@ -1867,7 +1867,7 @@ string KuduScanner::ToString() const {
   return KUDU_DISABLE_REDACTION(Substitute(
       "$0: $1",
       data_->table_->name(),
-      data_->configuration().spec().ToString(*data_->table_->schema().schema_)));
+      data_->configuration().spec().ToString(*data_->table_->schema().schema_->get())));
 }
 
 Status KuduScanner::Open() {
@@ -1877,7 +1877,7 @@ Status KuduScanner::Open() {
     RETURN_NOT_OK(data_->mutable_configuration()->AddIsDeletedColumn());
   }
   data_->mutable_configuration()->OptimizeScanSpec();
-  data_->partition_pruner_.Init(*data_->table_->schema().schema_,
+  data_->partition_pruner_.Init(*data_->table_->schema().schema_->get(),
                                 data_->table_->partition_schema(),
                                 data_->configuration().spec());
 

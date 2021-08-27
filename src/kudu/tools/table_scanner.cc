@@ -47,6 +47,7 @@
 #include "kudu/common/schema.h"
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/port.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/stl_util.h"
 #include "kudu/gutil/strings/split.h"
 #include "kudu/gutil/strings/substitute.h"
@@ -290,8 +291,8 @@ Status AddPredicate(const client::sp::shared_ptr<KuduTable>& table,
     return Status::OK();
   }
 
-  Schema schema_internal = KuduSchema::ToSchema(table->schema());
-  int idx = schema_internal.find_column(column_name);
+  SchemaRefPtr schema_internal_ptr = KuduSchema::ToSchema(table->schema());
+  int idx = schema_internal_ptr->find_column(column_name);
   if (PREDICT_FALSE(idx == Schema::kColumnNotFound)) {
     return Status::NotFound("no such column", column_name);
   }
@@ -400,16 +401,16 @@ Status CreateDstTableIfNeeded(const client::sp::shared_ptr<KuduTable>& src_table
                                        dst_table_name));
   }
 
-  Schema schema_internal = KuduSchema::ToSchema(src_table_schema);
+  SchemaRefPtr schema_internal_ptr = KuduSchema::ToSchema(src_table_schema);
   // Convert Schema to KuduSchema will drop internal ColumnIds.
-  KuduSchema dst_table_schema = KuduSchema::FromSchema(schema_internal);
+  KuduSchema dst_table_schema = KuduSchema::FromSchema(*schema_internal_ptr.get());
   const auto& partition_schema = src_table->partition_schema();
 
-  auto convert_column_ids_to_names = [&schema_internal] (const vector<ColumnId>& column_ids) {
+  auto convert_column_ids_to_names = [&schema_internal_ptr] (const vector<ColumnId>& column_ids) {
     vector<string> column_names;
     column_names.reserve(column_ids.size());
     for (const auto& column_id : column_ids) {
-      column_names.emplace_back(schema_internal.column_by_id(column_id).name());
+      column_names.emplace_back(schema_internal_ptr->column_by_id(column_id).name());
     }
     return column_names;
   };
@@ -451,8 +452,8 @@ Status CreateDstTableIfNeeded(const client::sp::shared_ptr<KuduTable>& src_table
     ScopedDisableRedaction no_redaction;
 
     Arena arena(256);
-    std::unique_ptr<KuduPartialRow> lower(new KuduPartialRow(&schema_internal));
-    std::unique_ptr<KuduPartialRow> upper(new KuduPartialRow(&schema_internal));
+    std::unique_ptr<KuduPartialRow> lower(new KuduPartialRow(schema_internal_ptr.get()));
+    std::unique_ptr<KuduPartialRow> upper(new KuduPartialRow(schema_internal_ptr.get()));
     Slice range_key_start(partition.begin().range_key());
     Slice range_key_end(partition.end().range_key());
     RETURN_NOT_OK(partition_schema.DecodeRangeKey(&range_key_start, lower.get(), &arena));

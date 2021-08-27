@@ -36,6 +36,7 @@
 #include "kudu/common/row.h"
 #include "kudu/common/scan_spec.h"
 #include "kudu/common/schema.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/stringprintf.h"
 #include "kudu/tablet/local_tablet_writer.h"
 #include "kudu/tablet/tablet-test-util.h"
@@ -63,9 +64,9 @@ class TabletPushdownTest : public KuduTabletTest,
                            public ::testing::WithParamInterface<Setup> {
  public:
   TabletPushdownTest()
-    : KuduTabletTest(Schema({ ColumnSchema("key", INT32),
+    : KuduTabletTest(make_scoped_refptr(new Schema({ ColumnSchema("key", INT32),
                               ColumnSchema("int_val", INT32),
-                              ColumnSchema("string_val", STRING) }, 1)) {
+                              ColumnSchema("string_val", STRING) }, 1))) {
   }
 
   void SetUp() override {
@@ -75,15 +76,15 @@ class TabletPushdownTest : public KuduTabletTest,
   }
 
   void FillTestTablet() {
-    RowBuilder rb(&client_schema_);
+    RowBuilder rb(client_schema_.get());
 
     nrows_ = 2100;
     if (AllowSlowTests()) {
       nrows_ = 100000;
     }
 
-    LocalTabletWriter writer(tablet().get(), &client_schema_);
-    KuduPartialRow row(&client_schema_);
+    LocalTabletWriter writer(tablet().get(), client_schema_.get());
+    KuduPartialRow row(client_schema_.get());
     for (int64_t i = 0; i < nrows_; i++) {
       CHECK_OK(row.SetInt32(0, i));
       CHECK_OK(row.SetInt32(1, i * 10));
@@ -105,7 +106,7 @@ class TabletPushdownTest : public KuduTabletTest,
   // expected rows are returned.
   void TestScanYieldsExpectedResults(ScanSpec spec) {
     Arena arena(128);
-    spec.OptimizeScan(schema_, &arena, true);
+    spec.OptimizeScan(*schema_.get(), &arena, true);
 
     unique_ptr<RowwiseIterator> iter;
     ASSERT_OK(tablet()->NewRowIterator(client_schema_, &iter));
@@ -171,11 +172,11 @@ class TabletPushdownTest : public KuduTabletTest,
   // should be empty.
   void TestCountOnlyScanYieldsExpectedResults(ScanSpec spec) {
     Arena arena(128);
-    spec.OptimizeScan(schema_, &arena, true);
+    spec.OptimizeScan(*schema_.get(), &arena, true);
 
-    Schema empty_schema(std::vector<ColumnSchema>(), 0);
+    SchemaRefPtr empty_schema_ptr(new Schema(std::vector<ColumnSchema>(), 0));
     unique_ptr<RowwiseIterator> iter;
-    ASSERT_OK(tablet()->NewRowIterator(empty_schema, &iter));
+    ASSERT_OK(tablet()->NewRowIterator(empty_schema_ptr, &iter));
     ASSERT_OK(iter->Init(&spec));
     ASSERT_TRUE(spec.predicates().empty()) << "Should have accepted all predicates";
 
@@ -194,7 +195,7 @@ TEST_P(TabletPushdownTest, TestPushdownIntKeyRange) {
   ScanSpec spec;
   int32_t lower = 200;
   int32_t upper = 211;
-  auto pred0 = ColumnPredicate::Range(schema_.column(0), &lower, &upper);
+  auto pred0 = ColumnPredicate::Range(schema_->column(0), &lower, &upper);
   spec.AddPredicate(pred0);
 
   TestScanYieldsExpectedResults(spec);
@@ -207,7 +208,7 @@ TEST_P(TabletPushdownTest, TestPushdownIntValueRange) {
   ScanSpec spec;
   int32_t lower = 2000;
   int32_t upper = 2101;
-  auto pred1 = ColumnPredicate::Range(schema_.column(1), &lower, &upper);
+  auto pred1 = ColumnPredicate::Range(schema_->column(1), &lower, &upper);
   spec.AddPredicate(pred1);
 
   TestScanYieldsExpectedResults(spec);
@@ -227,18 +228,18 @@ INSTANTIATE_TEST_SUITE_P(AllDisk, TabletPushdownTest, ::testing::Values(ALL_ON_D
 class TabletSparsePushdownTest : public KuduTabletTest {
  public:
   TabletSparsePushdownTest()
-      : KuduTabletTest(Schema({ ColumnSchema("key", INT32),
+      : KuduTabletTest(make_scoped_refptr(new Schema({ ColumnSchema("key", INT32),
                                 ColumnSchema("val", INT32, true) },
-                              1)) {
+                              1))) {
   }
 
   void SetUp() override {
     KuduTabletTest::SetUp();
 
-    RowBuilder rb(&client_schema_);
+    RowBuilder rb(client_schema_.get());
 
-    LocalTabletWriter writer(tablet().get(), &client_schema_);
-    KuduPartialRow row(&client_schema_);
+    LocalTabletWriter writer(tablet().get(), client_schema_.get());
+    KuduPartialRow row(client_schema_.get());
 
     // FLAGS_scanner_batch_size_rows * 2
     int kWidth = 100 * 2;
@@ -263,7 +264,7 @@ class TabletSparsePushdownTest : public KuduTabletTest {
 TEST_F(TabletSparsePushdownTest, Kudu2231) {
   ScanSpec spec;
   int32_t value = 50;
-  spec.AddPredicate(ColumnPredicate::Equality(schema_.column(1), &value));
+  spec.AddPredicate(ColumnPredicate::Equality(schema_->column(1), &value));
 
   unique_ptr<RowwiseIterator> iter;
   ASSERT_OK(tablet()->NewRowIterator(client_schema_, &iter));

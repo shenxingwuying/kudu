@@ -220,14 +220,16 @@ Status MasterRebuilder::CheckTableConsistency(
   SysTablesEntryPB* metadata = &table->mutable_metadata()->mutable_dirty()->pb;
 
   // Update next_column_id if needed.
-  Schema schema_from_replica;
+  SchemaRefPtr schema_from_replica_ptr(new Schema);
+  Schema& schema_from_replica = *schema_from_replica_ptr.get();
   RETURN_NOT_OK(SchemaFromPB(replica.schema(), &schema_from_replica));
   if (schema_from_replica.max_col_id() + 1 > metadata->next_column_id()) {
     metadata->set_next_column_id(schema_from_replica.max_col_id() + 1);
   }
 
   // Check the schemas match.
-  Schema schema_from_table;
+  SchemaRefPtr schema_from_table_ptr(new Schema);
+  Schema& schema_from_table = *schema_from_table_ptr.get();
   RETURN_NOT_OK(SchemaFromPB(metadata->schema(), &schema_from_table));
   if (schema_from_table != schema_from_replica) {
     LOG(WARNING) << Substitute("Schema mismatch for tablet $0 of table $1", tablet_id, table_name);

@@ -36,8 +36,9 @@
 #include "kudu/client/client.h"
 #include "kudu/client/schema.h"
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
-#include "kudu/common/schema.h"
+#include "kudu/common/schema.h" // IWYU pragma: keep
 #include "kudu/gutil/map-util.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/split.h"
 #include "kudu/gutil/strings/stringpiece.h"
 #include "kudu/gutil/strings/substitute.h"
@@ -190,7 +191,7 @@ bool IsSynced(const set<string>& master_addresses,
               const KuduTable& kudu_table,
               const hive::Table& hms_table) {
   DCHECK(!master_addresses.empty());
-  auto schema = KuduSchema::ToSchema(kudu_table.schema());
+  auto schema_ptr = KuduSchema::ToSchema(kudu_table.schema());
   hive::Table hms_table_copy(hms_table);
   const string* hms_masters_field = FindOrNull(hms_table.parameters,
                                                HmsClient::kKuduMasterAddrsKey);
@@ -199,7 +200,7 @@ bool IsSynced(const set<string>& master_addresses,
     return false;
   }
   Status s = HmsCatalog::PopulateTable(kudu_table.id(), kudu_table.name(), kudu_table.owner(),
-                                       schema, kudu_table.comment(),
+                                       *schema_ptr.get(), kudu_table.comment(),
                                        kudu_table.client()->cluster_id(), *hms_masters_field,
                                        hms_table.tableType, &hms_table_copy);
   return s.ok() && hms_table_copy == hms_table;
@@ -680,7 +681,7 @@ Status FixHmsMetadata(const RunnerContext& context) {
         LOG(INFO) << "[dryrun] Creating HMS table for Kudu table " << TableIdent(*kudu_table);
       } else {
         Status s = hms_catalog->CreateTable(table_id, table_name, cluster_id,
-            kudu_table->owner(), schema, kudu_table->comment());
+            kudu_table->owner(), *schema.get(), kudu_table->comment());
         if (s.IsAlreadyPresent()) {
           LOG(ERROR) << "Failed to create HMS table for Kudu table "
                      << TableIdent(*kudu_table)
@@ -733,9 +734,10 @@ Status FixHmsMetadata(const RunnerContext& context) {
         LOG(INFO) << "[dryrun] Upgrading legacy Impala HMS metadata for table "
                   << hms_table_name;
       } else {
+        SchemaRefPtr schema_ptr = KuduSchema::ToSchema(kudu_table.schema());
         RETURN_NOT_OK_PREPEND(hms_catalog->UpgradeLegacyImpalaTable(
                   kudu_table.id(), kudu_table.client()->cluster_id(), hms_table.dbName,
-                  hms_table.tableName, KuduSchema::ToSchema(kudu_table.schema()),
+                  hms_table.tableName, *schema_ptr.get(),
                   kudu_table.comment()),
             Substitute("failed to upgrade legacy Impala HMS metadata for table $0",
               hms_table_name));
@@ -843,7 +845,7 @@ Status FixHmsMetadata(const RunnerContext& context) {
         RETURN_NOT_OK_PREPEND(
             // Disable table ID checking to support fixing tables with unsynchronized IDs.
             hms_catalog->AlterTable(kudu_table.id(), hms_table_name, hms_table_name,
-                                    kudu_table.client()->cluster_id(), owner, schema,
+                                    kudu_table.client()->cluster_id(), owner, *schema.get(),
                                     comment, /* check_id */ false),
             Substitute("failed to refresh HMS table metadata for Kudu table $0",
               TableIdent(kudu_table)));

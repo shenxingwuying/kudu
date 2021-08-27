@@ -32,6 +32,7 @@
 #include "kudu/client/schema.h"
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/client/write_op.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/partial_row.h"
 #include "kudu/common/wire_protocol-test-util.h"
 #include "kudu/fs/block_manager.h"
@@ -501,7 +502,8 @@ TEST_P(MasterDiskErrorITest, TestMasterDiskFailure) {
   // Create bunch of tables to populate the system catalog with overlapping entries
   // that'll require compaction of the disk row sets.
   std::unique_ptr<client::KuduTableCreator> table_creator(client_->NewTableCreator());
-  auto client_schema = client::KuduSchema::FromSchema(GetSimpleTestSchema());
+  SchemaRefPtr schema_ptr = GetSimpleTestSchema();
+  auto client_schema = client::KuduSchema::FromSchema(*schema_ptr.get());
   for (int table_suffix = 0; table_suffix < 20; table_suffix++) {
     string table_name = Substitute("test-$0", table_suffix);
     LOG(INFO) << "Creating table " << table_name;
@@ -521,6 +523,6 @@ TEST_P(MasterDiskErrorITest, TestMasterDiskFailure) {
   ASSERT_OK(SetFlags(leader_master, flag_list));
 
   // Wait for the master to crash
-  ASSERT_OK(leader_master->WaitForFatal(MonoDelta::FromSeconds(20)));
+  ASSERT_OK(leader_master->WaitForFatal(MonoDelta::FromSeconds(40)));
 }
 }  // namespace kudu

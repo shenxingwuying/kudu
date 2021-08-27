@@ -639,9 +639,10 @@ TEST_F(TabletReplacementITest, TestRemoteBoostrapWithPendingConfigChangeCommits)
   rpc::RpcController rpc;
   rpc.set_timeout(timeout);
   req.set_tablet_id(tablet_id);
-  Schema schema = GetSimpleTestSchema();
+  SchemaRefPtr schema_ptr = GetSimpleTestSchema();
+  Schema& schema = *schema_ptr.get();
   ASSERT_OK(SchemaToPB(schema, req.mutable_schema()));
-  AddTestRowToPB(RowOperationsPB::INSERT, schema, 1, 1, "", req.mutable_row_operations());
+  AddTestRowToPB(RowOperationsPB::INSERT, schema_ptr, 1, 1, "", req.mutable_row_operations());
   leader_ts->tserver_proxy->WriteAsync(req, &resp, &rpc,
                                        [&latch]() { latch.CountDown(); });
 

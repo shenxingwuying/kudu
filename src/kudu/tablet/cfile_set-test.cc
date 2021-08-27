@@ -45,6 +45,7 @@
 #include "kudu/common/schema.h"
 #include "kudu/gutil/integral_types.h"
 #include "kudu/gutil/port.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/stringprintf.h"
 #include "kudu/gutil/strings/stringpiece.h"
 #include "kudu/tablet/diskrowset.h"
@@ -72,9 +73,9 @@ namespace tablet {
 class TestCFileSet : public KuduRowSetTest {
  public:
   TestCFileSet() :
-    KuduRowSetTest(Schema({ ColumnSchema("c0", INT32),
+    KuduRowSetTest(make_scoped_refptr(new Schema({ ColumnSchema("c0", INT32),
                             ColumnSchema("c1", INT32, false, nullptr, nullptr, GetRLEStorage()),
-                            ColumnSchema("c2", INT32, true) }, 1))
+                            ColumnSchema("c2", INT32, true) }, 1)))
   {}
 
   virtual void SetUp() OVERRIDE {
@@ -90,12 +91,12 @@ class TestCFileSet : public KuduRowSetTest {
   // The second contains the row index * 10.
   // The third column contains index * 100, but is never read.
   void WriteTestRowSet(int nrows) {
-    DiskRowSetWriter rsw(rowset_meta_.get(), &schema_,
+    DiskRowSetWriter rsw(rowset_meta_.get(), schema_.get(),
                          BloomFilterSizing::BySizeAndFPRate(32*1024, 0.01f));
 
     ASSERT_OK(rsw.Open());
 
-    RowBuilder rb(&schema_);
+    RowBuilder rb(schema_.get());
     for (int i = 0; i < nrows; i++) {
       rb.Reset();
       rb.AddInt32(i * kRatio[0]);
@@ -181,12 +182,12 @@ class TestCFileSet : public KuduRowSetTest {
                        int32_t lower,
                        int32_t upper) {
     // Create iterator.
-    unique_ptr<CFileSet::Iterator> cfile_iter(fileset->NewIterator(&schema_, nullptr));
+    unique_ptr<CFileSet::Iterator> cfile_iter(fileset->NewIterator(schema_, nullptr));
     unique_ptr<RowwiseIterator> iter(NewMaterializingIterator(std::move(cfile_iter)));
 
     // Create a scan with a range predicate on the key column.
     ScanSpec spec;
-    auto pred1 = ColumnPredicate::Range(schema_.column(0),
+    auto pred1 = ColumnPredicate::Range(schema_->column(0),
                                         lower != kNoBound ? &lower : nullptr,
                                         upper != kNoBound ? &upper : nullptr);
     spec.AddPredicate(pred1);
@@ -194,16 +195,16 @@ class TestCFileSet : public KuduRowSetTest {
 
     // Check that the range was respected on all the results.
     RowBlockMemory mem(1024);
-    RowBlock block(&schema_, 100, &mem);
+    RowBlock block(schema_.get(), 100, &mem);
     while (iter->HasNext()) {
       mem.Reset();
       ASSERT_OK_FAST(iter->NextBlock(&block));
       for (size_t i = 0; i < block.nrows(); i++) {
         if (block.selection_vector()->IsRowSelected(i)) {
           RowBlockRow row = block.row(i);
-          if ((lower != kNoBound && *schema_.ExtractColumnFromRow<INT32>(row, 0) < lower) ||
-              (upper != kNoBound && *schema_.ExtractColumnFromRow<INT32>(row, 0) >= upper)) {
-            FAIL() << "Row " << schema_.DebugRow(row) << " should not have "
+          if ((lower != kNoBound && *schema_->ExtractColumnFromRow<INT32>(row, 0) < lower) ||
+              (upper != kNoBound && *schema_->ExtractColumnFromRow<INT32>(row, 0) >= upper)) {
+            FAIL() << "Row " << schema_->DebugRow(row) << " should not have "
                    << "passed predicate " << pred1.ToString();
           }
         }
@@ -218,7 +219,7 @@ class TestCFileSet : public KuduRowSetTest {
                              vector<size_t> target) {
     LOG(INFO) << "predicates size: " << predicates.size();
     // Create iterator.
-    unique_ptr<CFileSet::Iterator> cfile_iter(fileset->NewIterator(&schema_, nullptr));
+    unique_ptr<CFileSet::Iterator> cfile_iter(fileset->NewIterator(schema_, nullptr));
     unique_ptr<RowwiseIterator> iter(NewMaterializingIterator(std::move(cfile_iter)));
     LOG(INFO) << "Target size: " << target.size();
     // Create a scan with a range predicate on the key column.
@@ -229,7 +230,7 @@ class TestCFileSet : public KuduRowSetTest {
     ASSERT_OK(iter->Init(&spec));
     // Check that the range was respected on all the results.
     RowBlockMemory mem(1024);
-    RowBlock block(&schema_, 100, &mem);
+    RowBlock block(schema_.get(), 100, &mem);
     while (iter->HasNext()) {
       ASSERT_OK_FAST(iter->NextBlock(&block));
       for (size_t i = 0; i < block.nrows(); i++) {
@@ -238,7 +239,7 @@ class TestCFileSet : public KuduRowSetTest {
           size_t index = row.row_index();
           auto target_iter = std::find(target.begin(), target.end(), index);
           if (target_iter == target.end()) {
-            FAIL() << "Row " << schema_.DebugRow(row) << " should not have "
+            FAIL() << "Row " << schema_->DebugRow(row) << " should not have "
                    << "passed predicate ";
           }
           target.erase(target_iter);
@@ -287,11 +288,11 @@ TEST_F(TestCFileSet, TestPartiallyMaterialize) {
   ASSERT_OK(CFileSet::Open(rowset_meta_, MemTracker::GetRootTracker(), MemTracker::GetRootTracker(),
                            nullptr, &fileset));
 
-  unique_ptr<CFileSet::Iterator> iter(fileset->NewIterator(&schema_, nullptr));
+  unique_ptr<CFileSet::Iterator> iter(fileset->NewIterator(schema_, nullptr));
   ASSERT_OK(iter->Init(nullptr));
 
   RowBlockMemory mem(4096);
-  RowBlock block(&schema_, 100, &mem);
+  RowBlock block(schema_.get(), 100, &mem);
   rowid_t row_idx = 0;
   while (iter->HasNext()) {
     mem.Reset();
@@ -368,9 +369,9 @@ TEST_F(TestCFileSet, TestIteratePartialSchema) {
   ASSERT_OK(CFileSet::Open(rowset_meta_, MemTracker::GetRootTracker(), MemTracker::GetRootTracker(),
                            nullptr, &fileset));
 
-  Schema new_schema;
-  ASSERT_OK(schema_.CreateProjectionByNames({ "c0", "c2" }, &new_schema));
-  unique_ptr<CFileSet::Iterator> cfile_iter(fileset->NewIterator(&new_schema, nullptr));
+  SchemaRefPtr new_schema(new Schema);
+  ASSERT_OK(schema_->CreateProjectionByNames({ "c0", "c2" }, new_schema.get()));
+  unique_ptr<CFileSet::Iterator> cfile_iter(fileset->NewIterator(new_schema, nullptr));
   unique_ptr<RowwiseIterator> iter(NewMaterializingIterator(std::move(cfile_iter)));
 
   ASSERT_OK(iter->Init(nullptr));
@@ -403,19 +404,18 @@ TEST_F(TestCFileSet, TestRangeScan) {
                            nullptr, &fileset));
 
   // Create iterator.
-  unique_ptr<CFileSet::Iterator> cfile_iter(fileset->NewIterator(&schema_, nullptr));
+  unique_ptr<CFileSet::Iterator> cfile_iter(fileset->NewIterator(schema_, nullptr));
   CFileSet::Iterator* cfile_iter_raw = cfile_iter.get();
   unique_ptr<RowwiseIterator> iter(NewMaterializingIterator(std::move(cfile_iter)));
-  Schema key_schema = schema_.CreateKeyProjection();
   Arena arena(1024);
 
   // Create a scan with a range predicate on the key column.
   ScanSpec spec;
   int32_t lower = 2000;
   int32_t upper = 2010;
-  auto pred1 = ColumnPredicate::Range(schema_.column(0), &lower, &upper);
+  auto pred1 = ColumnPredicate::Range(schema_->column(0), &lower, &upper);
   spec.AddPredicate(pred1);
-  spec.OptimizeScan(schema_, &arena, true);
+  spec.OptimizeScan(*schema_.get(), &arena, true);
   ASSERT_OK(iter->Init(&spec));
 
   // Check that the bounds got pushed as index bounds.
@@ -519,19 +519,19 @@ TEST_F(TestCFileSet, TestBloomFilterPredicates) {
 
 
   // BloomFilter of column 0 contain.
-  auto pred1_contain = ColumnPredicate::InBloomFilter(schema_.column(0), {&bf1_contain},
+  auto pred1_contain = ColumnPredicate::InBloomFilter(schema_->column(0), {&bf1_contain},
                                                       nullptr, nullptr);
   DoTestBloomFilterScan(fileset, { pred1_contain }, ret1_contain);
 
   // BloomFilter of column 1 contain.
-  auto pred2_contain = ColumnPredicate::InBloomFilter(schema_.column(1), {&bf2_contain},
+  auto pred2_contain = ColumnPredicate::InBloomFilter(schema_->column(1), {&bf2_contain},
                                                       nullptr, nullptr);
   DoTestBloomFilterScan(fileset, { pred2_contain }, ret2_contain);
 
   // BloomFilter of column 0 contain and exclude.
   vector<size_t> ret1_contain_exclude;
   auto pred1_contain_exclude = ColumnPredicate::InBloomFilter(
-      schema_.column(0), {&bf1_contain, &bf1_exclude}, nullptr, nullptr);
+      schema_->column(0), {&bf1_contain, &bf1_exclude}, nullptr, nullptr);
   std::set_intersection(ret1_contain.begin(), ret1_contain.end(), ret1_exclude.begin(),
                         ret1_exclude.end(), std::back_inserter(ret1_contain_exclude));
   DoTestBloomFilterScan(fileset, { pred1_contain_exclude }, ret1_contain_exclude);
@@ -553,11 +553,11 @@ TEST_F(TestCFileSet, TestBloomFilterPredicates) {
   auto right = std::lower_bound(ret1_contain_range.begin(),
                                 ret1_contain_range.end(), upper_row_index);
   ret1_contain_range.erase(right, ret1_contain_range.end()); // earse right
-  auto range = ColumnPredicate::Range(schema_.column(0), &lower, &upper);
+  auto range = ColumnPredicate::Range(schema_->column(0), &lower, &upper);
   DoTestBloomFilterScan(fileset, { pred1_contain, range }, ret1_contain_range);
 
   // BloomFilter of column 0 contain with Range with column.
-  auto bf_with_range = ColumnPredicate::InBloomFilter(schema_.column(0), {&bf1_contain},
+  auto bf_with_range = ColumnPredicate::InBloomFilter(schema_->column(0), {&bf1_contain},
                                                       &lower, &upper);
   DoTestBloomFilterScan(fileset, { bf_with_range }, ret1_contain_range);
 }

@@ -370,18 +370,18 @@ Status Schema::CreateProjectionByIdsIgnoreMissing(const vector<ColumnId>& col_id
   return out->Reset(std::move(cols), std::move(filtered_col_ids), 0);
 }
 
-Schema Schema::CopyWithColumnIds() const {
+SchemaRefPtr Schema::CopyWithColumnIds() const {
   CHECK(!has_column_ids());
   vector<ColumnId> ids;
   ids.reserve(num_columns());
   for (int32_t i = 0; i < num_columns(); i++) {
     ids.emplace_back(kFirstColumnId + i);
   }
-  return Schema(cols_, ids, num_key_columns_);
+  return new Schema(cols_, ids, num_key_columns_);
 }
 
-Schema Schema::CopyWithoutColumnIds() const {
-  return Schema(cols_, num_key_columns_);
+SchemaRefPtr Schema::CopyWithoutColumnIds() const {
+  return new Schema(cols_, num_key_columns_);
 }
 
 Status Schema::VerifyProjectionCompatibility(const Schema& projection) const {

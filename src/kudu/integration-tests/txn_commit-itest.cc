@@ -40,6 +40,7 @@
 #include "kudu/client/schema.h"
 #include "kudu/client/write_op.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/txn_id.h"
 #include "kudu/common/wire_protocol-test-util.h"
 #include "kudu/gutil/basictypes.h"
@@ -453,7 +454,7 @@ TEST_F(TxnCommitITest, TestCommitAfterDroppingRangeParticipant) {
   ASSERT_OK(BeginTransaction(&txn, &txn_session));
   ASSERT_OK(InsertToSession(txn_session, initial_row_count_, kNumRowsPerTxn));
   ASSERT_OK(client_->DeleteTable(table_name_));
-  const auto& schema = client::KuduSchema::FromSchema(GetSimpleTestSchema());
+  const auto& schema = client::KuduSchema::FromSchema(*GetSimpleTestSchema().get());
   unique_ptr<client::KuduTableAlterer> alterer(client_->NewTableAlterer(table_name_));
   alterer->DropRangePartition(schema.NewRow(), schema.NewRow());
   alterer.reset();

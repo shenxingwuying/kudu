@@ -98,7 +98,8 @@ using strings::Substitute;
 namespace kudu {
 
 static const char* const kTableName = "test-table";
-static const Schema kTestSchema = CreateKeyValueTestSchema();
+static const SchemaRefPtr kTestSchemaPtr = CreateKeyValueTestSchema();
+static const Schema& kTestSchema = *kTestSchemaPtr.get();
 static const KuduSchema kTestKuduSchema = client::KuduSchema::FromSchema(kTestSchema);
 
 class SecurityITest : public KuduTest {

@@ -330,7 +330,7 @@ class PartitionSchema {
       const std::vector<KuduPartialRow>& split_rows,
       const std::vector<std::pair<KuduPartialRow, KuduPartialRow>>& range_bounds,
       const std::vector<HashSchema>& range_hash_schemas,
-      const Schema& schema,
+      const SchemaRefPtr& schema,
       std::vector<Partition>* partitions) const WARN_UNUSED_RESULT;
 
   // Check if the given partition contains the specified row. The row must have

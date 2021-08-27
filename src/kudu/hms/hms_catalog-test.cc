@@ -31,6 +31,7 @@
 #include "kudu/common/common.pb.h"
 #include "kudu/common/schema.h"
 #include "kudu/gutil/map-util.h" // IWYU pragma: keep
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/hms/hive_metastore_types.h"
 #include "kudu/hms/hms_client.h"
@@ -193,7 +194,7 @@ class HmsCatalogTest : public KuduTest {
     return Status::OK();
   }
 
-  Schema AllTypesSchema() {
+  SchemaRefPtr AllTypesSchema() {
     SchemaBuilder b;
     b.AddKeyColumn("key", DataType::INT32);
     b.AddColumn("int8_val", DataType::INT8);
@@ -308,7 +309,8 @@ TEST_P(HmsCatalogTestParameterized, TestTableLifecycle) {
   const string kOwner = "alice";
   const string kComment = "comment";
 
-  Schema schema = AllTypesSchema();
+  SchemaRefPtr schema_ptr = AllTypesSchema();
+  const Schema& schema = *schema_ptr.get();
 
   // Create the table.
   ASSERT_OK(hms_catalog_->CreateTable(kTableId, kTableName,
@@ -326,7 +328,8 @@ TEST_P(HmsCatalogTestParameterized, TestTableLifecycle) {
   // Alter the table.
   SchemaBuilder b(schema);
   b.AddColumn("new_column", DataType::INT32);
-  Schema altered_schema = b.Build();
+  SchemaRefPtr altered_schema_ptr = b.Build();
+  Schema& altered_schema = *altered_schema_ptr.get();
   ASSERT_OK(hms_catalog_->AlterTable(kTableId, kTableName, kAlteredTableName,
       kClusterId, kOwner, altered_schema, kComment));
   NO_FATALS(CheckTableDoesNotExist(kHmsDatabase, kHmsTableName));
@@ -363,7 +366,8 @@ TEST_F(HmsCatalogTest, TestExternalTable) {
   };
 
   // Create the Kudu table (default.a).
-  Schema schema = AllTypesSchema();
+  SchemaRefPtr schema_ptr = AllTypesSchema();
+  Schema& schema = *schema_ptr.get();
   ASSERT_OK(hms_catalog_->CreateTable(kTableId, "default.a",
       kClusterId, boost::none, schema, kComment));
   NO_FATALS(CheckTable("default", "a", kTableId, kClusterId, boost::none, schema, kComment));
@@ -424,7 +428,7 @@ TEST_F(HmsCatalogTest, TestGetKuduTables) {
   ASSERT_OK(hms_client_->GetTable("db", "external_table", &table));
 
   ASSERT_OK(hms_catalog_->CreateTable("fake-id", "db.table",
-      kClusterId, kOwner, Schema(), kComment));
+      kClusterId, kOwner, *make_scoped_refptr(new Schema).get(), kComment));
 
   hive::Table non_kudu_table;
   non_kudu_table.dbName = "db";
@@ -452,10 +456,12 @@ TEST_F(HmsCatalogTest, TestReconnect) {
   const string kOwner = "alice";
   const string kComment = "comment";
 
-  Schema schema = AllTypesSchema();
+  SchemaRefPtr schema_ptr = AllTypesSchema();
+  Schema& schema = *schema_ptr.get();
   ASSERT_OK(hms_catalog_->CreateTable(kTableId, "default.a",
       kClusterId, kOwner, schema, kComment));
   NO_FATALS(CheckTable(kHmsDatabase, "a", kTableId, kClusterId, kOwner, schema, kComment));
+
   // Shutdown the HMS and try a few operations.
   ASSERT_OK(StopHms());
 

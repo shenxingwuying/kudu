@@ -37,6 +37,8 @@
 #include "kudu/util/kudu_export.h"
 #include "kudu/util/status.h"
 
+template <class T> class scoped_refptr;
+
 namespace kudu {
 
 class ColumnSchema;
@@ -734,7 +736,7 @@ class KUDU_EXPORT KuduSchema {
   /// @param[in] kudu_schema
   ///   The KuduSchema to convert
   /// @return The converted Schema
-  static Schema ToSchema(const KuduSchema& kudu_schema) KUDU_NO_EXPORT;
+  static scoped_refptr<Schema> ToSchema(const KuduSchema& kudu_schema) KUDU_NO_EXPORT;
 
   /// @endcond
 
@@ -768,7 +770,7 @@ class KUDU_EXPORT KuduSchema {
   size_t num_key_columns() const;
 
   // Owned.
-  Schema* schema_;
+  scoped_refptr<Schema>* schema_;
 };
 
 } // namespace client

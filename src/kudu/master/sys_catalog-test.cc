@@ -144,7 +144,8 @@ TEST_F(SysCatalogTest, TestSysCatalogTablesOperations) {
     l.mutable_data()->pb.set_version(0);
     l.mutable_data()->pb.set_num_replicas(1);
     l.mutable_data()->pb.set_state(SysTablesEntryPB::PREPARING);
-    ASSERT_OK(SchemaToPB(Schema(), l.mutable_data()->pb.mutable_schema()));
+    ASSERT_OK(SchemaToPB(*make_scoped_refptr(new Schema).get(),
+                         l.mutable_data()->pb.mutable_schema()));
     // Add the table
     {
       SysCatalogTable::Actions actions;

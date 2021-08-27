@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/tserver/tablet_server_options.h"
 #include "kudu/util/net/sockaddr.h"
 
@@ -28,6 +29,8 @@ namespace kudu {
 class HostPort;
 class Schema;
 class Status;
+
+using SchemaRefPtr = scoped_refptr<Schema>;
 
 namespace consensus {
 class RaftConfigPB;
@@ -71,13 +74,13 @@ class MiniTabletServer {
   // Requires that the server has already been started with Start().
   Status AddTestTablet(const std::string& table_id,
                        const std::string& tablet_id,
-                       const Schema& schema);
+                       const SchemaRefPtr& schema);
 
   // Add a new tablet to the test server and specify the consensus configuration
   // for the tablet.
   Status AddTestTablet(const std::string& table_id,
                        const std::string& tablet_id,
-                       const Schema& schema,
+                       const SchemaRefPtr& schema,
                        const consensus::RaftConfigPB& config);
 
   // Return the ids of all non-tombstoned tablets on this server.

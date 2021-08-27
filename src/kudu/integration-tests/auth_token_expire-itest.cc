@@ -30,6 +30,7 @@
 #include "kudu/client/schema.h"
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/client/write_op.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/partial_row.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/consensus.proxy.h"
@@ -112,7 +113,7 @@ class AuthTokenExpireITestBase : public KuduTest {
         authz_token_validity_seconds_(authz_token_validity_seconds),
         num_masters_(num_masters),
         num_tablet_servers_(num_tablet_servers),
-        schema_(KuduSchema::FromSchema(CreateKeyValueTestSchema())) {
+        schema_(KuduSchema::FromSchema(*CreateKeyValueTestSchema().get())) {
     cluster_opts_.num_tablet_servers = num_tablet_servers_;
     cluster_opts_.num_masters = num_masters_;
     cluster_opts_.enable_kerberos = true;

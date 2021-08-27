@@ -33,11 +33,11 @@
 #include "kudu/common/common.pb.h"
 #include "kudu/common/iterator.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/row_operations.pb.h"
 #include "kudu/common/rowblock.h"
 #include "kudu/common/rowblock_memory.h"
 #include "kudu/common/scan_spec.h"
 #include "kudu/common/schema.h"
-#include "kudu/common/wire_protocol.pb.h"
 #include "kudu/gutil/port.h"
 #include "kudu/tablet/key_value_test_schema.h"
 #include "kudu/tablet/local_tablet_writer.h"
@@ -92,7 +92,7 @@ class TestRandomAccess : public KuduTabletTest {
 
   virtual void SetUp() OVERRIDE {
     KuduTabletTest::SetUp();
-    writer_.reset(new LocalTabletWriter(tablet().get(), &client_schema_));
+    writer_.reset(new LocalTabletWriter(tablet().get(), client_schema_.get()));
     SeedRandom();
   }
 
@@ -248,7 +248,7 @@ class TestRandomAccess : public KuduTabletTest {
                                         const optional<ExpectedKeyValueRow>& old_row,
                                         vector<LocalTabletWriter::RowOp>* ops) {
 
-    unique_ptr<KuduPartialRow> row(new KuduPartialRow(&client_schema_));
+    unique_ptr<KuduPartialRow> row(new KuduPartialRow(client_schema_.get()));
     CHECK_OK(row->SetInt32(0, key));
     optional<ExpectedKeyValueRow> ret = ExpectedKeyValueRow();
     ret->key = key;
@@ -298,7 +298,7 @@ class TestRandomAccess : public KuduTabletTest {
   // Adds a delete of the given row to 'ops', returning an empty string (indicating that
   // the row no longer exists).
   optional<ExpectedKeyValueRow> DeleteRow(int key, vector<LocalTabletWriter::RowOp>* ops) {
-    unique_ptr<KuduPartialRow> row(new KuduPartialRow(&client_schema_));
+    unique_ptr<KuduPartialRow> row(new KuduPartialRow(client_schema_.get()));
     CHECK_OK(row->SetInt32(0, key));
     ops->push_back(LocalTabletWriter::RowOp(RowOperationsPB::DELETE, row.release()));
     return boost::none;
@@ -307,7 +307,7 @@ class TestRandomAccess : public KuduTabletTest {
   // Adds a delete ignore of the given row to 'ops', returning an empty string (indicating that
   // the row no longer exists).
   optional<ExpectedKeyValueRow> DeleteIgnoreRow(int key, vector<LocalTabletWriter::RowOp>* ops) {
-    unique_ptr<KuduPartialRow> row(new KuduPartialRow(&client_schema_));
+    unique_ptr<KuduPartialRow> row(new KuduPartialRow(client_schema_.get()));
     CHECK_OK(row->SetInt32(0, key));
     ops->push_back(LocalTabletWriter::RowOp(RowOperationsPB::DELETE_IGNORE, row.release()));
     return boost::none;
@@ -317,9 +317,10 @@ class TestRandomAccess : public KuduTabletTest {
   // If the row doesn't exist, returns boost::none.
   optional<ExpectedKeyValueRow> GetRow(int key) {
     ScanSpec spec;
-    const Schema& schema = this->client_schema_;
+    const SchemaRefPtr schema_ptr = this->client_schema_;
+    const Schema& schema = *schema_ptr.get();
     unique_ptr<RowwiseIterator> iter;
-    CHECK_OK(this->tablet()->NewRowIterator(schema, &iter));
+    CHECK_OK(this->tablet()->NewRowIterator(schema_ptr, &iter));
     auto pred_one = ColumnPredicate::Equality(schema.column(0), &key);
     spec.AddPredicate(pred_one);
     CHECK_OK(iter->Init(&spec));

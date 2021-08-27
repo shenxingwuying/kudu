@@ -203,7 +203,8 @@ class TimestampAdvancementITest : public MiniClusterITestBase {
     NewScanRequestPB* scan = req.mutable_new_scan_request();
     scan->set_tablet_id(tablet_id);
     scan->set_read_mode(READ_LATEST);
-    const Schema schema = GetSimpleTestSchema();
+    SchemaRefPtr schema_ptr = GetSimpleTestSchema();
+    const Schema& schema = *schema_ptr.get();
     CHECK_OK(SchemaToColumnPBs(schema, scan->mutable_projected_columns()));
     shared_ptr<TabletServerServiceProxy> tserver_proxy = cluster_->tserver_proxy(ts);
     CHECK_OK(tserver_proxy->Scan(req, &resp, &rpc));

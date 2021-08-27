@@ -37,6 +37,7 @@
 #include "kudu/common/rowblock_memory.h"
 #include "kudu/common/scan_spec.h"
 #include "kudu/common/schema.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/stringprintf.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/tablet/local_tablet_writer.h"
@@ -74,13 +75,13 @@ class TabletDecoderEvalTest : public KuduTabletTest,
                               public ::testing::WithParamInterface<Setup> {
 public:
   TabletDecoderEvalTest()
-          : KuduTabletTest(Schema({ColumnSchema("key", INT32),
+          : KuduTabletTest(make_scoped_refptr(new Schema({ColumnSchema("key", INT32),
                                    ColumnSchema("string_val_a", STRING, true, NULL, NULL,
                                                 ColumnStorageAttributes(DICT_ENCODING,
                                                                         DEFAULT_COMPRESSION)),
                                    ColumnSchema("string_val_b", STRING, true, NULL, NULL,
                                                 ColumnStorageAttributes(DICT_ENCODING,
-                                                                        DEFAULT_COMPRESSION))}, 1))
+                                                                        DEFAULT_COMPRESSION))}, 1)))
   {}
 
   void SetUp() override {
@@ -137,9 +138,9 @@ public:
   }
 
   void FillTestTablet(size_t nrows, size_t cardinality, size_t strlen, int null_upper) {
-    RowBuilder rb(&client_schema_);
-    LocalTabletWriter writer(tablet().get(), &client_schema_);
-    KuduPartialRow row(&client_schema_);
+    RowBuilder rb(client_schema_.get());
+    LocalTabletWriter writer(tablet().get(), client_schema_.get());
+    KuduPartialRow row(client_schema_.get());
     for (int64_t i = 0; i < nrows; i++) {
       CHECK_OK(row.SetInt32(0, i));
 
@@ -167,11 +168,11 @@ public:
     const string upper_string = LeftZeroPadded(upper_val, strlen);
     Slice lower(lower_string);
     Slice upper(upper_string);
-    auto string_pred = ColumnPredicate::Range(schema_.column(2), &lower, &upper);
+    auto string_pred = ColumnPredicate::Range(schema_->column(2), &lower, &upper);
 
     // Prepare the scan.
     spec.AddPredicate(string_pred);
-    spec.OptimizeScan(schema_, &arena, true);
+    spec.OptimizeScan(*schema_.get(), &arena, true);
     ScanSpec orig_spec = spec;
     unique_ptr<RowwiseIterator> iter;
     ASSERT_OK(tablet()->NewRowIterator(client_schema_, &iter));
@@ -242,13 +243,13 @@ public:
     // This will exercise CopyNextAndEval's skipping behavior in the decoders
     // that support evaluation. Decoders should skip over rows that have been
     // deemed to not be returned by a prior column evaluation.
-    auto string_pred_a = ColumnPredicate::Range(schema_.column(1), &lower_a, &upper_a);
-    auto string_pred_b = ColumnPredicate::Range(schema_.column(2), &lower_b, &upper_b);
+    auto string_pred_a = ColumnPredicate::Range(schema_->column(1), &lower_a, &upper_a);
+    auto string_pred_b = ColumnPredicate::Range(schema_->column(2), &lower_b, &upper_b);
 
     // Prepare the scan.
     spec.AddPredicate(string_pred_a);
     spec.AddPredicate(string_pred_b);
-    spec.OptimizeScan(schema_, &arena, true);
+    spec.OptimizeScan(*schema_.get(), &arena, true);
     ScanSpec orig_spec = spec;
     unique_ptr<RowwiseIterator> iter;
     ASSERT_OK(tablet()->NewRowIterator(client_schema_, &iter));
@@ -258,7 +259,8 @@ public:
 
     RowBlockMemory mem(1024);
     size_t expected_count = ExpectedCount(nrows, cardinality, lower, upper);
-    Schema schema = iter->schema();
+    SchemaRefPtr schema_ptr = iter->schema();
+    Schema& schema = *schema_ptr.get();
     RowBlock block(&schema, 100, &mem);
     int fetched = 0;
     string column_str_a;

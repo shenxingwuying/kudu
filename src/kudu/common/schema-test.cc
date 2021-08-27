@@ -32,6 +32,7 @@
 #include "kudu/common/key_encoder.h"
 #include "kudu/common/row.h"
 #include "kudu/common/types.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/stringpiece.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/util/faststring.h"
@@ -73,7 +74,8 @@ class TestSchema : public KuduTest {};
 
 // Test basic functionality of Schema definition
 TEST_F(TestSchema, TestSchema) {
-  Schema empty_schema;
+  SchemaRefPtr empty_schema_ptr(new Schema);
+  Schema& empty_schema = *empty_schema_ptr.get();
   ASSERT_GT(empty_schema.memory_footprint_excluding_this(), 0);
 
   ColumnSchema col1("key", STRING);
@@ -81,7 +83,8 @@ TEST_F(TestSchema, TestSchema) {
   ColumnSchema col3("int32val", INT32);
 
   vector<ColumnSchema> cols = { col1, col2, col3 };
-  Schema schema(cols, 1);
+  SchemaRefPtr schema_ptr(new Schema(cols, 1));
+  Schema& schema = *schema_ptr.get();
 
   ASSERT_EQ(sizeof(Slice) + sizeof(uint32_t) + sizeof(int32_t),
             schema.byte_size());
@@ -111,13 +114,13 @@ TEST_F(TestSchema, TestSchemaToStringMode) {
                  "    $0:key INT32 NOT NULL,\n"
                  "    PRIMARY KEY (key)\n"
                  ")",
-                 schema.column_id(0)),
-      schema.ToString());
+                 schema->column_id(0)),
+      schema->ToString());
   EXPECT_EQ("(\n"
             "    key INT32 NOT NULL,\n"
             "    PRIMARY KEY (key)\n"
             ")",
-            schema.ToString(Schema::ToStringMode::BASE_INFO));
+            schema->ToString(Schema::ToStringMode::BASE_INFO));
 }
 
 enum IncludeColumnIds {
@@ -161,16 +164,19 @@ TEST_P(ParameterizedSchemaTest, TestCopyAndMove) {
   vector<ColumnId> ids = { ColumnId(0), ColumnId(1), ColumnId(2) };
   const int kNumKeyCols = 1;
 
-  Schema schema = GetParam() == INCLUDE_COL_IDS ?
-                      Schema(cols, ids, kNumKeyCols) :
-                      Schema(cols, kNumKeyCols);
+  SchemaRefPtr schema_ptr = GetParam() == INCLUDE_COL_IDS ?
+                      new Schema(cols, ids, kNumKeyCols) :
+                      new Schema(cols, kNumKeyCols);
+  Schema& schema = *schema_ptr.get();
 
   NO_FATALS(check_schema(schema));
 
   // Check copy- and move-assignment.
-  Schema moved_schema;
+  SchemaRefPtr moved_schema_ptr(new Schema);
+  Schema& moved_schema = *moved_schema_ptr.get();
   {
-    Schema copied_schema = schema;
+    SchemaRefPtr copied_schema_ptr(new Schema(schema));
+    Schema& copied_schema = *copied_schema_ptr.get();
     NO_FATALS(check_schema(copied_schema));
     ASSERT_TRUE(copied_schema.Equals(schema, Schema::COMPARE_ALL));
 
@@ -188,11 +194,13 @@ TEST_P(ParameterizedSchemaTest, TestCopyAndMove) {
 
   // Check copy- and move-construction.
   {
-    Schema copied_schema(schema);
+    SchemaRefPtr copied_schema_ptr(new Schema(schema));
+    Schema& copied_schema = *copied_schema_ptr.get();
     NO_FATALS(check_schema(copied_schema));
     ASSERT_TRUE(copied_schema.Equals(schema, Schema::COMPARE_ALL));
 
-    Schema moved_schema(std::move(copied_schema));
+    SchemaRefPtr moved_schema_ptr(new Schema(std::move(copied_schema)));
+    Schema& moved_schema = *moved_schema_ptr.get();
     copied_schema.ToString(); // NOLINT(*)
     NO_FATALS(check_schema(moved_schema));
     ASSERT_TRUE(moved_schema.Equals(schema, Schema::COMPARE_ALL));
@@ -213,7 +221,8 @@ TEST_F(TestSchema, TestSchemaWithDecimal) {
                     ColumnTypeAttributes(38, 2));
 
   vector<ColumnSchema> cols = { col1, col2, col3, col4 };
-  Schema schema(cols, 1);
+  SchemaRefPtr schema_ptr(new Schema(cols, 1));
+  Schema& schema = *schema_ptr.get();
 
   ASSERT_EQ(sizeof(Slice) + sizeof(int32_t) +
                 sizeof(int64_t) + sizeof(int128_t),
@@ -249,10 +258,14 @@ TEST_F(TestSchema, TestSchemaEqualsWithDecimal) {
                         NULL, NULL, ColumnStorageAttributes(),
                         ColumnTypeAttributes(17, 9));
 
-  Schema schema_18_10({ col1, col_18_10 }, 1);
-  Schema schema_18_9({ col1, col_18_9 }, 1);
-  Schema schema_17_10({ col1, col_17_10 }, 1);
-  Schema schema_17_9({ col1, col_17_9 }, 1);
+  SchemaRefPtr schema_18_10_ptr(new Schema({ col1, col_18_10 }, 1));
+  SchemaRefPtr schema_18_9_ptr(new Schema({ col1, col_18_9 }, 1));
+  SchemaRefPtr schema_17_10_ptr(new Schema({ col1, col_17_10 }, 1));
+  SchemaRefPtr schema_17_9_ptr(new Schema({ col1, col_17_9 }, 1));
+  Schema& schema_18_10 = *schema_18_10_ptr.get();
+  Schema& schema_18_9 = *schema_18_9_ptr.get();
+  Schema& schema_17_10 = *schema_17_10_ptr.get();
+  Schema& schema_17_9 = *schema_17_9_ptr.get();
 
   EXPECT_TRUE(schema_18_10.Equals(schema_18_10));
   EXPECT_FALSE(schema_18_10.Equals(schema_18_9));
@@ -278,22 +291,26 @@ TEST_F(TestSchema, TestColumnSchemaEquals) {
 }
 
 TEST_F(TestSchema, TestSchemaEquals) {
-  Schema schema1({ ColumnSchema("col1", STRING),
+  SchemaRefPtr schema1_ptr(new Schema({ ColumnSchema("col1", STRING),
                    ColumnSchema("col2", STRING),
                    ColumnSchema("col3", UINT32) },
-                 2);
-  Schema schema2({ ColumnSchema("newCol1", STRING),
+                 2));
+  SchemaRefPtr schema2_ptr(new Schema({ ColumnSchema("newCol1", STRING),
                    ColumnSchema("newCol2", STRING),
                    ColumnSchema("newCol3", UINT32) },
-                 2);
-  Schema schema3({ ColumnSchema("col1", STRING),
+                 2));
+  SchemaRefPtr schema3_ptr(new Schema({ ColumnSchema("col1", STRING),
                    ColumnSchema("col2", UINT32),
                    ColumnSchema("col3", UINT32, true) },
-                 2);
-  Schema schema4({ ColumnSchema("col1", STRING),
+                 2));
+  SchemaRefPtr schema4_ptr(new Schema({ ColumnSchema("col1", STRING),
                    ColumnSchema("col2", UINT32),
                    ColumnSchema("col3", UINT32, false) },
-                 2);
+                 2));
+  Schema& schema1 = *schema1_ptr.get();
+  Schema& schema2 = *schema2_ptr.get();
+  Schema& schema3 = *schema3_ptr.get();
+  Schema& schema4 = *schema4_ptr.get();
   ASSERT_FALSE(schema1.Equals(schema2));
   ASSERT_TRUE(schema1.KeyEquals(schema1));
   ASSERT_TRUE(schema1.KeyEquals(schema2, ColumnSchema::COMPARE_TYPE));
@@ -306,7 +323,8 @@ TEST_F(TestSchema, TestSchemaEquals) {
 }
 
 TEST_F(TestSchema, TestReset) {
-  Schema schema;
+  SchemaRefPtr schema_ptr(new Schema);
+  Schema& schema = *schema_ptr.get();
   ASSERT_FALSE(schema.initialized());
 
   ASSERT_OK(schema.Reset({ ColumnSchema("col3", UINT32),
@@ -315,8 +333,8 @@ TEST_F(TestSchema, TestReset) {
   ASSERT_TRUE(schema.initialized());
 
   // Move an uninitialized schema into the initialized schema.
-  Schema schema2;
-  schema = std::move(schema2);
+  SchemaRefPtr schema2(new Schema);
+  schema = std::move(*schema2.get());
   ASSERT_FALSE(schema.initialized());
 }
 
@@ -335,14 +353,16 @@ TEST_F(TestSchema, TestEmptyVariant) {
 }
 
 TEST_F(TestSchema, TestProjectSubset) {
-  Schema schema1({ ColumnSchema("col1", STRING),
+  SchemaRefPtr schema1_ptr(new Schema({ ColumnSchema("col1", STRING),
                    ColumnSchema("col2", STRING),
                    ColumnSchema("col3", UINT32) },
-                 1);
+                 1));
 
-  Schema schema2({ ColumnSchema("col3", UINT32),
+  SchemaRefPtr schema2_ptr(new Schema({ ColumnSchema("col3", UINT32),
                    ColumnSchema("col2", STRING) },
-                 0);
+                 0));
+  Schema& schema1 = *schema1_ptr.get();
+  Schema& schema2 = *schema2_ptr.get();
 
   RowProjector row_projector(&schema1, &schema2);
   ASSERT_OK(row_projector.Init());
@@ -361,10 +381,12 @@ TEST_F(TestSchema, TestProjectSubset) {
 // Test projection when the type of the projected column
 // doesn't match the original type.
 TEST_F(TestSchema, TestProjectTypeMismatch) {
-  Schema schema1({ ColumnSchema("key", STRING),
+  SchemaRefPtr schema1_ptr(new Schema({ ColumnSchema("key", STRING),
                    ColumnSchema("val", UINT32) },
-                 1);
-  Schema schema2({ ColumnSchema("val", STRING) }, 0);
+                 1));
+  SchemaRefPtr schema2_ptr(new Schema({ ColumnSchema("val", STRING) }, 0));
+  Schema& schema1 = *schema1_ptr.get();
+  Schema& schema2 = *schema2_ptr.get();
 
   RowProjector row_projector(&schema1, &schema2);
   Status s = row_projector.Init();
@@ -375,13 +397,20 @@ TEST_F(TestSchema, TestProjectTypeMismatch) {
 // Test projection when the some columns in the projection
 // are not present in the base schema
 TEST_F(TestSchema, TestProjectMissingColumn) {
-  Schema schema1({ ColumnSchema("key", STRING), ColumnSchema("val", UINT32) }, 1);
-  Schema schema2({ ColumnSchema("val", UINT32), ColumnSchema("non_present", STRING) }, 0);
-  Schema schema3({ ColumnSchema("val", UINT32), ColumnSchema("non_present", UINT32, true) }, 0);
+  SchemaRefPtr schema1_ptr(
+      new Schema({ ColumnSchema("key", STRING), ColumnSchema("val", UINT32) }, 1));
+  SchemaRefPtr schema2_ptr(
+      new Schema({ ColumnSchema("val", UINT32), ColumnSchema("non_present", STRING) }, 0));
+  SchemaRefPtr schema3_ptr(
+      new Schema({ ColumnSchema("val", UINT32), ColumnSchema("non_present", UINT32, true) }, 0));
+  Schema& schema1 = *schema1_ptr.get();
+  Schema& schema2 = *schema2_ptr.get();
+  Schema& schema3 = *schema3_ptr.get();
   uint32_t default_value = 15;
-  Schema schema4({ ColumnSchema("val", UINT32),
+  SchemaRefPtr schema4_ptr(new Schema({ ColumnSchema("val", UINT32),
                    ColumnSchema("non_present", UINT32, false, &default_value) },
-                 0);
+                 0));
+  Schema& schema4 = *schema4_ptr.get();
 
   RowProjector row_projector(&schema1, &schema2);
   Status s = row_projector.Init();
@@ -417,14 +446,14 @@ TEST_F(TestSchema, TestProjectRename) {
   SchemaBuilder builder;
   ASSERT_OK(builder.AddKeyColumn("key", STRING));
   ASSERT_OK(builder.AddColumn("val", UINT32));
-  Schema schema1 = builder.Build();
+  SchemaRefPtr schema1 = builder.Build();
 
-  builder.Reset(schema1);
+  builder.Reset(*schema1.get());
   ASSERT_OK(builder.AddNullableColumn("non_present", UINT32));
   ASSERT_OK(builder.RenameColumn("val", "val_renamed"));
-  Schema schema2 = builder.Build();
+  SchemaRefPtr schema2 = builder.Build();
 
-  RowProjector row_projector(&schema1, &schema2);
+  RowProjector row_projector(schema1.get(), schema2.get());
   ASSERT_OK(row_projector.Init());
 
   ASSERT_EQ(2, row_projector.base_cols_mapping().size());
@@ -442,18 +471,22 @@ TEST_F(TestSchema, TestProjectRename) {
 // Test that we can map a projection schema (no column ids) onto a tablet
 // schema (column ids).
 TEST_F(TestSchema, TestGetMappedReadProjection) {
-  Schema tablet_schema({ ColumnSchema("key", STRING),
+  SchemaRefPtr tablet_schema_ptr(new Schema({ ColumnSchema("key", STRING),
                          ColumnSchema("val", INT32) },
                        { ColumnId(0),
                          ColumnId(1) },
-                       1);
+                       1));
+  Schema& tablet_schema = *tablet_schema_ptr.get();
+
   const bool kReadDefault = false;
-  Schema projection({ ColumnSchema("key", STRING),
+  SchemaRefPtr projection_ptr(new Schema({ ColumnSchema("key", STRING),
                       ColumnSchema("deleted", IS_DELETED,
                                    /*is_nullable=*/false, /*read_default=*/&kReadDefault) },
-                    1);
+                    1));
+  Schema& projection = *projection_ptr.get();
 
-  Schema mapped;
+  SchemaRefPtr mapped_ptr(new Schema);
+  Schema& mapped = *mapped_ptr.get();
   ASSERT_OK(tablet_schema.GetMappedReadProjection(projection, &mapped));
   ASSERT_EQ(1, mapped.num_key_columns());
   ASSERT_EQ(2, mapped.num_columns());
@@ -474,8 +507,8 @@ TEST_F(TestSchema, TestGetMappedReadProjection) {
 
   // Ensure that virtual columns that are nullable or that do not have read
   // defaults are rejected.
-  Schema nullable_projection;
-  Status s = nullable_projection.Reset({ ColumnSchema("key", STRING),
+  SchemaRefPtr nullable_projection(new Schema);
+  Status s = nullable_projection->Reset({ ColumnSchema("key", STRING),
                                          ColumnSchema("deleted", IS_DELETED,
                                                       /*is_nullable=*/true,
                                                       /*read_default=*/&kReadDefault) },
@@ -483,8 +516,8 @@ TEST_F(TestSchema, TestGetMappedReadProjection) {
   ASSERT_FALSE(s.ok());
   ASSERT_STR_CONTAINS(s.ToString(), "must not be nullable");
 
-  Schema no_default_projection;
-  s = no_default_projection.Reset({ ColumnSchema("key", STRING),
+  SchemaRefPtr no_default_projection(new Schema);
+  s = no_default_projection->Reset({ ColumnSchema("key", STRING),
                                     ColumnSchema("deleted", IS_DELETED,
                                                  /*is_nullable=*/false,
                                                  /*read_default=*/nullptr) },
@@ -495,11 +528,12 @@ TEST_F(TestSchema, TestGetMappedReadProjection) {
 
 // Test that the schema can be used to compare and stringify rows.
 TEST_F(TestSchema, TestRowOperations) {
-  Schema schema({ ColumnSchema("col1", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("col1", STRING),
                   ColumnSchema("col2", STRING),
                   ColumnSchema("col3", UINT32),
                   ColumnSchema("col4", INT32) },
-                1);
+                1));
+  Schema& schema = *schema_ptr.get();
 
   Arena arena(1024);
 
@@ -564,10 +598,11 @@ TEST(TestKeyEncoder, TestKeyEncoder) {
 }
 
 TEST_F(TestSchema, TestDecodeKeys_CompoundStringKey) {
-  Schema schema({ ColumnSchema("col1", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("col1", STRING),
                   ColumnSchema("col2", STRING),
                   ColumnSchema("col3", STRING) },
-                2);
+                2));
+  Schema& schema = *schema_ptr.get();
 
   EXPECT_EQ(R"((string col1="foo", string col2="bar"))",
             schema.DebugEncodedRowKey(Slice("foo\0\0bar", 8), Schema::START_KEY));
@@ -585,10 +620,11 @@ TEST_F(TestSchema, TestDecodeKeys_CompoundStringKey) {
 // Test that appropriate statuses are returned when trying to decode an invalid
 // encoded key.
 TEST_F(TestSchema, TestDecodeKeys_InvalidKeys) {
-  Schema schema({ ColumnSchema("col1", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("col1", STRING),
                   ColumnSchema("col2", UINT32),
                   ColumnSchema("col3", STRING) },
-                2);
+                2));
+  Schema& schema = *schema_ptr.get();
 
   EXPECT_EQ("<invalid key: Invalid argument: Error decoding composite key component"
             " 'col1': Missing separator after composite key string component: foo>",
@@ -602,14 +638,16 @@ TEST_F(TestSchema, TestDecodeKeys_InvalidKeys) {
 }
 
 TEST_F(TestSchema, TestCreateProjection) {
-  Schema schema({ ColumnSchema("col1", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("col1", STRING),
                   ColumnSchema("col2", STRING),
                   ColumnSchema("col3", STRING),
                   ColumnSchema("col4", STRING),
                   ColumnSchema("col5", STRING) },
-                2);
-  Schema schema_with_ids = SchemaBuilder(schema).Build();
-  Schema partial_schema;
+                2));
+  Schema& schema = *schema_ptr.get();
+  SchemaRefPtr schema_with_ids = SchemaBuilder(schema).Build();
+  SchemaRefPtr partial_schema_ptr(new Schema);
+  Schema& partial_schema = *partial_schema_ptr.get();
 
   // By names, without IDs
   ASSERT_OK(schema.CreateProjectionByNames({ "col1", "col2", "col4" }, &partial_schema));
@@ -622,16 +660,16 @@ TEST_F(TestSchema, TestCreateProjection) {
             partial_schema.ToString());
 
   // By names, with IDS
-  ASSERT_OK(schema_with_ids.CreateProjectionByNames({ "col1", "col2", "col4" }, &partial_schema));
+  ASSERT_OK(schema_with_ids->CreateProjectionByNames({ "col1", "col2", "col4" }, &partial_schema));
   EXPECT_EQ(Substitute("(\n"
                        "    $0:col1 STRING NOT NULL,\n"
                        "    $1:col2 STRING NOT NULL,\n"
                        "    $2:col4 STRING NOT NULL,\n"
                        "    PRIMARY KEY ()\n"
                        ")",
-                       schema_with_ids.column_id(0),
-                       schema_with_ids.column_id(1),
-                       schema_with_ids.column_id(3)),
+                       schema_with_ids->column_id(0),
+                       schema_with_ids->column_id(1),
+                       schema_with_ids->column_id(3)),
             partial_schema.ToString());
 
   // By names, with missing names.
@@ -639,10 +677,10 @@ TEST_F(TestSchema, TestCreateProjection) {
   EXPECT_EQ("Not found: column not found: foobar", s.ToString());
 
   // By IDs
-  ASSERT_OK(schema_with_ids.CreateProjectionByIdsIgnoreMissing({ schema_with_ids.column_id(0),
-                                                                 schema_with_ids.column_id(1),
+  ASSERT_OK(schema_with_ids->CreateProjectionByIdsIgnoreMissing({ schema_with_ids->column_id(0),
+                                                                 schema_with_ids->column_id(1),
                                                                  ColumnId(1000), // missing column
-                                                                 schema_with_ids.column_id(3) },
+                                                                 schema_with_ids->column_id(3) },
                                                                &partial_schema));
   EXPECT_EQ(Substitute("(\n"
                        "    $0:col1 STRING NOT NULL,\n"
@@ -650,16 +688,17 @@ TEST_F(TestSchema, TestCreateProjection) {
                        "    $2:col4 STRING NOT NULL,\n"
                        "    PRIMARY KEY ()\n"
                        ")",
-                       schema_with_ids.column_id(0),
-                       schema_with_ids.column_id(1),
-                       schema_with_ids.column_id(3)),
+                       schema_with_ids->column_id(0),
+                       schema_with_ids->column_id(1),
+                       schema_with_ids->column_id(3)),
             partial_schema.ToString());
 }
 
 TEST_F(TestSchema, TestFindColumn) {
-  Schema schema({ ColumnSchema("col1", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("col1", STRING),
                   ColumnSchema("col2", INT32) },
-                1);
+                1));
+  Schema& schema = *schema_ptr.get();
 
   int col_idx;
   ASSERT_OK(schema.FindColumn("col1", &col_idx));
@@ -674,7 +713,8 @@ TEST_F(TestSchema, TestFindColumn) {
 #ifdef NDEBUG
 TEST(TestKeyEncoder, BenchmarkSimpleKey) {
   faststring fs;
-  Schema schema({ ColumnSchema("col1", STRING) }, 1);
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("col1", STRING) }, 1));
+  Schema& schema = *schema_ptr.get();
 
   RowBuilder rb(&schema);
   rb.AddString(Slice("hello world"));

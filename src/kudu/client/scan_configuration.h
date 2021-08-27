@@ -114,7 +114,7 @@ class ScanConfiguration {
   //
   // The ScanConfiguration retains ownership of the projection.
   const Schema* projection() const {
-    return projection_;
+    return projection_.get();
   }
 
   // Returns the client projection schema.
@@ -202,7 +202,7 @@ class ScanConfiguration {
   KuduTable* table_;
 
   // Non-owned, non-null projection schema.
-  Schema* projection_;
+  SchemaRefPtr projection_;
 
   // Owned client projection.
   KuduSchema client_projection_;
@@ -231,9 +231,8 @@ class ScanConfiguration {
   // Manages interior allocations for the scan spec and copied bounds.
   Arena arena_;
 
-  // Two containers below are to manage objects which need to live
+  // The container below are to manage objects which need to live
   // for the lifetime of the configuration, such as schemas and predicates.
-  std::deque<std::unique_ptr<Schema>> schemas_pool_;
   std::deque<std::unique_ptr<KuduPredicate>> predicates_pool_;
 
   uint64_t row_format_flags_;

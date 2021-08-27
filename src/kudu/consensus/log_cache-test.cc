@@ -136,7 +136,7 @@ class LogCacheTest : public KuduTest {
     return Status::OK();
   }
 
-  const Schema schema_;
+  SchemaRefPtr schema_;
   MetricRegistry metric_registry_;
   scoped_refptr<MetricEntity> metric_entity_server_;
   scoped_refptr<MetricEntity> metric_entity_tablet_;

@@ -36,6 +36,7 @@
 #include "kudu/client/write_op.h"
 #include "kudu/common/common.pb.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/row_operations.pb.h"
 #include "kudu/common/wire_protocol-test-util.h"
 #include "kudu/common/wire_protocol.h"
@@ -282,7 +283,7 @@ void RaftConsensusITest::AddOpWithTypeAndKey(const OpId& id, int64_t base_ts,
   msg->set_timestamp(base_ts + id.index() * 10000 + id.term());
   msg->set_op_type(consensus::WRITE_OP);
   WriteRequestPB* write_req = msg->mutable_write_request();
-  CHECK_OK(SchemaToPB(schema_, write_req->mutable_schema()));
+  CHECK_OK(SchemaToPB(*schema_.get(), write_req->mutable_schema()));
   write_req->set_tablet_id(tablet_id_);
   AddTestRowToPB(op_type, schema_, key, id.term(),
                  SecureShortDebugString(id), write_req->mutable_row_operations());
@@ -376,7 +377,7 @@ void RaftConsensusITest::StubbornlyWriteSameRowThread(int replica_idx, const Ato
   WriteResponsePB resp;
   RpcController rpc;
   req.set_tablet_id(tablet_id_);
-  ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
   AddTestRowToPB(RowOperationsPB::INSERT, schema_, kTestRowKey, kTestRowIntVal,
                  "hello world", req.mutable_row_operations());
 
@@ -440,7 +441,7 @@ void RaftConsensusITest::Write128KOpsToLeader(int num_writes) {
 
   WriteRequestPB req;
   req.set_tablet_id(tablet_id_);
-  ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
   RowOperationsPB* data = req.mutable_row_operations();
   WriteResponsePB resp;
   RpcController rpc;
@@ -692,7 +693,7 @@ TEST_F(RaftConsensusITest, TestFailedOp) {
 
   WriteRequestPB req;
   req.set_tablet_id(tablet_id_);
-  ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
   RowOperationsPB* data = req.mutable_row_operations();
   data->set_rows("some gibberish!");
@@ -771,7 +772,7 @@ TEST_F(RaftConsensusITest, TestInsertOnNonLeader) {
   WriteResponsePB resp;
   RpcController rpc;
   req.set_tablet_id(tablet_id_);
-  ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
   AddTestRowToPB(RowOperationsPB::INSERT, schema_, kTestRowKey, kTestRowIntVal,
                  "hello world via RPC", req.mutable_row_operations());
 
@@ -1343,7 +1344,7 @@ TEST_F(RaftConsensusITest, TestReplicaBehaviorViaRPC) {
     NewScanRequestPB* scan = req.mutable_new_scan_request();
     scan->set_tablet_id(tablet_id_);
     scan->set_read_mode(READ_AT_SNAPSHOT);
-    ASSERT_OK(SchemaToColumnPBs(schema_, scan->mutable_projected_columns()));
+    ASSERT_OK(SchemaToColumnPBs(*schema_.get(), scan->mutable_projected_columns()));
 
     // Send the call. We expect to get a timeout passed back from the server side
     // (i.e. not an RPC timeout)
@@ -3134,7 +3135,7 @@ TEST_F(RaftConsensusITest, TestLeaderTransferWhenFollowerFallsBehindLeaderGC) {
   ASSERT_EVENTUALLY([&] {
     WriteRequestPB w_req;
     w_req.set_tablet_id(tablet_id_);
-    ASSERT_OK(SchemaToPB(schema_, w_req.mutable_schema()));
+    ASSERT_OK(SchemaToPB(*schema_.get(), w_req.mutable_schema()));
     AddTestRowToPB(RowOperationsPB::INSERT, schema_, kTestRowKey, kTestRowIntVal,
                    "hello world", w_req.mutable_row_operations());
     TServerDetails* leader_ts;

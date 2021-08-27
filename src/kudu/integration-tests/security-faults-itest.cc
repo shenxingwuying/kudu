@@ -32,6 +32,7 @@
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/client/write_op.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/schema.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/mini-cluster/external_mini_cluster.h"
 #include "kudu/security/test/mini_kdc.h"
@@ -120,7 +121,7 @@ class SecurityComponentsFaultsITest : public KuduTest {
     RETURN_NOT_OK(cluster_->CreateClient(nullptr, &client));
 
     // Create a table.
-    KuduSchema schema = KuduSchema::FromSchema(CreateKeyValueTestSchema());
+    KuduSchema schema = KuduSchema::FromSchema(*CreateKeyValueTestSchema().get());
     unique_ptr<KuduTableCreator> table_creator(client->NewTableCreator());
 
     RETURN_NOT_OK(table_creator->table_name(kTableName)

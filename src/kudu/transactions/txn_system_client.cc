@@ -70,6 +70,10 @@ TAG_FLAG(txn_system_client_op_timeout_ms, runtime);
 
 DECLARE_int64(rpc_negotiation_timeout_ms);
 
+namespace kudu {
+class Schema;
+} // namespace kudu
+
 using kudu::client::KuduClient;
 using kudu::client::KuduSchema;
 using kudu::client::KuduClientBuilder;
@@ -116,7 +120,8 @@ Status TxnSystemClient::CreateTxnStatusTableWithClient(int64_t initial_upper_bou
                                                        int num_replicas,
                                                        KuduClient* client) {
 
-  const auto& schema = TxnStatusTablet::GetSchema();
+  const auto& schema_ptr = TxnStatusTablet::GetSchema();
+  const Schema& schema = *schema_ptr.get();
   const auto kudu_schema = KuduSchema::FromSchema(schema);
 
   // Add range partitioning to the transaction status table with an initial
@@ -145,7 +150,8 @@ Status TxnSystemClient::CreateTxnStatusTableWithClient(int64_t initial_upper_bou
 
 Status TxnSystemClient::AddTxnStatusTableRangeWithClient(int64_t lower_bound, int64_t upper_bound,
                                                          KuduClient* client) {
-  const auto& schema = TxnStatusTablet::GetSchema();
+  const auto& schema_ptr = TxnStatusTablet::GetSchema();
+  const Schema& schema = *schema_ptr.get();
   unique_ptr<KuduPartialRow> lb(new KuduPartialRow(&schema));
   unique_ptr<KuduPartialRow> ub(new KuduPartialRow(&schema));
   RETURN_NOT_OK(lb->SetInt64(TxnStatusTablet::kTxnIdColName, lower_bound));
@@ -335,7 +341,7 @@ Status TxnSystemClient::CoordinateTransactionAsync(CoordinatorOpPB coordinate_tx
           /*tablet=*/nullptr
       }));
 
-  KuduPartialRow row(&TxnStatusTablet::GetSchema());
+  KuduPartialRow row(TxnStatusTablet::GetSchema().get());
   DCHECK(ctx->coordinate_txn_op.has_txn_id());
   RETURN_NOT_OK(row.SetInt64(TxnStatusTablet::kTxnIdColName,
                              ctx->coordinate_txn_op.txn_id()));

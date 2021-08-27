@@ -617,7 +617,8 @@ void EncodeStringKey(const Schema& schema,
 
 void TestCFile::TestReadWriteStrings(EncodingType encoding,
                                      std::function<string(size_t)> formatter) {
-  Schema schema({ ColumnSchema("key", STRING) }, 1);
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("key", STRING) }, 1));
+  Schema& schema = *schema_ptr.get();
 
   const int nrows = 10000;
   BlockId block_id;

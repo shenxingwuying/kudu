@@ -57,9 +57,9 @@ struct ExpectedKeyValueRow {
   }
 };
 
-inline Schema CreateKeyValueTestSchema() {
-  return Schema({ColumnSchema("key", INT32),
-                 ColumnSchema("val", INT32, true) }, 1);
+inline SchemaRefPtr CreateKeyValueTestSchema() {
+  return make_scoped_refptr(new Schema({ColumnSchema("key", INT32),
+                 ColumnSchema("val", INT32, true) }, 1));
 }
 
 inline std::ostream& operator<<(std::ostream& o, const ExpectedKeyValueRow& t) {

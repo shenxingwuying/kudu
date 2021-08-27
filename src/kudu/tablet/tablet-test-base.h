@@ -52,11 +52,11 @@ namespace tablet {
 // which can customize the schema for the tests. This way we can
 // get coverage on various schemas without duplicating test code.
 struct StringKeyTestSetup {
-  static Schema CreateSchema() {
-    return Schema({ ColumnSchema("key", STRING),
+  static SchemaRefPtr CreateSchema() {
+    return make_scoped_refptr(new Schema({ ColumnSchema("key", STRING),
                     ColumnSchema("key_idx", INT32),
                     ColumnSchema("val", INT32) },
-                  1);
+                  1));
   }
 
   void BuildRowKey(KuduPartialRow *row, int64_t key_idx) {
@@ -101,12 +101,12 @@ struct StringKeyTestSetup {
 
 // Setup for testing composite keys
 struct CompositeKeyTestSetup {
-  static Schema CreateSchema() {
-    return Schema({ ColumnSchema("key1", STRING),
+  static SchemaRefPtr CreateSchema() {
+    return make_scoped_refptr(new Schema({ ColumnSchema("key1", STRING),
                     ColumnSchema("key2", INT32),
                     ColumnSchema("key_idx", INT32),
                     ColumnSchema("val", INT32) },
-                  2);
+                  2));
   }
 
   // builds a row key from an existing row for updates
@@ -137,10 +137,10 @@ struct CompositeKeyTestSetup {
 // Setup for testing integer keys
 template<DataType Type>
 struct IntKeyTestSetup {
-  static Schema CreateSchema() {
-    return Schema({ ColumnSchema("key", Type),
+  static SchemaRefPtr CreateSchema() {
+    return make_scoped_refptr(new Schema({ ColumnSchema("key", Type),
                     ColumnSchema("key_idx", INT32),
-                    ColumnSchema("val", INT32) }, 1);
+                    ColumnSchema("val", INT32) }, 1));
   }
 
   void BuildRowKey(KuduPartialRow *row, int64_t i) {
@@ -244,10 +244,10 @@ std::string IntKeyTestSetup<INT64>::FormatDebugRow(int64_t key_idx, int32_t val,
 
 // Setup for testing nullable columns
 struct NullableValueTestSetup {
-  static Schema CreateSchema() {
-    return Schema({ ColumnSchema("key", INT32),
+  static SchemaRefPtr CreateSchema() {
+    return make_scoped_refptr(new Schema({ ColumnSchema("key", INT32),
                     ColumnSchema("key_idx", INT32),
-                    ColumnSchema("val", INT32, true) }, 1);
+                    ColumnSchema("val", INT32, true) }, 1));
   }
 
   void BuildRowKey(KuduPartialRow *row, int64_t i) {
@@ -339,7 +339,7 @@ class TabletTestBase : public KuduTabletTest {
 
   // Deletes 'count' rows, starting with 'first_row'.
   void DeleteTestRows(int64_t first_row, int64_t count) {
-    LocalTabletWriter writer(tablet().get(), &client_schema_);
+    LocalTabletWriter writer(tablet().get(), client_schema_.get());
     for (auto i = first_row; i < first_row + count; i++) {
       CHECK_OK(DeleteTestRow(&writer, i));
     }
@@ -350,8 +350,8 @@ class TabletTestBase : public KuduTabletTest {
                               int64_t count,
                               int32_t val,
                               TimeSeries *ts = nullptr) {
-    LocalTabletWriter writer(tablet().get(), &client_schema_);
-    KuduPartialRow row(&client_schema_);
+    LocalTabletWriter writer(tablet().get(), client_schema_.get());
+    KuduPartialRow row(client_schema_.get());
 
     uint64_t inserted_since_last_report = 0;
     for (int64_t i = first_row; i < first_row + count; i++) {
@@ -381,7 +381,7 @@ class TabletTestBase : public KuduTabletTest {
   Status InsertTestRow(LocalTabletWriter* writer,
                        int64_t key_idx,
                        int32_t val) {
-    KuduPartialRow row(&client_schema_);
+    KuduPartialRow row(client_schema_.get());
     setup_.BuildRow(&row, key_idx, val);
     return writer->Insert(row);
   }
@@ -392,12 +392,12 @@ class TabletTestBase : public KuduTabletTest {
                        int num_updates = 1) {
     std::vector<KuduPartialRow> rows;
     for (int i = 0; i < num_updates; i++) {
-      KuduPartialRow row(&client_schema_);
+      KuduPartialRow row(client_schema_.get());
       setup_.BuildRowKey(&row, key_idx);
 
       // Select the col to update (the third if there is only one key
       // or the fourth if there are two col keys).
-      int col_idx = schema_.num_key_columns() == 1 ? 2 : 3;
+      int col_idx = schema_->num_key_columns() == 1 ? 2 : 3;
       CHECK_OK(row.SetInt32(col_idx, new_val++));
       rows.emplace_back(std::move(row));
     }
@@ -411,25 +411,25 @@ class TabletTestBase : public KuduTabletTest {
 
   Status UpdateTestRowToNull(LocalTabletWriter* writer,
                              int64_t key_idx) {
-    KuduPartialRow row(&client_schema_);
+    KuduPartialRow row(client_schema_.get());
     setup_.BuildRowKey(&row, key_idx);
 
     // select the col to update (the third if there is only one key
     // or the fourth if there are two col keys).
-    int col_idx = schema_.num_key_columns() == 1 ? 2 : 3;
+    int col_idx = schema_->num_key_columns() == 1 ? 2 : 3;
     CHECK_OK(row.SetNull(col_idx));
     return writer->Update(row);
   }
 
   Status DeleteTestRow(LocalTabletWriter* writer, int64_t key_idx) {
-    KuduPartialRow row(&client_schema_);
+    KuduPartialRow row(client_schema_.get());
     setup_.BuildRowKey(&row, key_idx);
     return writer->Delete(row);
   }
 
   template <class RowType>
   void VerifyRow(const RowType& row, int32_t key_idx, int32_t val) {
-    ASSERT_EQ(setup_.FormatDebugRow(key_idx, val, false), schema_.DebugRow(row));
+    ASSERT_EQ(setup_.FormatDebugRow(key_idx, val, false), schema_->DebugRow(row));
   }
 
   void VerifyTestRows(int32_t first_row, uint64_t expected_count) {
@@ -447,7 +447,7 @@ class TabletTestBase : public KuduTabletTest {
                                               Timestamp timestamp,
                                               const boost::optional<TestRowVerifier>& verifier) {
     RowIteratorOptions opts;
-    opts.projection = &client_schema_;
+    opts.projection = client_schema_;
     opts.snap_to_include = MvccSnapshot(timestamp);
     std::unique_ptr<RowwiseIterator> iter;
     ASSERT_OK(tablet()->NewRowIterator(std::move(opts), &iter));
@@ -459,9 +459,9 @@ class TabletTestBase : public KuduTabletTest {
                                                 const boost::optional<TestRowVerifier>& verifier) {
     ASSERT_OK(iter->Init(nullptr));
     int batch_size = std::max<size_t>(1, std::min<size_t>(expected_row_count / 10,
-                                                          4L * 1024 * 1024 / schema_.byte_size()));
+                                                          4L * 1024 * 1024 / schema_->byte_size()));
     RowBlockMemory mem(32 * 1024);
-    RowBlock block(&schema_, batch_size, &mem);
+    RowBlock block(schema_.get(), batch_size, &mem);
 
     bool check_for_dups = true;
     if (expected_row_count > INT_MAX) {
@@ -482,22 +482,22 @@ class TabletTestBase : public KuduTabletTest {
 
       RowBlockRow rb_row = block.row(0);
       VLOG(2) << Substitute("Fetched batch of $0\nFirst row: $1",
-                            block.nrows(), schema_.DebugRow(rb_row));
+                            block.nrows(), schema_->DebugRow(rb_row));
 
       for (int i = 0; i < block.nrows(); i++) {
         rb_row.Reset(&block, i);
-        int32_t key_idx = *schema_.ExtractColumnFromRow<INT32>(rb_row, 1);
+        int32_t key_idx = *schema_->ExtractColumnFromRow<INT32>(rb_row, 1);
         if (key_idx >= first_row && block.selection_vector()->IsRowSelected(i)) {
           actual_row_count++;
           if (key_idx < first_row + expected_row_count) {
             size_t rel_idx = key_idx - first_row;
             if (check_for_dups && seen_rows[rel_idx]) {
               FAIL() << "Saw row " << key_idx << " twice!\n"
-                    << "Row: " << schema_.DebugRow(rb_row);
+                    << "Row: " << schema_->DebugRow(rb_row);
             }
             seen_rows[rel_idx] = true;
             if (verifier) {
-              int32_t val = *schema_.ExtractColumnFromRow<INT32>(rb_row, 2);
+              int32_t val = *schema_->ExtractColumnFromRow<INT32>(rb_row, 2);
               ASSERT_TRUE((*verifier)(key_idx, val))
                   << "Key index: " << key_idx << ", value: " << val;
             }

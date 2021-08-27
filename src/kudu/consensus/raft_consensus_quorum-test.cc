@@ -572,7 +572,7 @@ class RaftConsensusQuorumTest : public KuduTest {
   clock::LogicalClock clock_;
   MetricRegistry metric_registry_;
   scoped_refptr<MetricEntity> metric_entity_;
-  const Schema schema_;
+  SchemaRefPtr schema_;
   std::unordered_map<ConsensusRound*, unique_ptr<Synchronizer>> syncs_;
 };
 

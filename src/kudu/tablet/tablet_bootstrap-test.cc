@@ -35,11 +35,11 @@
 #include "kudu/common/partial_row.h"
 #include "kudu/common/partition.h"
 #include "kudu/common/row_operations.h"
+#include "kudu/common/row_operations.pb.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/timestamp.h"
 #include "kudu/common/wire_protocol-test-util.h"
 #include "kudu/common/wire_protocol.h"
-#include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/consensus-test-util.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/consensus_meta.h"
@@ -105,14 +105,14 @@ class BootstrapTest : public LogTestBase {
   }
 
   Status LoadTestTabletMetadata(int mrs_id, int delta_id, scoped_refptr<TabletMetadata>* meta) {
-    Schema schema = SchemaBuilder(schema_).Build();
-    std::pair<PartitionSchema, Partition> partition = CreateDefaultPartition(schema);
+    SchemaRefPtr schema_ptr = SchemaBuilder(*schema_.get()).Build();
+    std::pair<PartitionSchema, Partition> partition = CreateDefaultPartition(schema_ptr);
 
     RETURN_NOT_OK(TabletMetadata::LoadOrCreate(fs_manager_.get(),
                                                log::kTestTablet,
                                                log::kTestTable,
                                                log::kTestTableId,
-                                               schema,
+                                               schema_ptr,
                                                partition.first,
                                                partition.second,
                                                TABLET_DATA_READY,
@@ -198,7 +198,7 @@ class BootstrapTest : public LogTestBase {
                          vector<string>* results) {
     unique_ptr<RowwiseIterator> iter;
     RowIteratorOptions opts;
-    opts.projection = &schema_;
+    opts.projection = schema_;
     ASSERT_OK(tablet->NewRowIterator(std::move(opts), &iter));
     ASSERT_OK(iter->Init(nullptr));
     ASSERT_OK(IterateToStringList(iter.get(), results));
@@ -505,7 +505,7 @@ TEST_F(BootstrapTest, TestOutOfOrderCommits) {
       new consensus::ReplicateMsg());
   replicate->get()->set_op_type(consensus::WRITE_OP);
   tserver::WriteRequestPB* batch_request = replicate->get()->mutable_write_request();
-  ASSERT_OK(SchemaToPB(schema_, batch_request->mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), batch_request->mutable_schema()));
   batch_request->set_tablet_id(log::kTestTablet);
 
   // This appends Insert(1) with op 10.10
@@ -569,7 +569,7 @@ TEST_F(BootstrapTest, TestMissingCommitMessage) {
       new consensus::ReplicateMsg());
   replicate->get()->set_op_type(consensus::WRITE_OP);
   tserver::WriteRequestPB* batch_request = replicate->get()->mutable_write_request();
-  ASSERT_OK(SchemaToPB(schema_, batch_request->mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), batch_request->mutable_schema()));
   batch_request->set_tablet_id(log::kTestTablet);
 
   // This appends Insert(1) with op 10.10
@@ -632,7 +632,7 @@ TEST_F(BootstrapTest, TestConsensusOnlyOperationOutOfOrderTimestamp) {
   ReplicateRefPtr write_replicate = make_scoped_refptr_replicate(new ReplicateMsg());
   write_replicate->get()->set_op_type(consensus::WRITE_OP);
   WriteRequestPB* batch_request = write_replicate->get()->mutable_write_request();
-  ASSERT_OK(SchemaToPB(schema_, batch_request->mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), batch_request->mutable_schema()));
   batch_request->set_tablet_id(log::kTestTablet);
   *write_replicate->get()->mutable_id() = MakeOpId(1, 2);
   write_replicate->get()->set_timestamp(1);
@@ -682,7 +682,7 @@ TEST_F(BootstrapTest, TestKudu2509) {
       new consensus::ReplicateMsg());
   replicate->get()->set_op_type(consensus::WRITE_OP);
   tserver::WriteRequestPB* batch_request = replicate->get()->mutable_write_request();
-  ASSERT_OK(SchemaToPB(schema_, batch_request->mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), batch_request->mutable_schema()));
   batch_request->set_tablet_id(log::kTestTablet);
 
   // This appends Insert(1) with op 10.10
@@ -702,12 +702,12 @@ TEST_F(BootstrapTest, TestKudu2509) {
   replicate->get()->set_timestamp(clock_->Now().ToUint64());
   {
     // Modify the existing schema to add an extra row.
-    SchemaBuilder builder(schema_);
+    SchemaBuilder builder(*schema_.get());
     ASSERT_OK(builder.AddNullableColumn("string_val_extra", STRING));
     const auto schema = builder.BuildWithoutIds();
-    ASSERT_OK(SchemaToPB(schema, batch_request->mutable_schema()));
+    ASSERT_OK(SchemaToPB(*schema.get(), batch_request->mutable_schema()));
 
-    KuduPartialRow row(&schema);
+    KuduPartialRow row(schema.get());
     ASSERT_OK(row.SetInt32("key", 100));
     ASSERT_OK(row.SetInt32("int_val", 200));
     ASSERT_OK(row.SetStringCopy("string_val", "300"));

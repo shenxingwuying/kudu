@@ -39,6 +39,7 @@
 #include "kudu/common/types.h"
 #include "kudu/common/wire_protocol.h"
 #include "kudu/gutil/port.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/tablet/ops/op.h"
 #include "kudu/tablet/ops/write_op.h"
@@ -76,7 +77,8 @@ int kMetadataColIdx = -1;
 Status InitTxnStatusColIdxs() {
   static KuduOnceLambda col_idx_initializer;
   return col_idx_initializer.Init([] {
-    const auto& schema = TxnStatusTablet::GetSchemaWithoutIds();
+    const auto& schema_ptr = TxnStatusTablet::GetSchemaWithoutIds();
+    const Schema& schema = *schema_ptr.get();
     kTxnIdColIdx = schema.find_column(TxnStatusTablet::kTxnIdColName);
     kEntryTypeColIdx = schema.find_column(TxnStatusTablet::kEntryTypeColName);
     kIdentifierColIdx = schema.find_column(TxnStatusTablet::kIdentifierColName);
@@ -103,8 +105,8 @@ int MetadataColIdx() {
   return kMetadataColIdx;
 }
 
-Schema kTxnStatusSchema;
-Schema kTxnStatusSchemaNoIds;
+SchemaRefPtr kTxnStatusSchemaPtr(nullptr);
+SchemaRefPtr kTxnStatusSchemaNoIdsPtr(nullptr);
 // Populates the schema of the transaction status table.
 Status PopulateTxnStatusSchema(SchemaBuilder* builder) {
   RETURN_NOT_OK(builder->AddKeyColumn(TxnStatusTablet::kTxnIdColName, INT64));
@@ -118,7 +120,7 @@ Status InitTxnStatusSchemaOnce() {
   return schema_initializer.Init([] {
     SchemaBuilder builder;
     RETURN_NOT_OK(PopulateTxnStatusSchema(&builder));
-    kTxnStatusSchema = builder.Build();
+    kTxnStatusSchemaPtr = builder.Build();
     return Status::OK();
   });
 }
@@ -127,7 +129,7 @@ Status InitTxnStatusSchemaWithNoIdsOnce() {
   return schema_initializer.Init([] {
     SchemaBuilder builder;
     RETURN_NOT_OK(PopulateTxnStatusSchema(&builder));
-    kTxnStatusSchemaNoIds = builder.BuildWithoutIds();
+    kTxnStatusSchemaNoIdsPtr = builder.BuildWithoutIds();
     return Status::OK();
   });
 }
@@ -137,7 +139,7 @@ WriteRequestPB kTxnStatusWriteReqPB;
 Status InitWriteRequestPBOnce() {
   static KuduOnceLambda write_initializer;
   return write_initializer.Init([] {
-    return SchemaToPB(TxnStatusTablet::GetSchemaWithoutIds(),
+    return SchemaToPB(*TxnStatusTablet::GetSchemaWithoutIds().get(),
                       kTxnStatusWriteReqPB.mutable_schema());
   });
 }
@@ -152,7 +154,8 @@ WriteRequestPB BuildWriteReqPB(const string& tablet_id) {
 
 // Return the values of the keys of the given transaction status tablet row.
 void ExtractKeys(const RowBlockRow& row, int64_t* txn_id, int8_t* entry_type, Slice* identifier) {
-  const auto& schema = TxnStatusTablet::GetSchemaWithoutIds();
+  const auto& schema_ptr = TxnStatusTablet::GetSchemaWithoutIds();
+  const Schema& schema = *schema_ptr.get();
   *txn_id = *schema.ExtractColumnFromRow<INT64>(row, TxnIdColIdx());
   *entry_type = *schema.ExtractColumnFromRow<INT8>(row, EntryTypeColIdx());
   *identifier = *schema.ExtractColumnFromRow<STRING>(row, IdentifierColIdx());
@@ -160,7 +163,8 @@ void ExtractKeys(const RowBlockRow& row, int64_t* txn_id, int8_t* entry_type, Sl
 
 template <typename T>
 Status ExtractMetadataEntry(const RowBlockRow& row, T* pb) {
-  const auto& schema = TxnStatusTablet::GetSchemaWithoutIds();
+  const auto& schema_ptr = TxnStatusTablet::GetSchemaWithoutIds();
+  const Schema& schema = *schema_ptr.get();
   const Slice* entry = schema.ExtractColumnFromRow<STRING>(row, MetadataColIdx());
   Status s = pb_util::ParseFromArray(pb, entry->data(), entry->size());
   if (PREDICT_FALSE(!s.ok())) {
@@ -204,17 +208,19 @@ TxnStatusTablet::TxnStatusTablet(tablet::TabletReplica* tablet_replica)
   CHECK_OK(InitTxnStatusColIdxs());
 }
 
-const Schema& TxnStatusTablet::GetSchema() {
+const SchemaRefPtr& TxnStatusTablet::GetSchema() {
   CHECK_OK(InitTxnStatusSchemaOnce());
-  return kTxnStatusSchema;
+  return kTxnStatusSchemaPtr;
 }
-const Schema& TxnStatusTablet::GetSchemaWithoutIds() {
+const SchemaRefPtr& TxnStatusTablet::GetSchemaWithoutIds() {
   CHECK_OK(InitTxnStatusSchemaWithNoIdsOnce());
-  return kTxnStatusSchemaNoIds;
+  return kTxnStatusSchemaNoIdsPtr;
 }
 
 Status TxnStatusTablet::VisitTransactions(TransactionsVisitor* visitor) {
-  const auto& schema = GetSchemaWithoutIds();
+  const SchemaRefPtr& schema_ptr = GetSchemaWithoutIds();
+  const Schema& schema = *schema_ptr.get();
+
   // There are only TRANSACTION and PARTICIPANT entries today, but this filter
   // is conservative in case we add more entry types in the future.
   faststring record_types;
@@ -226,7 +232,7 @@ Status TxnStatusTablet::VisitTransactions(TransactionsVisitor* visitor) {
   ScanSpec spec;
   spec.AddPredicate(pred);
   unique_ptr<RowwiseIterator> iter;
-  RETURN_NOT_OK(tablet_replica_->tablet()->NewOrderedRowIterator(schema, &iter));
+  RETURN_NOT_OK(tablet_replica_->tablet()->NewOrderedRowIterator(schema_ptr, &iter));
   RETURN_NOT_OK(iter->Init(&spec));
 
   // Keep track of the current transaction ID so we know when to start a new
@@ -235,7 +241,7 @@ Status TxnStatusTablet::VisitTransactions(TransactionsVisitor* visitor) {
   TxnStatusEntryPB prev_status_entry_pb;
   vector<ParticipantIdAndPB> prev_participants;
   RowBlockMemory mem;
-  RowBlock block(&iter->schema(), 512, &mem);
+  RowBlock block(iter->schema().get(), 512, &mem);
   // Iterate over the transaction and participant entries, notifying the
   // visitor once a transaction and all its participants have been found.
   while (iter->HasNext()) {
@@ -308,7 +314,7 @@ Status TxnStatusTablet::AddNewTransaction(int64_t txn_id, const string& user,
   faststring metadata_buf;
   pb_util::SerializeToString(entry, &metadata_buf);
 
-  KuduPartialRow row(&GetSchemaWithoutIds());
+  KuduPartialRow row(GetSchemaWithoutIds().get());
   RETURN_NOT_OK(PopulateTransactionEntryRow(txn_id, metadata_buf, &row));
   RowOperationsPBEncoder enc(req.mutable_row_operations());
   enc.Add(RowOperationsPB::INSERT_IGNORE, row);
@@ -322,7 +328,7 @@ Status TxnStatusTablet::UpdateTransaction(int64_t txn_id, const TxnStatusEntryPB
   faststring metadata_buf;
   pb_util::SerializeToString(pb, &metadata_buf);
 
-  KuduPartialRow row(&GetSchemaWithoutIds());
+  KuduPartialRow row(GetSchemaWithoutIds().get());
   RETURN_NOT_OK(PopulateTransactionEntryRow(txn_id, metadata_buf, &row));
   RowOperationsPBEncoder enc(req.mutable_row_operations());
   enc.Add(RowOperationsPB::UPDATE, row);
@@ -338,7 +344,7 @@ Status TxnStatusTablet::AddNewParticipant(int64_t txn_id, const string& tablet_i
   faststring metadata_buf;
   pb_util::SerializeToString(entry, &metadata_buf);
 
-  KuduPartialRow row(&TxnStatusTablet::GetSchemaWithoutIds());
+  KuduPartialRow row(TxnStatusTablet::GetSchemaWithoutIds().get());
   PopulateParticipantEntryRow(txn_id, tablet_id, metadata_buf, &row);
   RowOperationsPBEncoder enc(req.mutable_row_operations());
   enc.Add(RowOperationsPB::INSERT_IGNORE, row);
@@ -353,7 +359,7 @@ Status TxnStatusTablet::UpdateParticipant(int64_t txn_id, const string& tablet_i
   faststring metadata_buf;
   pb_util::SerializeToString(pb, &metadata_buf);
 
-  KuduPartialRow row(&GetSchemaWithoutIds());
+  KuduPartialRow row(GetSchemaWithoutIds().get());
   RETURN_NOT_OK(PopulateParticipantEntryRow(txn_id, tablet_id, metadata_buf, &row));
   RowOperationsPBEncoder enc(req.mutable_row_operations());
   enc.Add(RowOperationsPB::UPDATE, row);

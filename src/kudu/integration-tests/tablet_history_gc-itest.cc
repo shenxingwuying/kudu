@@ -557,25 +557,25 @@ class ReupdateHooks : public Tablet::FlushCompactCommonHooks {
  public:
   ReupdateHooks(Tablet* tablet, const Schema& schema)
       : tablet_(tablet),
-        client_schema_(schema) {
+        client_schema_(new Schema(schema)) {
   }
 
   Status PostWriteSnapshot() OVERRIDE {
-    tablet::LocalTabletWriter writer(tablet_, &client_schema_);
+    tablet::LocalTabletWriter writer(tablet_, client_schema_.get());
     for (const MaterializedTestRow& update : updates_) {
-      KuduPartialRow row(&client_schema_);
+      KuduPartialRow row(client_schema_.get());
       CHECK_OK(row.SetInt32(0, update.key));
       CHECK_OK(row.SetInt32(1, update.int_val));
       CHECK_OK(row.SetStringCopy(2, update.string_val));
       CHECK_OK(writer.Update(row));
     }
     for (int32_t row_key : deletes_) {
-      KuduPartialRow row(&client_schema_);
+      KuduPartialRow row(client_schema_.get());
       CHECK_OK(row.SetInt32(0, row_key));
       CHECK_OK(writer.Delete(row));
     }
     for (const MaterializedTestRow& reinsert : reinserts_) {
-      KuduPartialRow row(&client_schema_);
+      KuduPartialRow row(client_schema_.get());
       CHECK_OK(row.SetInt32(0, reinsert.key));
       CHECK_OK(row.SetInt32(1, reinsert.int_val));
       CHECK_OK(row.SetStringCopy(2, reinsert.string_val));
@@ -604,7 +604,7 @@ class ReupdateHooks : public Tablet::FlushCompactCommonHooks {
 
  private:
   Tablet* const tablet_;
-  const Schema client_schema_;
+  const SchemaRefPtr client_schema_;
 
   vector<MaterializedTestRow> updates_;
   vector<int32_t> deletes_;
@@ -735,7 +735,7 @@ TEST_F(RandomizedTabletHistoryGcITest, TestRandomHistoryGCWorkload) {
 
         if (force_reupdate_missed_deltas) {
           std::shared_ptr<ReupdateHooks> hooks =
-              std::make_shared<ReupdateHooks>(tablet, GetSimpleTestSchema());
+              std::make_shared<ReupdateHooks>(tablet, *GetSimpleTestSchema().get());
           hooks->set_updates(std::move(updates));
           tablet->SetFlushCompactCommonHooksForTests(hooks);
           ASSERT_OK(tablet->Compact(Tablet::FORCE_COMPACT_ALL));
@@ -796,7 +796,7 @@ TEST_F(RandomizedTabletHistoryGcITest, TestRandomHistoryGCWorkload) {
 
         if (force_reupdate_missed_deltas) {
           std::shared_ptr<ReupdateHooks> hooks =
-              std::make_shared<ReupdateHooks>(tablet, GetSimpleTestSchema());
+              std::make_shared<ReupdateHooks>(tablet, *GetSimpleTestSchema().get());
           hooks->set_deletes(std::move(deletes));
           tablet->SetFlushCompactCommonHooksForTests(hooks);
           ASSERT_OK(tablet->Compact(Tablet::FORCE_COMPACT_ALL));
@@ -865,7 +865,7 @@ TEST_F(RandomizedTabletHistoryGcITest, TestRandomHistoryGCWorkload) {
 
         if (force_reupdate_missed_deltas) {
           std::shared_ptr<ReupdateHooks> hooks =
-              std::make_shared<ReupdateHooks>(tablet, GetSimpleTestSchema());
+              std::make_shared<ReupdateHooks>(tablet, *GetSimpleTestSchema().get());
           hooks->set_reinserts(std::move(reinserts));
           tablet->SetFlushCompactCommonHooksForTests(hooks);
           ASSERT_OK(tablet->Compact(Tablet::FORCE_COMPACT_ALL));

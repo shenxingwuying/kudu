@@ -81,9 +81,9 @@ void CheckCreateRangePartitions(const vector<pair<optional<string>, optional<str
   CHECK_EQ(std::max(raw_bounds.size(), 1UL) + raw_splits.size(), expected_partition_ranges.size());
 
   // CREATE TABLE t (col STRING PRIMARY KEY),
-  // PARTITION BY RANGE (col);
-  Schema schema({ ColumnSchema("col", STRING) }, { ColumnId(0) }, 1);
-
+  // PARITITION BY RANGE (col);
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("col", STRING) }, { ColumnId(0) }, 1));
+  Schema& schema = *schema_ptr.get();
   PartitionSchema partition_schema;
   ASSERT_OK(PartitionSchema::FromPB(PartitionSchemaPB(), schema, &partition_schema));
 
@@ -112,7 +112,7 @@ void CheckCreateRangePartitions(const vector<pair<optional<string>, optional<str
   }
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions(splits, bounds, {}, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions(splits, bounds, {}, schema_ptr, &partitions));
   ASSERT_EQ(expected_partition_ranges.size(), partitions.size());
 
   for (int i = 0; i < partitions.size(); i++) {
@@ -143,10 +143,11 @@ TEST_F(PartitionTest, TestCompoundRangeKeyEncoding) {
   // CREATE TABLE t (c1 STRING, c2 STRING, c3 STRING),
   // PRIMARY KEY (c1, c2, c3)
   // PARTITION BY RANGE (c1, c2, c3);
-  Schema schema({ ColumnSchema("c1", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("c1", STRING),
                   ColumnSchema("c2", STRING),
                   ColumnSchema("c3", STRING) },
-                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
+                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB schema_builder;
   PartitionSchema partition_schema;
@@ -188,7 +189,7 @@ TEST_F(PartitionTest, TestCompoundRangeKeyEncoding) {
   }
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions(splits, bounds, {}, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions(splits, bounds, {}, schema_ptr, &partitions));
   ASSERT_EQ(4, partitions.size());
 
   EXPECT_TRUE(partitions[0].hash_buckets().empty());
@@ -206,10 +207,11 @@ TEST_F(PartitionTest, TestCompoundRangeKeyEncoding) {
 TEST_F(PartitionTest, PartitionKeyEncoding) {
   // CREATE TABLE t (a INT32, b VARCHAR, c VARCHAR, PRIMARY KEY (a, b, c))
   // PARTITION BY [HASH BUCKET (a, b), HASH BUCKET (c), RANGE (a, b, c)];
-  Schema schema({ ColumnSchema("a", INT32),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", INT32),
                   ColumnSchema("b", STRING),
                   ColumnSchema("c", STRING) },
-                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
+                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB schema_builder;
   AddHashDimension(&schema_builder, { "a", "b" }, 32, 0);
@@ -457,7 +459,8 @@ TEST_F(PartitionTest, TestCreateRangePartitions) {
 TEST_F(PartitionTest, TestCreateHashPartitions) {
   // CREATE TABLE t (a VARCHAR PRIMARY KEY),
   // PARTITION BY [HASH BUCKET (a)];
-  Schema schema({ ColumnSchema("a", STRING) }, { ColumnId(0) }, 1);
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", STRING) }, { ColumnId(0) }, 1));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB schema_builder;
   SetRangePartitionComponent(&schema_builder, vector<string>());
@@ -475,7 +478,7 @@ TEST_F(PartitionTest, TestCreateHashPartitions) {
 
   vector<Partition> partitions;
   ASSERT_OK(
-      partition_schema.CreatePartitions(vector<KuduPartialRow>(), {}, {}, schema, &partitions));
+      partition_schema.CreatePartitions(vector<KuduPartialRow>(), {}, {}, schema_ptr, &partitions));
   ASSERT_EQ(3, partitions.size());
 
   EXPECT_EQ(0, partitions[0].hash_buckets()[0]);
@@ -511,10 +514,11 @@ TEST_F(PartitionTest, TestCreatePartitions) {
 
   // CREATE TABLE t (a VARCHAR, b VARCHAR, c VARCHAR, PRIMARY KEY (a, b, c))
   // PARTITION BY [HASH BUCKET (a), HASH BUCKET (b), RANGE (a, b, c)];
-  Schema schema({ ColumnSchema("a", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", STRING),
                   ColumnSchema("b", STRING),
                   ColumnSchema("c", STRING) },
-                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
+                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB schema_builder;
   AddHashDimension(&schema_builder, { "a" }, 2, 0);
@@ -564,7 +568,7 @@ TEST_F(PartitionTest, TestCreatePartitions) {
   // Split keys need not be passed in sorted order.
   vector<KuduPartialRow> split_rows = { split_b, split_a };
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions(split_rows, {}, {}, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions(split_rows, {}, {}, schema_ptr, &partitions));
   ASSERT_EQ(12, partitions.size());
 
   EXPECT_EQ(0, partitions[0].hash_buckets()[0]);
@@ -698,10 +702,11 @@ TEST_F(PartitionTest, TestCreatePartitions) {
 TEST_F(PartitionTest, TestIncrementRangePartitionBounds) {
   // CREATE TABLE t (a INT8, b INT8, c INT8, PRIMARY KEY (a, b, c))
   // PARTITION BY RANGE (a, b, c);
-  Schema schema({ ColumnSchema("c1", INT8),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("c1", INT8),
                   ColumnSchema("c2", INT8),
                   ColumnSchema("c3", INT8) },
-                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
+                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB schema_builder;
   PartitionSchema partition_schema;
@@ -791,9 +796,10 @@ TEST_F(PartitionTest, TestIncrementRangePartitionBounds) {
 TEST_F(PartitionTest, TestIncrementRangePartitionStringBounds) {
   // CREATE TABLE t (a STRING, b STRING, PRIMARY KEY (a, b))
   // PARTITION BY RANGE (a, b, c);
-  Schema schema({ ColumnSchema("c1", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("c1", STRING),
                   ColumnSchema("c2", STRING) },
-                { ColumnId(0), ColumnId(1) }, 2);
+                { ColumnId(0), ColumnId(1) }, 2));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB schema_builder;
   PartitionSchema partition_schema;
@@ -843,11 +849,12 @@ TEST_F(PartitionTest, TestIncrementRangePartitionStringBounds) {
 }
 
 TEST_F(PartitionTest, TestVarcharRangePartitions) {
-  Schema schema({ ColumnSchema("c1", VARCHAR, false, nullptr, nullptr,
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("c1", VARCHAR, false, nullptr, nullptr,
                                ColumnStorageAttributes(), ColumnTypeAttributes(10)),
                   ColumnSchema("c2", VARCHAR, false, nullptr, nullptr,
                                ColumnStorageAttributes(), ColumnTypeAttributes(10)) },
-                  { ColumnId(0), ColumnId(1) }, 2);
+                  { ColumnId(0), ColumnId(1) }, 2));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB schema_builder;
   PartitionSchema partition_schema;
@@ -917,10 +924,11 @@ void CheckSerializationFunctions(const PartitionSchemaPB& pb,
 TEST_F(PartitionTest, TestVaryingHashSchemasPerRange) {
   // CREATE TABLE t (a VARCHAR, b VARCHAR, c VARCHAR, PRIMARY KEY (a, b, c))
   // PARTITION BY [HASH BUCKET (a, c), HASH BUCKET (b), RANGE (a, b, c)];
-  Schema schema({ ColumnSchema("a", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", STRING),
                   ColumnSchema("b", STRING),
                   ColumnSchema("c", STRING) },
-                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
+                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB schema_builder;
   // Table-wide hash schema defined below, 3 by 2 buckets so 6 total.
@@ -1147,7 +1155,7 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerRange) {
 
   vector<Partition> partitions;
   ASSERT_OK(partition_schema.CreatePartitions(
-      {}, bounds, range_hash_schemas, schema, &partitions));
+      {}, bounds, range_hash_schemas, schema_ptr, &partitions));
   NO_FATALS(check_partitions(partitions));
 
   bounds.clear();
@@ -1165,7 +1173,7 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerRange) {
   }
 
   ASSERT_OK(partition_schema.CreatePartitions(
-      {}, bounds, range_hash_schemas, schema, &partitions));
+      {}, bounds, range_hash_schemas, schema_ptr, &partitions));
   NO_FATALS(check_partitions(partitions));
 
   // Not clearing bounds or range_hash_schemas, adding a split row to test
@@ -1182,7 +1190,7 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerRange) {
   // 'range_hash_schemas' being defined at the same time.
   {
     const auto s = partition_schema.CreatePartitions(
-        splits, bounds, range_hash_schemas, schema, &partitions);
+        splits, bounds, range_hash_schemas, schema_ptr, &partitions);
     ASSERT_TRUE(s.IsInvalidArgument()) << s.ToString();
     ASSERT_STR_CONTAINS(s.ToString(),
                         "Both 'split_rows' and 'range_hash_schemas' "
@@ -1195,7 +1203,7 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerRange) {
   {
     range_hash_schemas.push_back({});
     const auto s = partition_schema.CreatePartitions(
-        {}, bounds, range_hash_schemas, schema, &partitions);
+        {}, bounds, range_hash_schemas, schema_ptr, &partitions);
     ASSERT_TRUE(s.IsInvalidArgument()) << s.ToString();
     ASSERT_STR_CONTAINS(s.ToString(),
                         "4 vs 3: per range hash schemas and range bounds "
@@ -1205,8 +1213,9 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerRange) {
 
 TEST_F(PartitionTest, CustomHashSchemasPerRangeOnly) {
   // CREATE TABLE t (a STRING, b STRING, PRIMARY KEY (a, b)) RANGE (a, b)
-  Schema schema({ ColumnSchema("a", STRING), ColumnSchema("b", STRING) },
-                { ColumnId(0), ColumnId(1) }, 2);
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", STRING), ColumnSchema("b", STRING) },
+                { ColumnId(0), ColumnId(1) }, 2));
+  Schema& schema = *schema_ptr.get();
 
   // No table-wide hash bucket schema.
   PartitionSchemaPB schema_builder;
@@ -1241,7 +1250,7 @@ TEST_F(PartitionTest, CustomHashSchemasPerRangeOnly) {
 
   vector<Partition> partitions;
   ASSERT_OK(partition_schema.CreatePartitions(
-      {}, bounds, range_hash_schemas, schema, &partitions));
+      {}, bounds, range_hash_schemas, schema_ptr, &partitions));
 
   ASSERT_EQ(2, partitions.size());
 
@@ -1265,10 +1274,11 @@ TEST_F(PartitionTest, CustomHashSchemasPerRangeOnly) {
 TEST_F(PartitionTest, TestVaryingHashSchemasPerUnboundedRanges) {
   // CREATE TABLE t (a VARCHAR, b VARCHAR, c VARCHAR, PRIMARY KEY (a, b, c))
   // PARTITION BY [HASH BUCKET (b), RANGE (a, b, c)];
-  Schema schema({ ColumnSchema("a", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", STRING),
                   ColumnSchema("b", STRING),
                   ColumnSchema("c", STRING) },
-                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
+                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB schema_builder;
   // Table-wide hash schema defined below.
@@ -1318,7 +1328,8 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerUnboundedRanges) {
   }
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions({}, bounds, range_hash_schemas, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions({}, bounds, range_hash_schemas,
+                                              schema_ptr, &partitions));
   ASSERT_EQ(11, partitions.size());
   // Partitions below sorted by range, can verify that the partition keyspace is filled by checking
   // that the start key of the first partition and the end key of the last partition is cleared.
@@ -1409,9 +1420,10 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerUnboundedRanges) {
 TEST_F(PartitionTest, NoHashSchemasForLastUnboundedRange) {
   // CREATE TABLE t (a VARCHAR, b VARCHAR, PRIMARY KEY (a, b))
   // PARTITION BY [HASH BUCKET (b), RANGE (a, b)];
-  Schema schema({ ColumnSchema("a", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", STRING),
                   ColumnSchema("b", STRING) },
-                { ColumnId(0), ColumnId(1) }, 2);
+                { ColumnId(0), ColumnId(1) }, 2));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB schema_builder;
   // Table-wide hash schema defined below.
@@ -1461,7 +1473,7 @@ TEST_F(PartitionTest, NoHashSchemasForLastUnboundedRange) {
 
   vector<Partition> partitions;
   ASSERT_OK(partition_schema.CreatePartitions(
-      {}, bounds, range_hash_schemas, schema, &partitions));
+      {}, bounds, range_hash_schemas, schema_ptr, &partitions));
   ASSERT_EQ(10, partitions.size());
 
   {
@@ -1564,10 +1576,11 @@ TEST_F(PartitionTest, NoHashSchemasForLastUnboundedRange) {
 TEST_F(PartitionTest, TestPartitionSchemaPB) {
   // CREATE TABLE t (a VARCHAR, b VARCHAR, c VARCHAR, PRIMARY KEY (a, b, c))
   // PARTITION BY [HASH BUCKET (b), RANGE (a, b, c)];
-  Schema schema({ ColumnSchema("a", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", STRING),
                   ColumnSchema("b", STRING),
                   ColumnSchema("c", STRING) },
-                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
+                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB pb;
   // Table-wide hash schema defined below.
@@ -1674,10 +1687,11 @@ TEST_F(PartitionTest, TestPartitionSchemaPB) {
 TEST_F(PartitionTest, TestMalformedPartitionSchemaPB) {
   // CREATE TABLE t (a VARCHAR, b VARCHAR, c VARCHAR, PRIMARY KEY (a, b, c))
   // PARTITION BY [RANGE (a, b, c)];
-  Schema schema({ ColumnSchema("a", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", STRING),
                   ColumnSchema("b", STRING),
                   ColumnSchema("c", STRING) },
-                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
+                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3));
+  Schema& schema = *schema_ptr.get();
 
   // Testing that only a pair of range bounds is allowed.
   {
@@ -1742,10 +1756,11 @@ TEST_F(PartitionTest, TestMalformedPartitionSchemaPB) {
 TEST_F(PartitionTest, TestOverloadedEqualsOperator) {
   // CREATE TABLE t (a VARCHAR, b VARCHAR, c VARCHAR, PRIMARY KEY (a, b, c))
   // PARTITION BY [RANGE (a, b, c)];
-  Schema schema({ ColumnSchema("a", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", STRING),
                   ColumnSchema("b", STRING),
                   ColumnSchema("c", STRING) },
-                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
+                { ColumnId(0), ColumnId(1), ColumnId(2) }, 3));
+  Schema& schema = *schema_ptr.get();
 
   PartitionSchemaPB schema_builder;
   PartitionSchema partition_schema;
@@ -1847,10 +1862,12 @@ TEST_F(PartitionTest, TestOverloadedEqualsOperator) {
 // A test scenario to verify functionality of the
 // PartitionSchema::HasCustomHashSchemas() method.
 TEST_F(PartitionTest, HasCustomHashSchemasMethod) {
-  const Schema schema({ ColumnSchema("a", STRING),
+  const SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("a", STRING),
                         ColumnSchema("b", STRING),
                         ColumnSchema("c", STRING) },
-                      { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
+                      { ColumnId(0), ColumnId(1), ColumnId(2) }, 3));
+  Schema& schema = *schema_ptr.get();
+
 
   // No hash schema (even table-wide) case.
   {

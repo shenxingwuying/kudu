@@ -34,6 +34,7 @@
 #include "kudu/client/schema.h"
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/client/write_op.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/partial_row.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/consensus.proxy.h"
@@ -119,7 +120,7 @@ class CatalogManagerTskITest : public KuduTest {
     ASSERT_OK(cluster_->CreateClient(&builder, &client));
 
     // Create a table.
-    auto schema = KuduSchema::FromSchema(CreateKeyValueTestSchema());
+    auto schema = KuduSchema::FromSchema(*CreateKeyValueTestSchema().get());
     unique_ptr<KuduTableCreator> table_creator(client->NewTableCreator());
 
     ASSERT_OK(table_creator->table_name(kTableName)

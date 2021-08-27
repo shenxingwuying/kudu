@@ -42,6 +42,7 @@
 #include "kudu/common/schema.h"
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/gutil/map-util.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/rebalance/cluster_status.h"
 #include "kudu/server/server_base.pb.h"
@@ -396,14 +397,14 @@ class KsckTest : public KuduTest {
   shared_ptr<KsckTable> CreateAndAddTxnStatusTable(int num_replicas) {
     auto table(make_shared<KsckTable>(
         TxnStatusTablet::kTxnStatusTableName, TxnStatusTablet::kTxnStatusTableName,
-        TxnStatusTablet::GetSchema(), num_replicas));
+        *TxnStatusTablet::GetSchema().get(), num_replicas));
     cluster_->txn_sys_table_ = table;
     return table;
   }
 
   shared_ptr<KsckTable> CreateAndAddTable(const string& id_and_name, int num_replicas) {
     auto table(make_shared<KsckTable>(
-        id_and_name, id_and_name, Schema(), num_replicas));
+        id_and_name, id_and_name, *make_scoped_refptr(new Schema).get(), num_replicas));
     cluster_->tables_.push_back(table);
     return table;
   }

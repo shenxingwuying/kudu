@@ -38,6 +38,7 @@
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/client/write_op.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/schema.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/stl_util.h"
 #include "kudu/gutil/strings/substitute.h"
@@ -140,7 +141,7 @@ Status ScanFromTable(KuduTable* table) {
 class AuthzTokenTest : public KuduTest {
  public:
   AuthzTokenTest()
-      : schema_(KuduSchema::FromSchema(CreateKeyValueTestSchema())) {}
+      : schema_(KuduSchema::FromSchema(*CreateKeyValueTestSchema().get())) {}
   const char* const kTableName = "test-table";
   const char* const kUser = "token-user";
   const char* const kBadUser = "bad-token-user";

@@ -74,7 +74,7 @@ class TestTabletMetadata : public KuduTabletTest {
   virtual void SetUp() OVERRIDE {
     KuduTabletTest::SetUp();
     writer_.reset(new LocalTabletWriter(harness_->tablet().get(),
-                                        &client_schema_));
+                                        client_schema_.get()));
   }
 
   void BuildPartialRow(int key, int intval, const char* strval,
@@ -86,7 +86,7 @@ class TestTabletMetadata : public KuduTabletTest {
 
 void TestTabletMetadata::BuildPartialRow(int key, int intval, const char* strval,
                                          unique_ptr<KuduPartialRow>* row) {
-  row->reset(new KuduPartialRow(&client_schema_));
+  row->reset(new KuduPartialRow(client_schema_.get()));
   CHECK_OK((*row)->SetInt32(0, key));
   CHECK_OK((*row)->SetInt32(1, intval));
   CHECK_OK((*row)->SetStringCopy(2, strval));
@@ -114,7 +114,7 @@ TEST_F(TestTabletMetadata, TestLoadFromSuperBlock) {
   // Alter table's extra configuration properties.
   TableExtraConfigPB extra_config;
   extra_config.set_history_max_age_sec(7200);
-  NO_FATALS(AlterSchema(*harness_->tablet()->schema(), boost::make_optional(extra_config)));
+  NO_FATALS(AlterSchema(harness_->tablet()->schema(), boost::make_optional(extra_config)));
 
   // Shut down the tablet.
   harness_->tablet()->Shutdown();

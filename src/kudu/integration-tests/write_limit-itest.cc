@@ -33,6 +33,7 @@
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/client/write_op.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/schema.h"
 #include "kudu/gutil/stl_util.h"
 #include "kudu/mini-cluster/internal_mini_cluster.h"
 #include "kudu/tablet/key_value_test_schema.h"
@@ -146,7 +147,7 @@ Status SetTableLimit(const string& table_name,
 class DisableWriteWhenExceedingQuotaTest : public KuduTest {
  public:
   DisableWriteWhenExceedingQuotaTest()
-      : schema_(KuduSchema::FromSchema(CreateKeyValueTestSchema())) {}
+      : schema_(KuduSchema::FromSchema(*CreateKeyValueTestSchema().get())) {}
   const char* const kTableName = "test-table";
   const char* const kUser = "token-user";
   const char* const kSuperUser = "super-user";

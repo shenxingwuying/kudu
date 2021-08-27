@@ -21,11 +21,13 @@
 #include <utility>
 #include <vector>
 
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/transactions/transactions.pb.h"
 #include "kudu/util/status.h"
 
 namespace kudu {
 class Schema;
+using SchemaRefPtr = scoped_refptr<Schema>;
 
 namespace tablet {
 class TabletReplica;
@@ -94,8 +96,8 @@ class TxnStatusTablet {
   explicit TxnStatusTablet(tablet::TabletReplica* tablet_replica);
 
   // Returns the schema of the transactions status table.
-  static const Schema& GetSchema();
-  static const Schema& GetSchemaWithoutIds();
+  static const SchemaRefPtr& GetSchema();
+  static const SchemaRefPtr& GetSchemaWithoutIds();
 
   // Uses the given visitor to iterate over the entries in the rows of the
   // underlying tablet replica. This allows the visitor to load the on-disk

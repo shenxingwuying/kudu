@@ -179,7 +179,7 @@ class ConsensusPeersTest : public KuduTest {
   unique_ptr<ThreadPool> raft_pool_;
   unique_ptr<TimeManager> time_manager_;
   unique_ptr<PeerMessageQueue> message_queue_;
-  const Schema schema_;
+  SchemaRefPtr schema_;
   LogOptions options_;
   unique_ptr<ThreadPoolToken> raft_pool_token_;
   unique_ptr<clock::Clock> clock_;

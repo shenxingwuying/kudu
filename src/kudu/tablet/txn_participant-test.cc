@@ -104,8 +104,9 @@ constexpr const int64_t kTxnId = 1;
 constexpr const int64_t kTxnOne = 1;
 constexpr const int64_t kTxnTwo = 2;
 
-Schema GetTestSchema() {
-  return Schema({ ColumnSchema("key", INT32), ColumnSchema("val", INT32) }, 1);
+SchemaRefPtr GetTestSchema() {
+  return make_scoped_refptr(
+      new Schema({ ColumnSchema("key", INT32), ColumnSchema("val", INT32) }, 1));
 }
 
 // A participant op that waits to start and finish applying based on input
@@ -157,7 +158,8 @@ class TxnParticipantTest : public TabletReplicaTestBase {
       req.set_txn_id(*txn_id);
     }
     req.set_tablet_id(tablet_replica_->tablet_id());
-    const auto& schema = GetTestSchema();
+    const SchemaRefPtr schema_ptr = GetTestSchema();
+    const Schema& schema = *schema_ptr.get();
     RETURN_NOT_OK(SchemaToPB(schema, req.mutable_schema()));
     KuduPartialRow row(&schema);
     RETURN_NOT_OK(row.SetInt32(0, key));

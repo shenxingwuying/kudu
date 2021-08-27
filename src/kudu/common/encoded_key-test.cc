@@ -26,6 +26,7 @@
 #include "kudu/common/common.pb.h"
 #include "kudu/common/key_encoder.h"
 #include "kudu/common/schema.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/substitute.h" // IWYU pragma: keep
 #include "kudu/util/faststring.h"
 #include "kudu/util/int128.h"
@@ -65,12 +66,12 @@ class EncodedKeyTest : public KuduTest {
  public:
   EncodedKeyTest() : schema_(CreateSchema()), arena_(1024) {}
 
-  static Schema CreateSchema() {
-    return Schema({ ColumnSchema("key", UINT32) }, 1);
+  static SchemaRefPtr CreateSchema() {
+    return make_scoped_refptr(new Schema({ ColumnSchema("key", UINT32) }, 1));
   }
 
   EncodedKey* BuildEncodedKey(int val) {
-    EncodedKeyBuilder ekb(&schema_, &arena_);
+    EncodedKeyBuilder ekb(schema_.get(), &arena_);
     ekb.AddColumnKey(&val);
     return ekb.BuildEncodedKey();
   }
@@ -96,7 +97,8 @@ class EncodedKeyTest : public KuduTest {
   void ExpectDecodedKeyEq(const string& expected,
                           const Slice& encoded_form,
                           void* val) {
-    Schema schema({ ColumnSchema("key", Type) }, 1);
+    SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("key", Type) }, 1));
+    Schema& schema = *schema_ptr.get();
     EncodedKeyBuilder builder(&schema, &arena_);
     builder.AddColumnKey(val);
     EncodedKey* key = builder.BuildEncodedKey();
@@ -105,7 +107,7 @@ class EncodedKeyTest : public KuduTest {
   }
 
  protected:
-  Schema schema_;
+  SchemaRefPtr schema_;
   Arena arena_;
 };
 
@@ -200,9 +202,10 @@ TEST_F(EncodedKeyTest, TestDecodeSimpleKeys) {
 TEST_F(EncodedKeyTest, TestDecodeCompoundKeys) {
   {
     // Integer type compound key.
-    Schema schema({ ColumnSchema("key0", UINT16),
+    SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("key0", UINT16),
                     ColumnSchema("key1", UINT32),
-                    ColumnSchema("key2", UINT64) }, 3);
+                    ColumnSchema("key2", UINT64) }, 3));
+    Schema& schema = *schema_ptr.get();
 
     EncodedKeyBuilder builder(&schema, &arena_);
     uint16_t key0 = 12345;
@@ -220,8 +223,9 @@ TEST_F(EncodedKeyTest, TestDecodeCompoundKeys) {
 
   {
     // Mixed type compound key with STRING last.
-    Schema schema({ ColumnSchema("key0", UINT16),
-                    ColumnSchema("key1", STRING) }, 2);
+    SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("key0", UINT16),
+                    ColumnSchema("key1", STRING) }, 2));
+    Schema& schema = *schema_ptr.get();
     EncodedKeyBuilder builder(&schema, &arena_);
     uint16_t key0 = 12345;
     Slice key1("aKey");
@@ -234,9 +238,10 @@ TEST_F(EncodedKeyTest, TestDecodeCompoundKeys) {
 
   {
     // Mixed type compound key with STRING in the middle
-    Schema schema({ ColumnSchema("key0", UINT16),
+    SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("key0", UINT16),
                     ColumnSchema("key1", STRING),
-                    ColumnSchema("key2", UINT8) }, 3);
+                    ColumnSchema("key2", UINT8) }, 3));
+    Schema& schema = *schema_ptr.get();
     EncodedKeyBuilder builder(&schema, &arena_);
     uint16_t key0 = 12345;
     Slice key1("aKey");
@@ -255,9 +260,10 @@ TEST_F(EncodedKeyTest, TestConstructFromEncodedString) {
 
   {
     // Integer type compound key.
-    Schema schema({ ColumnSchema("key0", UINT16),
+    SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("key0", UINT16),
                     ColumnSchema("key1", UINT32),
-                    ColumnSchema("key2", UINT64) }, 3);
+                    ColumnSchema("key2", UINT64) }, 3));
+    Schema& schema = *schema_ptr.get();
 
     // Prefix with only one full column specified
     ASSERT_OK(EncodedKey::DecodeEncodedString(schema,

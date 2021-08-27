@@ -782,9 +782,10 @@ Status WriteSimpleTestRow(const TServerDetails* replica,
   rpc.set_timeout(timeout);
 
   req.set_tablet_id(tablet_id);
-  Schema schema = GetSimpleTestSchema();
+  SchemaRefPtr schema_ptr(GetSimpleTestSchema());
+  const Schema& schema = *schema_ptr.get();
   RETURN_NOT_OK(SchemaToPB(schema, req.mutable_schema()));
-  AddTestRowToPB(write_type, schema, key, int_val, string_val, req.mutable_row_operations());
+  AddTestRowToPB(write_type, schema_ptr, key, int_val, string_val, req.mutable_row_operations());
 
   RETURN_NOT_OK(replica->tserver_proxy->Write(req, &resp, &rpc));
   if (resp.has_error()) {

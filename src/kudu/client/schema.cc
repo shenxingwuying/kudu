@@ -36,6 +36,7 @@
 #include "kudu/gutil/casts.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/map-util.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/util/char_util.h"
 #include "kudu/util/compression/compression.pb.h"
@@ -826,27 +827,31 @@ KuduSchema::KuduSchema(const KuduSchema& other)
 }
 
 KuduSchema::KuduSchema(const Schema& schema)
-  : schema_(new Schema(schema)) {
+  : schema_(new scoped_refptr<Schema>(new Schema(schema))) {
 }
 
 KuduSchema::KuduSchema(Schema&& schema)
-  : schema_(new Schema(schema)) {
+  : schema_(new scoped_refptr<Schema>(new Schema(std::move(schema)))) {
 }
 
 KuduSchema::~KuduSchema() {
-  delete schema_;
+    delete schema_;
+    schema_ = nullptr;
 }
 
 KuduSchema& KuduSchema::operator=(const KuduSchema& other) {
   if (&other != this) {
+    if (schema_ != nullptr) {
+      delete schema_;
+      schema_ = nullptr;
+    }
     CopyFrom(other);
   }
   return *this;
 }
 
 void KuduSchema::CopyFrom(const KuduSchema& other) {
-  delete schema_;
-  schema_ = new Schema(*other.schema_);
+  schema_ = new scoped_refptr<Schema>(new Schema(*other.schema_->get()));
 }
 
 Status KuduSchema::Reset(const vector<KuduColumnSchema>& columns, int key_columns) {
@@ -855,8 +860,8 @@ Status KuduSchema::Reset(const vector<KuduColumnSchema>& columns, int key_column
   for (const auto& col : columns) {
     cols_private.emplace_back(*col.col_);
   }
-  unique_ptr<Schema> new_schema(new Schema());
-  RETURN_NOT_OK(new_schema->Reset(cols_private, key_columns));
+  std::unique_ptr<scoped_refptr<Schema>> new_schema(new scoped_refptr<Schema>(new Schema));
+  RETURN_NOT_OK((*new_schema)->Reset(cols_private, key_columns));
 
   delete schema_;
   schema_ = new_schema.release();
@@ -865,7 +870,7 @@ Status KuduSchema::Reset(const vector<KuduColumnSchema>& columns, int key_column
 
 bool KuduSchema::operator==(const KuduSchema& rhs) const {
   return this == &rhs ||
-      (schema_ && rhs.schema_ && schema_->Equals(*rhs.schema_));
+      (*schema_ && *rhs.schema_ && (*schema_)->Equals(*rhs.schema_->get()));
 }
 
 bool KuduSchema::operator!=(const KuduSchema& rhs) const {
@@ -877,7 +882,7 @@ bool KuduSchema::Equals(const KuduSchema& other) const {
 }
 
 KuduColumnSchema KuduSchema::Column(size_t idx) const {
-  const ColumnSchema& col = schema_->column(idx);
+  const ColumnSchema& col = (*schema_)->column(idx);
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   KuduColumnStorageAttributes attrs(FromInternalEncodingType(col.attributes().encoding),
@@ -891,7 +896,7 @@ KuduColumnSchema KuduSchema::Column(size_t idx) const {
 }
 
 bool KuduSchema::HasColumn(const std::string& col_name, KuduColumnSchema* col_schema) const {
-  int idx = schema_->find_column(col_name);
+  int idx = (*schema_)->find_column(col_name);
   if (idx == Schema::kColumnNotFound) {
     return false;
   }
@@ -900,15 +905,15 @@ bool KuduSchema::HasColumn(const std::string& col_name, KuduColumnSchema* col_sc
 }
 
 KuduPartialRow* KuduSchema::NewRow() const {
-  return new KuduPartialRow(schema_);
+  return new KuduPartialRow(schema_->get());
 }
 
 size_t KuduSchema::num_columns() const {
-  return schema_->num_columns();
+  return (*schema_)->num_columns();
 }
 
 size_t KuduSchema::num_key_columns() const {
-  return schema_->num_key_columns();
+  return (*schema_)->num_key_columns();
 }
 
 void KuduSchema::GetPrimaryKeyColumnIndexes(vector<int>* indexes) const {
@@ -920,18 +925,18 @@ void KuduSchema::GetPrimaryKeyColumnIndexes(vector<int>* indexes) const {
 }
 
 string KuduSchema::ToString() const {
-  return schema_ ? schema_->ToString(FLAGS_show_attributes ?
+  return (schema_ && schema_->get()) ? (*schema_)->ToString(FLAGS_show_attributes ?
                                      Schema::ToStringMode::WITH_COLUMN_ATTRIBUTES
                                      : Schema::ToStringMode::BASE_INFO)
                  : "()";
 }
 
 KuduSchema KuduSchema::FromSchema(const Schema& schema) {
-  return KuduSchema(schema.CopyWithoutColumnIds());
+  return KuduSchema(*schema.CopyWithoutColumnIds().get());
 }
 
-Schema KuduSchema::ToSchema(const KuduSchema& kudu_schema) {
-  return Schema(*kudu_schema.schema_);
+scoped_refptr<Schema> KuduSchema::ToSchema(const KuduSchema& kudu_schema) {
+  return new Schema(*kudu_schema.schema_->get());
 }
 
 } // namespace client

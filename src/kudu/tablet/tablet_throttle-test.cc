@@ -16,7 +16,6 @@
 // under the License.
 
 #include <memory>
-#include <string>
 
 #include <gflags/gflags_declare.h>
 #include <gtest/gtest.h>
@@ -24,6 +23,7 @@
 #include "kudu/common/common.pb.h"
 #include "kudu/common/schema.h"
 #include "kudu/gutil/port.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.h"
 #include "kudu/util/monotime.h"
@@ -47,9 +47,9 @@ class TestTabletThrottle : public KuduTabletTest {
   }
 
  private:
-  Schema CreateBaseSchema() {
-    return Schema({ ColumnSchema("key", INT32),
-                    ColumnSchema("c1", INT32) }, 1);
+  SchemaRefPtr CreateBaseSchema() {
+    return make_scoped_refptr(new Schema({ ColumnSchema("key", INT32),
+                    ColumnSchema("c1", INT32) }, 1));
   }
 };
 

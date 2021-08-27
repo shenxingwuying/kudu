@@ -252,7 +252,7 @@ string KuduScanner::Data::DebugString() const {
                     table_->name(),
                     remote_ ? remote_->tablet_id() : "<unknown>",
                     configuration_.projection()->ToString(),
-                    configuration_.spec().ToString(*table_->schema().schema_));
+                    configuration_.spec().ToString(*table_->schema().schema_->get()));
 }
 
 ScanRpcStatus KuduScanner::Data::AnalyzeResponse(const Status& rpc_status,

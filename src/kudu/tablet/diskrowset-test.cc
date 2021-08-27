@@ -112,19 +112,21 @@ TEST_F(TestRowSet, TestRowSetRoundTrip) {
   }
 
   // Now iterate only over the key column
-  Schema proj_key;
-  ASSERT_OK(schema_.CreateProjectionByNames({ "key" }, &proj_key));
+  SchemaRefPtr proj_key_ptr(new Schema);
+  Schema& proj_key = *proj_key_ptr.get();
+  ASSERT_OK(schema_->CreateProjectionByNames({ "key" }, &proj_key));
 
   LOG_TIMING(INFO, "Iterating over only key column") {
-    IterateProjection(*rs, proj_key, n_rows_);
+    IterateProjection(*rs, proj_key_ptr, n_rows_);
   }
 
 
   // Now iterate only over the non-key column
-  Schema proj_val;
-  ASSERT_OK(schema_.CreateProjectionByNames({ "val" }, &proj_val));
+  SchemaRefPtr proj_val_ptr(new Schema);
+  Schema& proj_val = *proj_val_ptr.get();
+  ASSERT_OK(schema_->CreateProjectionByNames({ "val" }, &proj_val));
   LOG_TIMING(INFO, "Iterating over only val column") {
-    IterateProjection(*rs, proj_val, n_rows_);
+    IterateProjection(*rs, proj_val_ptr, n_rows_);
   }
 
   // Test that CheckRowPresent returns correct results
@@ -133,7 +135,8 @@ TEST_F(TestRowSet, TestRowSetRoundTrip) {
 
   // 1. Check a key which comes before all keys in rowset
   {
-    Schema pk = schema_.CreateKeyProjection();
+    SchemaRefPtr pk_ptr = schema_->CreateKeyProjection();
+    Schema& pk = *pk_ptr.get();
     RowBuilder rb(&pk);
     rb.AddString(Slice("h"));
     RowSetKeyProbe probe(rb.row(), &arena);
@@ -144,7 +147,8 @@ TEST_F(TestRowSet, TestRowSetRoundTrip) {
 
   // 2. Check a key which comes after all keys in rowset
   {
-    Schema pk = schema_.CreateKeyProjection();
+    SchemaRefPtr pk_ptr = schema_->CreateKeyProjection();
+    Schema& pk = *pk_ptr.get();
     RowBuilder rb(&pk);
     rb.AddString(Slice("z"));
     RowSetKeyProbe probe(rb.row(), &arena);
@@ -156,7 +160,8 @@ TEST_F(TestRowSet, TestRowSetRoundTrip) {
   // 3. Check a key which is not present, but comes between present
   // keys
   {
-    Schema pk = schema_.CreateKeyProjection();
+    SchemaRefPtr pk_ptr = schema_->CreateKeyProjection();
+    Schema& pk = *pk_ptr.get();
     RowBuilder rb(&pk);
     rb.AddString(Slice("hello 00000000000049x"));
     RowSetKeyProbe probe(rb.row(), &arena);
@@ -169,7 +174,8 @@ TEST_F(TestRowSet, TestRowSetRoundTrip) {
   {
     char buf[256];
     FormatKey(49, buf, sizeof(buf));
-    Schema pk = schema_.CreateKeyProjection();
+    SchemaRefPtr pk_ptr = schema_->CreateKeyProjection();
+    Schema& pk = *pk_ptr.get();
     RowBuilder rb(&pk);
     rb.AddString(Slice(buf));
     RowSetKeyProbe probe(rb.row(), &arena);
@@ -204,7 +210,8 @@ TEST_F(TestRowSet, TestRowSetUpdate) {
   enc.SetToDelete();
 
   Timestamp timestamp(0);
-  Schema proj_key = schema_.CreateKeyProjection();
+  SchemaRefPtr proj_key_ptr = schema_->CreateKeyProjection();
+  Schema& proj_key = *proj_key_ptr.get();
   RowBuilder rb(&proj_key);
   rb.AddString(Slice("hello 00000000000049x"));
   RowSetKeyProbe probe(rb.row(), &arena);
@@ -233,7 +240,8 @@ TEST_F(TestRowSet, TestErrorDuringUpdate) {
 
   // Get a row that we expect to be in the rowset.
   Timestamp timestamp(0);
-  Schema proj_key = schema_.CreateKeyProjection();
+  SchemaRefPtr proj_key_ptr = schema_->CreateKeyProjection();
+  Schema& proj_key = *proj_key_ptr.get();
   RowBuilder rb(&proj_key);
   rb.AddString(Slice("hello 000000000000050"));
   RowSetKeyProbe probe(rb.row(), &arena);
@@ -299,7 +307,7 @@ TEST_F(TestRowSet, TestDelete) {
   Status s;
 
   RowIteratorOptions opts;
-  opts.projection = &schema_;
+  opts.projection = schema_;
   for (int i = 0; i < 2; i++) {
     // Reading the MVCC snapshot prior to deletion should show the row.
     opts.snap_to_include = snap_before_delete;
@@ -389,12 +397,12 @@ TEST_F(TestRowSet, TestFlushedUpdatesRespectMVCC) {
 
   // Write a single row into a new DiskRowSet.
   LOG_TIMING(INFO, "Writing rowset") {
-    DiskRowSetWriter drsw(rowset_meta_.get(), &schema_,
+    DiskRowSetWriter drsw(rowset_meta_.get(), schema_.get(),
                           BloomFilterSizing::BySizeAndFPRate(32*1024, 0.01f));
 
     ASSERT_OK(drsw.Open());
 
-    RowBuilder rb(&schema_);
+    RowBuilder rb(schema_.get());
     rb.AddString(key_slice);
     rb.AddUint32(1);
     ASSERT_OK_FAST(WriteRow(rb.data(), &drsw));
@@ -421,8 +429,9 @@ TEST_F(TestRowSet, TestFlushedUpdatesRespectMVCC) {
       ScopedOp op(&mvcc_, clock_.Now());
       op.StartApplying();
       update.Reset();
-      update.AddColumnUpdate(schema_.column(1), schema_.column_id(1), &i);
-      Schema proj_key = schema_.CreateKeyProjection();
+      update.AddColumnUpdate(schema_->column(1), schema_->column_id(1), &i);
+      SchemaRefPtr proj_key_ptr = schema_->CreateKeyProjection();
+      Schema& proj_key = *proj_key_ptr.get();
       RowBuilder rb(&proj_key);
       rb.AddString(key_slice);
       RowSetKeyProbe probe(rb.row(), &arena);
@@ -449,7 +458,7 @@ TEST_F(TestRowSet, TestFlushedUpdatesRespectMVCC) {
   for (int i = 0; i < 5; i++) {
     SCOPED_TRACE(i);
     RowIteratorOptions opts;
-    opts.projection = &schema_;
+    opts.projection = schema_;
     opts.snap_to_include = snaps[i];
     unique_ptr<RowwiseIterator> iter;
     ASSERT_OK(rs->NewRowIterator(opts, &iter));
@@ -464,7 +473,7 @@ TEST_F(TestRowSet, TestFlushedUpdatesRespectMVCC) {
   for (int i = 0; i < 5; i++) {
     SCOPED_TRACE(i);
     RowIteratorOptions opts;
-    opts.projection = &schema_;
+    opts.projection = schema_;
     opts.snap_to_include = snaps[i];
     unique_ptr<RowwiseIterator> iter;
     ASSERT_OK(rs->NewRowIterator(opts, &iter));
@@ -514,7 +523,7 @@ TEST_F(TestRowSet, TestRollingDiskRowSetWriter) {
   google::FlagSaver saver;
   FLAGS_cfile_default_block_size = 4096;
 
-  RollingDiskRowSetWriter writer(tablet()->metadata(), schema_,
+  RollingDiskRowSetWriter writer(tablet()->metadata(), *schema_.get(),
                                  BloomFilterSizing::BySizeAndFPRate(32*1024, 0.01f),
                                  64 * 1024); // roll every 64KB
   DoWriteTestRowSet(FLAGS_roundtrip_num_rows, &writer);
@@ -525,7 +534,7 @@ TEST_F(TestRowSet, TestRollingDiskRowSetWriter) {
   EXPECT_EQ(4, metas.size());
   int64_t count = 0;
   for (const shared_ptr<RowSetMetadata>& meta : metas) {
-    ASSERT_TRUE(meta->HasDataForColumnIdForTests(schema_.column_id(0)));
+    ASSERT_TRUE(meta->HasDataForColumnIdForTests(schema_->column_id(0)));
     count += meta->live_row_count();
   }
   ASSERT_EQ(FLAGS_roundtrip_num_rows, count);
@@ -544,7 +553,7 @@ TEST_F(TestRowSet, TestMakeDeltaIteratorMergerUnlocked) {
   vector<shared_ptr<DeltaStore> > compacted_stores;
   vector<BlockId> compacted_blocks;
   unique_ptr<DeltaIterator> merge_iter;
-  ASSERT_OK(dt->MakeDeltaIteratorMergerUnlocked(nullptr, 0, num_stores - 1, &schema_,
+  ASSERT_OK(dt->MakeDeltaIteratorMergerUnlocked(nullptr, 0, num_stores - 1, schema_,
                                                 &compacted_stores,
                                                 &compacted_blocks, &merge_iter));
   vector<string> results;
@@ -624,7 +633,7 @@ TEST_F(TestRowSet, TestCompactStores) {
   vector<shared_ptr<DeltaStore> > compacted_stores;
   vector<BlockId> compacted_blocks;
   unique_ptr<DeltaIterator> merge_iter;
-  ASSERT_OK(dt->MakeDeltaIteratorMergerUnlocked(nullptr, 0, num_stores - 1, &schema_,
+  ASSERT_OK(dt->MakeDeltaIteratorMergerUnlocked(nullptr, 0, num_stores - 1, schema_,
                                                 &compacted_stores,
                                                 &compacted_blocks, &merge_iter));
   vector<string> results;
@@ -720,7 +729,7 @@ class DiffScanRowSetTest : public KuduRowSetTest,
   }
 
  protected:
-  static Schema CreateTestSchema() {
+  static SchemaRefPtr CreateTestSchema() {
     SchemaBuilder builder;
     CHECK_OK(builder.AddKeyColumn("key", UINT32));
     CHECK_OK(builder.AddColumn("val1", UINT32));
@@ -750,11 +759,11 @@ TEST_P(DiffScanRowSetTest, TestFuzz) {
   // Create and open a DRS with four rows.
   shared_ptr<DiskRowSet> rs;
   {
-    DiskRowSetWriter drsw(rowset_meta_.get(), &schema_,
+    DiskRowSetWriter drsw(rowset_meta_.get(), schema_.get(),
                           BloomFilterSizing::BySizeAndFPRate(32 * 1024, 0.01f));
     ASSERT_OK(drsw.Open());
 
-    RowBuilder rb(&schema_);
+    RowBuilder rb(schema_.get());
     for (int i = 0; i < 4; i++) {
       rb.Reset();
       rb.AddUint32(i);
@@ -780,17 +789,18 @@ TEST_P(DiffScanRowSetTest, TestFuzz) {
     // column if desired.
     vector<ColumnSchema> col_schemas;
     vector<ColumnId> col_ids;
-    for (int i = 0; i < schema_.num_columns(); i++) {
-      col_schemas.push_back(schema_.column(i));
-      col_ids.push_back(schema_.column_id(i));
+    for (int i = 0; i < schema_->num_columns(); i++) {
+      col_schemas.push_back(schema_->column(i));
+      col_ids.push_back(schema_->column_id(i));
     }
     if (add_vc_is_deleted) {
       bool read_default = false;
       col_schemas.emplace_back("is_deleted", IS_DELETED, /*is_nullable=*/ false,
                                &read_default);
-      col_ids.emplace_back(schema_.max_col_id() + 1);
+      col_ids.emplace_back(schema_->max_col_id() + 1);
     }
-    Schema projection(col_schemas, col_ids, 1);
+    SchemaRefPtr projection_ptr = new Schema(col_schemas, col_ids, 1);
+    Schema& projection = *projection_ptr.get();
 
     // Set up the iterator.
     Timestamp ts1(ts1_val);
@@ -842,15 +852,16 @@ TEST_P(DiffScanRowSetTest, TestFuzz) {
     faststring buf;
     RowChangeListEncoder enc(&buf);
     if (val) {
-      enc.AddColumnUpdate(schema_.column(col_idx),
-                          schema_.column_id(col_idx),
+      enc.AddColumnUpdate(schema_->column(col_idx),
+                          schema_->column_id(col_idx),
                           val.get_ptr());
     } else {
       enc.SetToDelete();
     }
 
     // Build the row key.
-    Schema proj_key = schema_.CreateKeyProjection();
+    SchemaRefPtr proj_key_ptr = schema_->CreateKeyProjection();
+    Schema& proj_key = *proj_key_ptr.get();
     RowBuilder rb(&proj_key);
     rb.AddUint32(row_idx);
     Arena arena(64);

@@ -35,8 +35,8 @@
 #include <gtest/gtest.h>
 
 #include "kudu/clock/logical_clock.h"
-#include "kudu/common/columnblock.h"
 #include "kudu/common/columnblock-test-util.h"
+#include "kudu/common/columnblock.h"
 #include "kudu/common/common.pb.h"
 #include "kudu/common/row_changelist.h"
 #include "kudu/common/rowblock.h"
@@ -100,7 +100,7 @@ class TestDeltaMemStore : public KuduTest {
     CHECK_OK(dms_->Init(nullptr));
   }
 
-  static Schema CreateSchema() {
+  static SchemaRefPtr CreateSchema() {
     SchemaBuilder builder;
     CHECK_OK(builder.AddColumn("col1", STRING));
     CHECK_OK(builder.AddColumn("col2", STRING));
@@ -118,8 +118,8 @@ class TestDeltaMemStore : public KuduTest {
       op.StartApplying();
       update.Reset();
       uint32_t new_val = idx_to_update * 10;
-      update.AddColumnUpdate(schema_.column(kIntColumn),
-                             schema_.column_id(kIntColumn), &new_val);
+      update.AddColumnUpdate(schema_->column(kIntColumn),
+                             schema_->column_id(kIntColumn), &new_val);
 
       CHECK_OK(dms_->Update(op.timestamp(), idx_to_update, RowChangeList(buf), op_id_));
       op.FinishApplying();
@@ -130,12 +130,12 @@ class TestDeltaMemStore : public KuduTest {
                     uint32_t row_idx,
                     size_t col_idx,
                     ColumnBlock *cb) {
-    ColumnSchema col_schema(schema_.column(col_idx));
-    Schema single_col_projection({ col_schema },
-                                 { schema_.column_id(col_idx) },
-                                 0);
+    ColumnSchema col_schema(schema_->column(col_idx));
+    SchemaRefPtr single_col_projection_ptr(new Schema({ col_schema },
+                                 { schema_->column_id(col_idx) },
+                                 0));
     RowIteratorOptions opts;
-    opts.projection = &single_col_projection;
+    opts.projection = single_col_projection_ptr;
     opts.snap_to_include = snapshot;
     unique_ptr<DeltaIterator> iter;
     Status s = dms_->NewDeltaIterator(opts, &iter);
@@ -158,7 +158,7 @@ class TestDeltaMemStore : public KuduTest {
 
   consensus::OpId op_id_;
 
-  const Schema schema_;
+  const SchemaRefPtr schema_;
   shared_ptr<DeltaMemStore> dms_;
   clock::LogicalClock clock_;
   MvccManager mvcc_;
@@ -188,15 +188,15 @@ TEST_F(TestDeltaMemStore, TestUpdateCount) {
     if (idx % 4 == 0) {
       char buf[256] = "update buf";
       Slice s(buf);
-      update.AddColumnUpdate(schema_.column(kStringColumn),
-                             schema_.column_id(kStringColumn), &s);
+      update.AddColumnUpdate(schema_->column(kStringColumn),
+                             schema_->column_id(kStringColumn), &s);
     }
     if (idx % 2 == 0) {
       ScopedOp op(&mvcc_, clock_.Now());
       op.StartApplying();
       uint32_t new_val = idx * 10;
-      update.AddColumnUpdate(schema_.column(kIntColumn),
-                             schema_.column_id(kIntColumn), &new_val);
+      update.AddColumnUpdate(schema_->column(kIntColumn),
+                             schema_->column_id(kIntColumn), &new_val);
       ASSERT_OK_FAST(dms_->Update(op.timestamp(), idx, RowChangeList(update_buf), op_id_));
       op.FinishApplying();
     }
@@ -215,8 +215,8 @@ TEST_F(TestDeltaMemStore, TestUpdateCount) {
   dms_->FlushToFile(&dfw);
   unique_ptr<DeltaStats> stats = dfw.release_delta_stats();
 
-  ASSERT_EQ(n_rows / 2, stats->update_count_for_col_id(schema_.column_id(kIntColumn)));
-  ASSERT_EQ(n_rows / 4, stats->update_count_for_col_id(schema_.column_id(kStringColumn)));
+  ASSERT_EQ(n_rows / 2, stats->update_count_for_col_id(schema_->column_id(kIntColumn)));
+  ASSERT_EQ(n_rows / 4, stats->update_count_for_col_id(schema_->column_id(kStringColumn)));
 }
 
 TEST_F(TestDeltaMemStore, TestDMSSparseUpdates) {
@@ -270,8 +270,8 @@ TEST_F(TestDeltaMemStore, BenchmarkManyUpdatesToOneRow) {
     op.StartApplying();
     string str(kStringDataSize, 'x');
     Slice s(str);
-    update.AddColumnUpdate(schema_.column(kStringColumn),
-                           schema_.column_id(kStringColumn), &s);
+    update.AddColumnUpdate(schema_->column(kStringColumn),
+                           schema_->column_id(kStringColumn), &s);
     CHECK_OK(dms_->Update(op.timestamp(), kIdxToUpdate, RowChangeList(buf), op_id_));
     op.FinishApplying();
   }
@@ -311,8 +311,8 @@ TEST_P(TestDeltaMemStoreNumUpdates, BenchmarkSnapshotScans) {
 
         Timestamp ts(ts_val);
         uint32_t new_val = ts_val;
-        update.AddColumnUpdate(schema_.column(kIntColumn),
-                               schema_.column_id(kIntColumn), &new_val);
+        update.AddColumnUpdate(schema_->column(kIntColumn),
+                               schema_->column_id(kIntColumn), &new_val);
         CHECK_OK(dms_->Update(ts, row_idx, RowChangeList(buf), op_id_));
       }
     }
@@ -354,8 +354,8 @@ TEST_P(TestDeltaMemStoreNumDeletes, BenchmarkScansWithVaryingNumberOfDeletes) {
     update.Reset();
 
     uint32_t new_val = row_idx;
-    update.AddColumnUpdate(schema_.column(kIntColumn),
-                           schema_.column_id(kIntColumn), &new_val);
+    update.AddColumnUpdate(schema_->column(kIntColumn),
+                           schema_->column_id(kIntColumn), &new_val);
     ASSERT_OK(dms_->Update(Timestamp(row_idx), row_idx, RowChangeList(buf), op_id_));
 
     // When appropriate, add a DELETE too.
@@ -393,8 +393,8 @@ TEST_F(TestDeltaMemStore, TestReUpdateSlice) {
     op.StartApplying();
     char buf[256] = "update 1";
     Slice s(buf);
-    update.AddColumnUpdate(schema_.column(0),
-                           schema_.column_id(0), &s);
+    update.AddColumnUpdate(schema_->column(0),
+                           schema_->column_id(0), &s);
     ASSERT_OK_FAST(dms_->Update(op.timestamp(), 123, RowChangeList(update_buf), op_id_));
     memset(buf, 0xff, sizeof(buf));
     op.FinishApplying();
@@ -408,8 +408,8 @@ TEST_F(TestDeltaMemStore, TestReUpdateSlice) {
     char buf[256] = "update 2";
     Slice s(buf);
     update.Reset();
-    update.AddColumnUpdate(schema_.column(0),
-                           schema_.column_id(0), &s);
+    update.AddColumnUpdate(schema_->column(0),
+                           schema_->column_id(0), &s);
     ASSERT_OK_FAST(dms_->Update(op.timestamp(), 123, RowChangeList(update_buf), op_id_));
     memset(buf, 0xff, sizeof(buf));
     op.FinishApplying();
@@ -445,8 +445,8 @@ TEST_F(TestDeltaMemStore, TestOutOfOrderOps) {
 
     op2.StartApplying();
     Slice s("update 2");
-    update.AddColumnUpdate(schema_.column(kStringColumn),
-                           schema_.column_id(kStringColumn), &s);
+    update.AddColumnUpdate(schema_->column(kStringColumn),
+                           schema_->column_id(kStringColumn), &s);
     ASSERT_OK(dms_->Update(op2.timestamp(), 123, RowChangeList(update_buf), op_id_));
     op2.FinishApplying();
 
@@ -454,8 +454,8 @@ TEST_F(TestDeltaMemStore, TestOutOfOrderOps) {
     op1.StartApplying();
     update.Reset();
     s = Slice("update 1");
-    update.AddColumnUpdate(schema_.column(kStringColumn),
-                           schema_.column_id(kStringColumn), &s);
+    update.AddColumnUpdate(schema_->column(kStringColumn),
+                           schema_->column_id(kStringColumn), &s);
     ASSERT_OK(dms_->Update(op1.timestamp(), 123, RowChangeList(update_buf), op_id_));
     op1.FinishApplying();
   }
@@ -480,13 +480,13 @@ TEST_F(TestDeltaMemStore, TestDMSBasic) {
     update.Reset();
 
     uint32_t val = i * 10;
-    update.AddColumnUpdate(schema_.column(kIntColumn),
-                           schema_.column_id(kIntColumn), &val);
+    update.AddColumnUpdate(schema_->column(kIntColumn),
+                           schema_->column_id(kIntColumn), &val);
 
     snprintf(buf, sizeof(buf), "hello %d", i);
     Slice s(buf);
-    update.AddColumnUpdate(schema_.column(kStringColumn),
-                           schema_.column_id(kStringColumn), &s);
+    update.AddColumnUpdate(schema_->column(kStringColumn),
+                           schema_->column_id(kStringColumn), &s);
 
     ASSERT_OK_FAST(dms_->Update(op.timestamp(), i, RowChangeList(update_buf), op_id_));
     op.FinishApplying();
@@ -524,8 +524,8 @@ TEST_F(TestDeltaMemStore, TestDMSBasic) {
     update.Reset();
 
     uint32_t val = i * 20;
-    update.AddColumnUpdate(schema_.column(kIntColumn),
-                           schema_.column_id(kIntColumn), &val);
+    update.AddColumnUpdate(schema_->column(kIntColumn),
+                           schema_->column_id(kIntColumn), &val);
     ASSERT_OK_FAST(dms_->Update(op.timestamp(), i, RowChangeList(update_buf), op_id_));
     op.FinishApplying();
   }
@@ -544,7 +544,7 @@ TEST_F(TestDeltaMemStore, TestIteratorDoesUpdates) {
   ScopedColumnBlock<UINT32> block(100);
 
   RowIteratorOptions opts;
-  opts.projection = &schema_;
+  opts.projection = schema_;
   // TODO(todd): test snapshot reads from different points
   opts.snap_to_include = MvccSnapshot(mvcc_);
 
@@ -594,7 +594,7 @@ TEST_F(TestDeltaMemStore, TestCollectMutations) {
   mutations.resize(kBatchSize);
 
   RowIteratorOptions opts;
-  opts.projection = &schema_;
+  opts.projection = schema_;
   opts.snap_to_include = MvccSnapshot(mvcc_);
   unique_ptr<DeltaIterator> iter;
   Status s =  dms_->NewDeltaIterator(opts, &iter);
@@ -609,7 +609,7 @@ TEST_F(TestDeltaMemStore, TestCollectMutations) {
 
   // Only row 5 is updated, everything else should be NULL.
   for (int i = 0; i < kBatchSize; i++) {
-    string str = Mutation::StringifyMutationList(schema_, mutations[i]);
+    string str = Mutation::StringifyMutationList(*schema_.get(), mutations[i]);
     VLOG(1) << "row " << i << ": " << str;
     if (i != 5) {
       EXPECT_EQ("[]", str);
@@ -626,7 +626,7 @@ TEST_F(TestDeltaMemStore, TestCollectMutations) {
 
   // Only row 2 is updated, everything else should be NULL.
   for (int i = 0; i < 10; i++) {
-    string str = Mutation::StringifyMutationList(schema_, mutations[i]);
+    string str = Mutation::StringifyMutationList(*schema_.get(), mutations[i]);
     VLOG(1) << "row " << i << ": " << str;
     if (i != 2) {
       EXPECT_EQ("[]", str);
@@ -655,7 +655,8 @@ TEST_F(TestDeltaMemStore, TestFuzz) {
       ASSERT_OK(sb.AddColumn(Substitute("col$0", i), UINT32));
     }
   }
-  Schema schema(sb.Build());
+  SchemaRefPtr schema_ptr(sb.Build());
+  Schema& schema = *schema_ptr.get();
 
   MirroredDeltas<DeltaTypeSelector<REDO>> deltas(&schema);
 
@@ -677,7 +678,7 @@ TEST_F(TestDeltaMemStore, TestDeletedRowCount) {
     // UPDATE.
     uint32_t new_val = row_idx;
     update.Reset();
-    update.AddColumnUpdate(schema_.column(kIntColumn), schema_.column_id(kIntColumn), &new_val);
+    update.AddColumnUpdate(schema_->column(kIntColumn), schema_->column_id(kIntColumn), &new_val);
     ASSERT_OK(dms_->Update(Timestamp(row_idx), row_idx, RowChangeList(buf), op_id_));
 
     // DELETE.

@@ -107,9 +107,9 @@ class MultiThreadedTabletTest : public TabletTestBase<SETUP> {
     CHECK_OK(tablet()->NewRowIterator(client_schema_, &iter));
     uint64_t count;
     CHECK_OK(tablet()->CountRows(&count));
-    const Schema* schema = tablet()->schema();
+    const Schema* schema = tablet()->schema().get();
     ColumnSchema valcol = schema->column(schema->find_column("val"));
-    valcol_projection_ = Schema({ valcol }, 0);
+    valcol_projection_ = new Schema({ valcol }, 0);
     CHECK_OK(tablet()->NewRowIterator(valcol_projection_, &iter));
     codegen::CompilationManager::GetSingleton()->Wait();
 
@@ -142,21 +142,21 @@ class MultiThreadedTabletTest : public TabletTestBase<SETUP> {
   }
 
   void UpdateThread(int tid) {
-    const Schema &schema = schema_;
+    const Schema &schema = *schema_.get();
 
     shared_ptr<TimeSeries> updates = ts_collector_.GetTimeSeries("updated");
 
-    LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+    LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
 
     RowBlockMemory mem(1024);
-    RowBlock block(&schema_, 1, &mem);
+    RowBlock block(schema_.get(), 1, &mem);
     faststring update_buf;
 
     uint64_t updates_since_last_report = 0;
     int col_idx = schema.num_key_columns() == 1 ? 2 : 3;
     LOG(INFO) << "Update thread using schema: " << schema.ToString();
 
-    KuduPartialRow row(&client_schema_);
+    KuduPartialRow row(client_schema_.get());
 
     while (running_insert_count_.count() > 0) {
       unique_ptr<RowwiseIterator> iter;
@@ -219,7 +219,7 @@ class MultiThreadedTabletTest : public TabletTestBase<SETUP> {
   // trying to reference already-freed memrowset memory.
   void SlowReaderThread(int /*tid*/) {
     RowBlockMemory mem(32 * 1024);
-    RowBlock block(&schema_, 1, &mem);
+    RowBlock block(schema_.get(), 1, &mem);
 
     uint64_t max_rows = this->ClampRowCount(FLAGS_inserts_per_thread * FLAGS_num_insert_threads)
             / FLAGS_num_insert_threads;
@@ -255,7 +255,7 @@ class MultiThreadedTabletTest : public TabletTestBase<SETUP> {
     RowBlockMemory mem(1024);  // unused, just scanning ints
 
     static const int kBufInts = 1024*1024 / 8;
-    RowBlock block(&valcol_projection_, kBufInts, &mem);
+    RowBlock block(valcol_projection_.get(), kBufInts, &mem);
     ColumnBlock column = block.column_block(0);
 
     uint64_t count_since_report = 0;
@@ -391,7 +391,7 @@ class MultiThreadedTabletTest : public TabletTestBase<SETUP> {
   // with a different value.
   void DeleteAndReinsertCycleThread(int tid) {
     int32_t iteration = 0;
-    LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+    LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
 
     while (running_insert_count_.count() > 0) {
       for (int i = 0; i < 100; i++) {
@@ -407,7 +407,7 @@ class MultiThreadedTabletTest : public TabletTestBase<SETUP> {
   // succeed in UPDATING a ghost row.
   void StubbornlyUpdateSameRowThread(int tid) {
     int32_t iteration = 0;
-    LocalTabletWriter writer(this->tablet().get(), &this->client_schema_);
+    LocalTabletWriter writer(this->tablet().get(), this->client_schema_.get());
     while (running_insert_count_.count() > 0) {
       for (int i = 0; i < 100; i++) {
         Status s = this->UpdateTestRow(&writer, tid, iteration++);
@@ -459,7 +459,7 @@ class MultiThreadedTabletTest : public TabletTestBase<SETUP> {
 
   // Projection with only an int column.
   // This is provided by both harnesses.
-  Schema valcol_projection_;
+  SchemaRefPtr valcol_projection_;
 
   TimeSeriesCollector ts_collector_;
 };

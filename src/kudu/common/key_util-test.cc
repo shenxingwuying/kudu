@@ -29,11 +29,11 @@
 #include "kudu/common/schema.h"
 #include "kudu/common/types.h"
 #include "kudu/gutil/mathlimits.h"
-#include "kudu/util/memory/arena.h"
 #include "kudu/util/int128.h"
+#include "kudu/util/memory/arena.h"
 #include "kudu/util/slice.h"
-#include "kudu/util/test_util.h"
 #include "kudu/util/test_macros.h"
+#include "kudu/util/test_util.h"
 
 namespace kudu {
 
@@ -50,10 +50,11 @@ class KeyUtilTest : public KuduTest {
 };
 
 TEST_F(KeyUtilTest, TestIncrementNonCompositePrimaryKey) {
-  Schema schema({ ColumnSchema("key", INT32),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("key", INT32),
                   ColumnSchema("other_col", INT32),
                   ColumnSchema("other_col2", STRING, true) },
-                1);
+                1));
+  Schema& schema = *schema_ptr.get();
   KuduPartialRow p_row(&schema);
   ContiguousRow row(&schema, row_data(&p_row));
 
@@ -69,10 +70,11 @@ TEST_F(KeyUtilTest, TestIncrementNonCompositePrimaryKey) {
 }
 
 TEST_F(KeyUtilTest, TestIncrementInt128PrimaryKey) {
-  Schema schema({ ColumnSchema("key", INT128),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("key", INT128),
                   ColumnSchema("other_col", INT32),
                   ColumnSchema("other_col2", STRING, true) },
-                1);
+                1));
+  Schema& schema = *schema_ptr.get();
   KuduPartialRow p_row(&schema);
   ContiguousRow row(&schema, row_data(&p_row));
 
@@ -88,10 +90,11 @@ TEST_F(KeyUtilTest, TestIncrementInt128PrimaryKey) {
 }
 
 TEST_F(KeyUtilTest, TestIncrementCompositePrimaryKey) {
-  Schema schema({ ColumnSchema("k1", INT32),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("k1", INT32),
                   ColumnSchema("k2", INT32),
                   ColumnSchema("other_col", STRING, true) },
-                2);
+                2));
+  Schema& schema = *schema_ptr.get();
 
   KuduPartialRow p_row(&schema);
   ContiguousRow row(&schema, row_data(&p_row));
@@ -116,10 +119,11 @@ TEST_F(KeyUtilTest, TestIncrementCompositePrimaryKey) {
 }
 
 TEST_F(KeyUtilTest, TestIncrementCompositeIntStringPrimaryKey) {
-  Schema schema({ ColumnSchema("k1", INT32),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("k1", INT32),
                   ColumnSchema("k2", STRING),
                   ColumnSchema("other_col", STRING, true) },
-                2);
+                2));
+  Schema& schema = *schema_ptr.get();
 
   KuduPartialRow p_row(&schema);
   ContiguousRow row(&schema, row_data(&p_row));
@@ -137,10 +141,11 @@ TEST_F(KeyUtilTest, TestIncrementCompositeIntStringPrimaryKey) {
 }
 
 TEST_F(KeyUtilTest, TestIncrementCompositeStringIntPrimaryKey) {
-  Schema schema({ ColumnSchema("k1", STRING),
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("k1", STRING),
                   ColumnSchema("k2", INT32),
                   ColumnSchema("other_col", STRING, true) },
-                2);
+                2));
+  Schema& schema = *schema_ptr.get();
 
   KuduPartialRow p_row(&schema);
   ContiguousRow row(&schema, row_data(&p_row));

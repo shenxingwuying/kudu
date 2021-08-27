@@ -94,11 +94,11 @@ class RowSetMetadata;
 
 class KuduTabletTest : public KuduTest {
  public:
-  explicit KuduTabletTest(const Schema& schema,
+  explicit KuduTabletTest(const SchemaRefPtr& schema,
                           TabletHarness::Options::ClockType clock_type =
                           TabletHarness::Options::ClockType::LOGICAL_CLOCK)
-    : schema_(schema.CopyWithColumnIds()),
-      client_schema_(schema),
+    : schema_(schema->CopyWithColumnIds()),
+      client_schema_(new Schema(*schema.get())),
       clock_type_(clock_type) {
   }
 
@@ -126,11 +126,11 @@ class KuduTabletTest : public KuduTest {
     SetUpTestTablet(root_dir);
   }
 
-  const Schema &schema() const {
+  const SchemaRefPtr schema() const {
     return schema_;
   }
 
-  const Schema &client_schema() const {
+  const SchemaRefPtr client_schema() const {
     return client_schema_;
   }
 
@@ -142,7 +142,7 @@ class KuduTabletTest : public KuduTest {
     return harness_->fs_manager();
   }
 
-  void AlterSchema(const Schema& schema,
+  void AlterSchema(const SchemaRefPtr& schema,
                    boost::optional<TableExtraConfigPB> extra_config = boost::none) {
     tserver::AlterSchemaRequestPB req;
     req.set_schema_version(tablet()->metadata()->schema_version() + 1);
@@ -151,7 +151,7 @@ class KuduTabletTest : public KuduTest {
     }
 
     AlterSchemaOpState op_state(nullptr, &req, nullptr);
-    ASSERT_OK(tablet()->CreatePreparedAlterSchema(&op_state, &schema));
+    ASSERT_OK(tablet()->CreatePreparedAlterSchema(&op_state, schema.get()));
     ASSERT_OK(tablet()->AlterSchema(&op_state));
     op_state.Finish();
   }
@@ -169,8 +169,8 @@ class KuduTabletTest : public KuduTest {
   }
 
  protected:
-  const Schema schema_;
-  const Schema client_schema_;
+  const SchemaRefPtr schema_;
+  const SchemaRefPtr client_schema_;
   const TabletHarness::Options::ClockType clock_type_;
 
   std::unique_ptr<TabletHarness> harness_;
@@ -178,7 +178,7 @@ class KuduTabletTest : public KuduTest {
 
 class KuduRowSetTest : public KuduTabletTest {
  public:
-  explicit KuduRowSetTest(const Schema& schema)
+  explicit KuduRowSetTest(const SchemaRefPtr& schema)
     : KuduTabletTest(schema) {
   }
 
@@ -199,7 +199,7 @@ class KuduRowSetTest : public KuduTabletTest {
 // This is strictly a measure of decoding and evaluating predicates
 static inline Status SilentIterateToStringList(RowwiseIterator* iter,
                                                int* fetched) {
-  const Schema& schema = iter->schema();
+  const Schema& schema = *iter->schema().get();
   RowBlockMemory memory(1024);
   RowBlock block(&schema, 100, &memory);
   *fetched = 0;
@@ -218,7 +218,7 @@ static inline Status IterateToStringList(RowwiseIterator* iter,
                                          std::vector<std::string>* out,
                                          int limit = INT_MAX) {
   out->clear();
-  Schema schema = iter->schema();
+  Schema& schema = *iter->schema().get();
   RowBlockMemory memory(1024);
   RowBlock block(&schema, 100, &memory);
   int fetched = 0;
@@ -238,13 +238,13 @@ static inline Status IterateToStringList(RowwiseIterator* iter,
 // the results in 'collected_rows'.
 static inline void CollectRowsForSnapshots(
     Tablet* tablet,
-    const Schema& schema,
+    const SchemaRefPtr& schema,
     const std::vector<MvccSnapshot>& snaps,
     std::vector<std::vector<std::string>* >* collected_rows) {
   for (const MvccSnapshot& snapshot : snaps) {
     DVLOG(1) << "Snapshot: " <<  snapshot.ToString();
     RowIteratorOptions opts;
-    opts.projection = &schema;
+    opts.projection = schema;
     opts.snap_to_include = snapshot;
     std::unique_ptr<RowwiseIterator> iter;
     ASSERT_OK(tablet->NewRowIterator(std::move(opts), &iter));
@@ -262,7 +262,7 @@ static inline void CollectRowsForSnapshots(
 // the results match the ones in 'expected_rows'.
 static inline void VerifySnapshotsHaveSameResult(
     Tablet* tablet,
-    const Schema& schema,
+    const SchemaRefPtr& schema,
     const std::vector<MvccSnapshot>& snaps,
     const std::vector<std::vector<std::string>* >& expected_rows) {
   int idx = 0;
@@ -271,7 +271,7 @@ static inline void VerifySnapshotsHaveSameResult(
     DVLOG(1) << "Snapshot: " <<  snapshot.ToString();
 
     RowIteratorOptions opts;
-    opts.projection = &schema;
+    opts.projection = schema;
     opts.snap_to_include = snapshot;
     std::unique_ptr<RowwiseIterator> iter;
     ASSERT_OK(tablet->NewRowIterator(std::move(opts), &iter));
@@ -314,7 +314,7 @@ static inline std::string InitAndDumpIterator(RowwiseIterator* iter) {
 
 // Dump all of the rows of the tablet into the given vector.
 static inline Status DumpTablet(const Tablet& tablet,
-                                const Schema& projection,
+                                const SchemaRefPtr& projection,
                                 std::vector<std::string>* out) {
   std::unique_ptr<RowwiseIterator> iter;
   RETURN_NOT_OK(tablet.NewRowIterator(projection, &iter));
@@ -773,7 +773,7 @@ enum class AllowIsDeleted {
   YES,
   NO
 };
-static inline Schema GetRandomProjection(const Schema& schema,
+static inline SchemaRefPtr GetRandomProjection(const Schema& schema,
                                          Random* prng,
                                          size_t max_cols_to_project,
                                          AllowIsDeleted allow) {
@@ -795,7 +795,7 @@ static inline Schema GetRandomProjection(const Schema& schema,
                                 &read_default);
     projected_col_ids.emplace_back(schema.max_col_id() + 1);
   }
-  return Schema(projected_cols, projected_col_ids, 0);
+  return make_scoped_refptr(new Schema(projected_cols, projected_col_ids, 0));
 }
 
 // Create a DMS and populate it with random deltas.
@@ -938,12 +938,13 @@ void RunDeltaFuzzTest(const DeltaStore& store,
 
     // Create and initialize the iterator. If none iterator is returned, it's
     // because all deltas in 'store' were irrelevant; verify this.
-    Schema projection = GetRandomProjection(*mirror->schema(), prng, kMaxColsToProject,
-                                            lower_ts ? AllowIsDeleted::YES :
-                                                       AllowIsDeleted::NO);
+    SchemaRefPtr projection_ptr =
+        GetRandomProjection(*mirror->schema(), prng, kMaxColsToProject,
+                            lower_ts ? AllowIsDeleted::YES : AllowIsDeleted::NO);
+    Schema& projection = *projection_ptr.get();
     SCOPED_TRACE(Substitute("Projection $0", projection.ToString()));
     RowIteratorOptions opts;
-    opts.projection = &projection;
+    opts.projection = projection_ptr;
     if (lower_ts) {
       opts.snap_to_exclude = MvccSnapshot(*lower_ts);
     }
@@ -1032,7 +1033,7 @@ void RunDeltaFuzzTest(const DeltaStore& store,
             }
           }
         } else {
-          ASSERT_OK(mirror->ApplyUpdates(*opts.projection, lower_ts, upper_ts,
+          ASSERT_OK(mirror->ApplyUpdates(*opts.projection.get(), lower_ts, upper_ts,
                                          start_row_idx, j, &expected_scb, filter));
         }
         ASSERT_OK(iter->ApplyUpdates(j, &actual_scb, filter));

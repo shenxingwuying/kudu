@@ -107,9 +107,9 @@ class TestMultiThreadedRowSetDeltaCompaction : public TestRowSet {
 
   void ReadVerify(DiskRowSet *rs) {
     RowBlockMemory mem(1024);
-    RowBlock dst(&schema_, 1000, &mem);
+    RowBlock dst(schema_.get(), 1000, &mem);
     RowIteratorOptions opts;
-    opts.projection = &schema_;
+    opts.projection = schema_;
     unique_ptr<RowwiseIterator> iter;
     ASSERT_OK(rs->NewRowIterator(opts, &iter));
     uint32_t expected = NoBarrier_Load(&update_counter_);
@@ -120,7 +120,7 @@ class TestMultiThreadedRowSetDeltaCompaction : public TestRowSet {
       size_t n = dst.nrows();
       ASSERT_GT(n, 0);
       for (size_t j = 0; j < n; j++) {
-        uint32_t val = *schema_.ExtractColumnFromRow<UINT32>(dst.row(j), 1);
+        uint32_t val = *schema_->ExtractColumnFromRow<UINT32>(dst.row(j), 1);
         ASSERT_GE(val, expected);
       }
     }

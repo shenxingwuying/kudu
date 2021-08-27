@@ -41,6 +41,7 @@
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/gutil/basictypes.h"
 #include "kudu/gutil/map-util.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/stl_util.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/master/master.h"
@@ -376,12 +377,12 @@ class ChecksumCallbackHandler {
 class ChecksumStepper {
  public:
   ChecksumStepper(string tablet_id,
-                  Schema schema,
+                  const Schema& schema,
                   string server_uuid,
                   KsckChecksumOptions options,
                   shared_ptr<KsckChecksumManager> manager,
                   shared_ptr<tserver::TabletServerServiceProxy> proxy)
-      : schema_(std::move(schema)),
+      : schema_(new Schema(schema)),
         tablet_id_(std::move(tablet_id)),
         server_uuid_(std::move(server_uuid)),
         options_(std::move(options)),
@@ -393,7 +394,7 @@ class ChecksumStepper {
   }
 
   void Start() {
-    Status s = SchemaToColumnPBs(schema_, &cols_,
+    Status s = SchemaToColumnPBs(*schema_.get(), &cols_,
                                  SCHEMA_PB_WITHOUT_IDS | SCHEMA_PB_WITHOUT_STORAGE_ATTRIBUTES);
     if (!s.ok()) {
       manager_->ReportResult(tablet_id_, server_uuid_, s, 0);
@@ -476,7 +477,7 @@ class ChecksumStepper {
     proxy_->ChecksumAsync(req_, &resp_, &rpc_, cb);
   }
 
-  const Schema schema_;
+  const SchemaRefPtr schema_;
   google::protobuf::RepeatedPtrField<ColumnSchemaPB> cols_;
 
   const string tablet_id_;
@@ -598,7 +599,7 @@ Status RemoteKsckCluster::RetrieveTablesList() {
     }
     auto table(make_shared<KsckTable>(
         t->id(), TxnStatusTablet::kTxnStatusTableName,
-        KuduSchema::ToSchema(t->schema()), t->num_replicas()));
+        *KuduSchema::ToSchema(t->schema()).get(), t->num_replicas()));
     txn_sys_table = std::move(table);
   }));
 
@@ -634,7 +635,7 @@ Status RemoteKsckCluster::RetrieveTablesList() {
         return;
       }
       auto table(make_shared<KsckTable>(
-          t->id(), table_name, KuduSchema::ToSchema(t->schema()), t->num_replicas()));
+          t->id(), table_name, *KuduSchema::ToSchema(t->schema()).get(), t->num_replicas()));
       std::lock_guard<simple_spinlock> l(tables_lock);
       tables.emplace_back(std::move(table));
     }));

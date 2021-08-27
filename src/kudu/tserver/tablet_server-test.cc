@@ -245,7 +245,8 @@ class TabletServerTest : public TabletServerTestBase {
     NO_FATALS(StartTabletServer(/*num_data_dirs=*/1));
   }
 
-  void DoOrderedScanTest(const Schema& projection, const string& expected_rows_as_string);
+  void DoOrderedScanTest(const SchemaRefPtr& projection,
+                         const string& expected_rows_as_string);
 
   void ScanYourWritesTest(uint64_t propagated_timestamp, ScanResponsePB* resp);
 };
@@ -1031,7 +1032,7 @@ TEST_P(TabletServerDiskErrorTest, TestRandomOpSequence) {
     // Set up the request.
     WriteRequestPB req;
     req.set_tablet_id(kTabletId);
-    RETURN_NOT_OK(SchemaToPB(schema_, req.mutable_schema()));
+    RETURN_NOT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
     // Set up the other state.
     WriteResponsePB resp;
@@ -1312,7 +1313,7 @@ TEST_F(TabletServerTest, TestInsert) {
   // This should succeed and do nothing.
   {
     controller.Reset();
-    ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+    ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
     SCOPED_TRACE(SecureDebugString(req));
     ASSERT_OK(proxy_->Write(req, &resp, &controller));
     SCOPED_TRACE(SecureDebugString(resp));
@@ -1404,7 +1405,7 @@ TEST_F(TabletServerTest, TestExternalConsistencyModes_ClientPropagated) {
       HybridClock::GetPhysicalValueMicros(current) + 5000000);
 
   // Send an actual row insert.
-  ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
   AddTestRowToPB(RowOperationsPB::INSERT, schema_, 1234, 5678, "hello world via RPC",
                  req.mutable_row_operations());
 
@@ -1457,7 +1458,7 @@ TEST_F(TabletServerTest, TestExternalConsistencyModes_CommitWait) {
       << error_before << " us";
 
   // Send an actual row insert.
-  ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
   AddTestRowToPB(RowOperationsPB::INSERT, schema_, 1234, 5678, "hello world via RPC",
                  req.mutable_row_operations());
 
@@ -1522,7 +1523,7 @@ TEST_F(TabletServerTest, TestInsertAndMutate) {
     WriteResponsePB resp;
     req.set_tablet_id(kTabletId);
     RowOperationsPB* data = req.mutable_row_operations();
-    ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+    ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
     AddTestRowToPB(RowOperationsPB::INSERT, schema_, 1, 1, "original1", data);
     AddTestRowToPB(RowOperationsPB::INSERT, schema_, 2, 2, "original2", data);
@@ -1542,7 +1543,7 @@ TEST_F(TabletServerTest, TestInsertAndMutate) {
     WriteRequestPB req;
     WriteResponsePB resp;
     req.set_tablet_id(kTabletId);
-    ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+    ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
     AddTestRowToPB(RowOperationsPB::UPDATE, schema_, 1, 2, "mutation1",
                    req.mutable_row_operations());
@@ -1565,7 +1566,7 @@ TEST_F(TabletServerTest, TestInsertAndMutate) {
     WriteRequestPB req;
     WriteResponsePB resp;
     req.set_tablet_id(kTabletId);
-    ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+    ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
     AddTestRowToPB(RowOperationsPB::UPDATE, schema_, 1234, 2, "mutated",
                    req.mutable_row_operations());
@@ -1583,7 +1584,7 @@ TEST_F(TabletServerTest, TestInsertAndMutate) {
     WriteRequestPB req;
     WriteResponsePB resp;
     req.set_tablet_id(kTabletId);
-    ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+    ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
     AddTestKeyToPB(RowOperationsPB::DELETE, schema_, 1, req.mutable_row_operations());
     SCOPED_TRACE(SecureDebugString(req));
@@ -1601,7 +1602,7 @@ TEST_F(TabletServerTest, TestInsertAndMutate) {
     WriteRequestPB req;
     WriteResponsePB resp;
     req.set_tablet_id(kTabletId);
-    ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+    ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
     AddTestRowToPB(RowOperationsPB::UPDATE, schema_, 1, 2, "mutated1",
                    req.mutable_row_operations());
@@ -1625,7 +1626,7 @@ TEST_F(TabletServerTest, TestInsertAndMutate) {
     WriteRequestPB req;
     WriteResponsePB resp;
     req.set_tablet_id(kTabletId);
-    ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+    ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
     RowOperationsPB* ops = req.mutable_row_operations();
     // op 0: Mutate row 1, which doesn't exist. This should fail.
@@ -1686,7 +1687,7 @@ TEST_F(TabletServerTest, TestInvalidWriteRequest_WrongOpType) {
     WriteResponsePB resp;
     RpcController controller;
 
-    CHECK_OK(SchemaToPB(schema_, req.mutable_schema()));
+    CHECK_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
     RowOperationsPB* data = req.mutable_row_operations();
     AddTestRowToPB(op_type, schema_, 1234, 5678, "foo", data);
     SCOPED_TRACE(SecureDebugString(req));
@@ -1719,11 +1720,12 @@ TEST_F(TabletServerTest, TestInvalidWriteRequest_WrongOpType) {
 // Test that passing a schema with fields not present in the tablet schema
 // throws an exception.
 TEST_F(TabletServerTest, TestInvalidWriteRequest_BadSchema) {
-  SchemaBuilder schema_builder(schema_);
+  SchemaBuilder schema_builder(*schema_.get());
   ASSERT_OK(schema_builder.AddColumn("col_doesnt_exist", INT32));
-  Schema bad_schema_with_ids = schema_builder.Build();
-  Schema bad_schema = schema_builder.BuildWithoutIds();
-
+  SchemaRefPtr bad_schema_with_ids_ptr = schema_builder.Build();
+  Schema& bad_schema_with_ids = *bad_schema_with_ids_ptr.get();
+  SchemaRefPtr bad_schema_ptr = schema_builder.BuildWithoutIds();
+  Schema& bad_schema = *bad_schema_ptr.get();
   // Send a row insert with an extra column
   {
     WriteRequestPB req;
@@ -1761,7 +1763,7 @@ TEST_F(TabletServerTest, TestInvalidWriteRequest_BadSchema) {
     req.set_tablet_id(kTabletId);
     ASSERT_OK(SchemaToPB(bad_schema_with_ids, req.mutable_schema()));
 
-    AddTestKeyToPB(RowOperationsPB::UPDATE, bad_schema_with_ids, 1,
+    AddTestKeyToPB(RowOperationsPB::UPDATE, bad_schema_with_ids_ptr, 1,
                    req.mutable_row_operations());
     SCOPED_TRACE(SecureDebugString(req));
     ASSERT_OK(proxy_->Write(req, &resp, &controller));
@@ -2018,7 +2020,7 @@ TEST_F(TabletServerTest, TestExactlyOnceForErrorsAcrossRestart) {
                  req.mutable_row_operations());
   AddTestRowToPB(RowOperationsPB::INSERT, schema_, 12345, 5679, "hello world via RPC2",
                  req.mutable_row_operations());
-  ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
   // Insert it, assuming no errors.
   {
@@ -2174,7 +2176,7 @@ TEST_F(TabletServerTest, TestReadLatest) {
   NO_FATALS(DrainScannerToStrings(resp.scanner_id(), schema_, &results));
   ASSERT_EQ(num_rows, results.size());
 
-  KuduPartialRow row(&schema_);
+  KuduPartialRow row(schema_.get());
   for (int i = 0; i < num_rows; i++) {
     BuildTestRow(i, &row);
     string expected = "(" + row.ToString() + ")";
@@ -2300,7 +2302,7 @@ TEST_P(ScanCorruptedDeltasParamTest, Test) {
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
   scan->set_read_mode(mode);
-  ASSERT_OK(SchemaToColumnPBs(schema_, scan->mutable_projected_columns()));
+  ASSERT_OK(SchemaToColumnPBs(*schema_.get(), scan->mutable_projected_columns()));
 
   // Send the call. This first call should attempt to init the corrupted
   // deltafiles and return with an error. Subsequent calls should see that the
@@ -2389,7 +2391,7 @@ TEST_F(TabletServerTest, TestSnapshotScan) {
     resp.Clear();
     rpc.Reset();
     // Set up a new request with no predicates, all columns.
-    const Schema& projection = schema_;
+    const Schema& projection = *schema_.get();
     NewScanRequestPB* scan = req.mutable_new_scan_request();
     scan->set_tablet_id(kTabletId);
     scan->set_read_mode(READ_AT_SNAPSHOT);
@@ -2454,7 +2456,7 @@ TEST_F(TabletServerTest, TestSnapshotScan_WithoutSnapshotTimestamp) {
   RpcController rpc;
 
   // Set up a new request with no predicates, all columns.
-  const Schema& projection = schema_;
+  const Schema& projection = *schema_.get();
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
   ASSERT_OK(SchemaToColumnPBs(projection, scan->mutable_projected_columns()));
@@ -2497,7 +2499,7 @@ TEST_F(TabletServerTest, TestSnapshotScan_SnapshotInTheFutureFails) {
   RpcController rpc;
 
   // Set up a new request with no predicates, all columns.
-  const Schema& projection = schema_;
+  const Schema& projection = *schema_.get();
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
   ASSERT_OK(SchemaToColumnPBs(projection, scan->mutable_projected_columns()));
@@ -2545,11 +2547,12 @@ TEST_F(TabletServerTest, TestSnapshotScan_LastRow) {
   // Remove all the key columns from the projection.
   // This makes sure the scanner adds them in for sorting but removes them before returning
   // to the client.
-  SchemaBuilder sb(schema_);
-  for (int i = 0; i < schema_.num_key_columns(); i++) {
-    sb.RemoveColumn(schema_.column(i).name());
+  SchemaBuilder sb(*schema_.get());
+  for (int i = 0; i < schema_->num_key_columns(); i++) {
+    sb.RemoveColumn(schema_->column(i).name());
   }
-  const Schema& projection = sb.BuildWithoutIds();
+  const SchemaRefPtr projection_ptr = sb.BuildWithoutIds();
+  const Schema& projection = *projection_ptr.get();
 
   // Scan the whole tablet with a few different batch sizes.
   for (int i = 1; i < 10000; i *= 2) {
@@ -2618,7 +2621,7 @@ TEST_F(TabletServerTest, TestSnapshotScan_SnapshotInTheFutureWithPropagatedTimes
   RpcController rpc;
 
   // Set up a new request with no predicates, all columns.
-  const Schema& projection = schema_;
+  const Schema& projection = *schema_.get();
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
   ASSERT_OK(SchemaToColumnPBs(projection, scan->mutable_projected_columns()));
@@ -2676,7 +2679,7 @@ TEST_F(TabletServerTest, TestSnapshotScan__SnapshotInTheFutureBeyondPropagatedTi
   RpcController rpc;
 
   // Set up a new request with no predicates, all columns.
-  const Schema& projection = schema_;
+  const Schema& projection = *schema_.get();
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
   ASSERT_OK(SchemaToColumnPBs(projection, scan->mutable_projected_columns()));
@@ -2865,7 +2868,7 @@ TEST_F(TabletServerTest, TestScanWithStringPredicates) {
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
   req.set_batch_size_bytes(0); // so it won't return data right away
-  ASSERT_OK(SchemaToColumnPBs(schema_, scan->mutable_projected_columns()));
+  ASSERT_OK(SchemaToColumnPBs(*schema_.get(), scan->mutable_projected_columns()));
 
   // Set up a range predicate: "hello 50" < string_val <= "hello 59"
   ColumnRangePredicatePB* pred = scan->add_deprecated_range_predicates();
@@ -2901,7 +2904,7 @@ TEST_F(TabletServerTest, TestColumnarScan) {
 
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
-  ASSERT_OK(SchemaToColumnPBs(schema_, scan->mutable_projected_columns()));
+  ASSERT_OK(SchemaToColumnPBs(*schema_.get(), scan->mutable_projected_columns()));
 
   scan->set_row_format_flags(RowFormatFlags::COLUMNAR_LAYOUT);
   rpc.RequireServerFeature(TabletServerFeatures::COLUMNAR_LAYOUT_FEATURE);
@@ -2972,7 +2975,7 @@ TEST_F(TabletServerTest, TestNonPositiveLimitsShortCircuit) {
     NewScanRequestPB* scan = req.mutable_new_scan_request();
     scan->set_tablet_id(kTabletId);
     scan->set_limit(limit);
-    ASSERT_OK(SchemaToColumnPBs(schema_, scan->mutable_projected_columns()));
+    ASSERT_OK(SchemaToColumnPBs(*schema_.get(), scan->mutable_projected_columns()));
     {
       // Send the request and make sure we get no rows back.
       SCOPED_TRACE(SecureDebugString(req));
@@ -3016,7 +3019,7 @@ TEST_F(TabletServerTest, TestRandomizedScanLimits) {
     scan->set_tablet_id(kTabletId);
     scan->set_limit(kLimit);
     req.set_batch_size_bytes(0); // so it won't return data right away
-    ASSERT_OK(SchemaToColumnPBs(schema_, scan->mutable_projected_columns()));
+    ASSERT_OK(SchemaToColumnPBs(*schema_.get(), scan->mutable_projected_columns()));
     // Send the scan.
     {
       SCOPED_TRACE(SecureDebugString(req));
@@ -3042,7 +3045,7 @@ TEST_F(TabletServerTest, TestScanWithPredicates) {
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
   req.set_batch_size_bytes(0); // so it won't return data right away
-  ASSERT_OK(SchemaToColumnPBs(schema_, scan->mutable_projected_columns()));
+  ASSERT_OK(SchemaToColumnPBs(*schema_.get(), scan->mutable_projected_columns()));
 
   // Set up a range predicate: 51 <= key <= 100
   ColumnRangePredicatePB* pred = scan->add_deprecated_range_predicates();
@@ -3080,14 +3083,14 @@ TEST_F(TabletServerTest, TestScanWithEncodedPredicates) {
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
   req.set_batch_size_bytes(0); // so it won't return data right away
-  ASSERT_OK(SchemaToColumnPBs(schema_, scan->mutable_projected_columns()));
+  ASSERT_OK(SchemaToColumnPBs(*schema_.get(), scan->mutable_projected_columns()));
 
   // Set up a range predicate: 51 <= key <= 60
   // using encoded keys
   int32_t start_key_int = 51;
   int32_t stop_key_int = 60;
   Arena arena(64);
-  EncodedKeyBuilder ekb(&schema_, &arena);
+  EncodedKeyBuilder ekb(schema_.get(), &arena);
   ekb.AddColumnKey(&start_key_int);
   EncodedKey* start_encoded = ekb.BuildEncodedKey();
 
@@ -3133,16 +3136,17 @@ TEST_F(TabletServerTest, TestScanWithSimplifiablePredicates) {
   scan->set_tablet_id(kTabletId);
   req.set_batch_size_bytes(0); // so it won't return data right away
   // Set up a projection without the key columns or the column after the last key column
-  SchemaBuilder sb(schema_);
-  for (int i = 0; i <= schema_.num_key_columns(); i++) {
-    sb.RemoveColumn(schema_.column(i).name());
+  SchemaBuilder sb(*schema_.get());
+  for (int i = 0; i <= schema_->num_key_columns(); i++) {
+    sb.RemoveColumn(schema_->column(i).name());
   }
-  const Schema& projection = sb.BuildWithoutIds();
+  const SchemaRefPtr projection_ptr = sb.BuildWithoutIds();
+  const Schema& projection = *projection_ptr.get();
   ASSERT_OK(SchemaToColumnPBs(projection, scan->mutable_projected_columns()));
 
   // Set up a key range predicate: 51 <= key < 100
   ColumnPredicatePB* key_predicate = scan->add_column_predicates();
-  key_predicate->set_column(schema_.column(0).name());
+  key_predicate->set_column(schema_->column(0).name());
   ColumnPredicatePB::Range* range = key_predicate->mutable_range();
   int32_t lower_bound_inclusive = 51;
   int32_t upper_bound_exclusive = 100;
@@ -3152,7 +3156,7 @@ TEST_F(TabletServerTest, TestScanWithSimplifiablePredicates) {
     reinterpret_cast<char*>(&upper_bound_exclusive), sizeof(upper_bound_exclusive));
   // Set up is not null predicate for not nullable column.
   ColumnPredicatePB* is_not_null_predicate = scan->add_column_predicates();
-  is_not_null_predicate->set_column(schema_.column(1).name());
+  is_not_null_predicate->set_column(schema_->column(1).name());
   is_not_null_predicate->mutable_is_not_null();
   // Send the call
   {
@@ -3176,7 +3180,7 @@ TEST_F(TabletServerTest, TestScanWithSimplifiablePredicates) {
   // Drain all the rows from the scanner.
   vector<string> results;
   NO_FATALS(
-    DrainScannerToStrings(resp.scanner_id(), projection, &results));
+    DrainScannerToStrings(resp.scanner_id(), projection_ptr, &results));
   ASSERT_EQ(49, results.size());
 }
 
@@ -3200,11 +3204,11 @@ TEST_F(TabletServerTest, TestDiffScan) {
   }
 
   // Update some random rows.
-  LocalTabletWriter writer(tablet_replica_->tablet(), &schema_);
+  LocalTabletWriter writer(tablet_replica_->tablet(), schema_.get());
   std::mt19937 gen(SeedRandom());
   std::shuffle(keys.begin(), keys.end(), gen);
   for (int i = 0; i < kNumToUpdate; i++) {
-    KuduPartialRow row(&schema_);
+    KuduPartialRow row(schema_.get());
     int32_t key = keys[i];
     CHECK_OK(row.SetInt32(0, key));
     int32_t new_val = key * 3;
@@ -3216,7 +3220,7 @@ TEST_F(TabletServerTest, TestDiffScan) {
   // Delete some random rows.
   std::shuffle(keys.begin(), keys.end(), gen);
   for (int i = 0; i < kNumToDelete; i++) {
-    KuduPartialRow row(&schema_);
+    KuduPartialRow row(schema_.get());
     int32_t key = keys[i];
     CHECK_OK(row.SetInt32(0, key));
     EmplaceOrUpdate(&expected, key, pair<int32_t, bool>(0 /* ignored */, true));
@@ -3230,13 +3234,14 @@ TEST_F(TabletServerTest, TestDiffScan) {
   RpcController rpc;
 
   // Build a projection with an IS_DELETED column.
-  SchemaBuilder builder(*tablet_replica_->tablet()->schema());
+  SchemaBuilder builder(*tablet_replica_->tablet()->schema().get());
   const bool kIsDeletedDefault = false;
   ASSERT_OK(builder.AddColumn("is_deleted", IS_DELETED,
                               /*is_nullable=*/ false,
                               /*read_default=*/ &kIsDeletedDefault,
                               /*write_default=*/ nullptr));
-  Schema projection = builder.BuildWithoutIds();
+  SchemaRefPtr projection_ptr = builder.BuildWithoutIds();
+  Schema& projection = *projection_ptr.get();
 
   // Start scan.
   auto* new_scan = req.mutable_new_scan_request();
@@ -3298,13 +3303,14 @@ TEST_F(TabletServerTest, TestDiffScanErrors) {
   Timestamp after_insert = tablet_replica_->clock()->Now();
 
   // Build a projection with an IS_DELETED column.
-  SchemaBuilder builder(*tablet_replica_->tablet()->schema());
+  SchemaBuilder builder(*tablet_replica_->tablet()->schema().get());
   const bool kIsDeletedDefault = false;
   ASSERT_OK(builder.AddColumn("is_deleted", IS_DELETED,
                               /*is_nullable=*/ false,
                               /*read_default=*/ &kIsDeletedDefault,
                               /*write_default=*/ nullptr));
-  Schema projection = builder.BuildWithoutIds();
+  SchemaRefPtr projection_ptr = builder.BuildWithoutIds();
+  Schema& projection = *projection_ptr.get();
 
   ScanRequestPB req;
   ScanResponsePB resp;
@@ -3410,19 +3416,20 @@ INSTANTIATE_TEST_SUITE_P(Params, InvalidScanRequest_NewScanAndScannerIDParamTest
 // Test that passing a projection with fields not present in the tablet schema
 // throws an exception.
 TEST_F(TabletServerTest, TestInvalidScanRequest_BadProjection) {
-  const Schema projection({ ColumnSchema("col_doesnt_exist", INT32) }, 0);
-  VerifyScanRequestFailure(projection,
+  const SchemaRefPtr projection_ptr(
+      new Schema({ ColumnSchema("col_doesnt_exist", INT32) }, 0));
+  VerifyScanRequestFailure(projection_ptr,
                            TabletServerErrorPB::MISMATCHED_SCHEMA,
                            "Some columns are not present in the current schema: col_doesnt_exist");
 }
 
 // Test that passing a projection with mismatched type/nullability throws an exception.
 TEST_F(TabletServerTest, TestInvalidScanRequest_BadProjectionTypes) {
-  Schema projection;
+  SchemaRefPtr projection(new Schema);
 
   // Verify mismatched nullability for the not-null int field
   ASSERT_OK(
-    projection.Reset({ ColumnSchema("int_val", INT32, true) }, // should be NOT NULL
+    projection->Reset({ ColumnSchema("int_val", INT32, true) }, // should be NOT NULL
                      0));
   VerifyScanRequestFailure(projection,
                            TabletServerErrorPB::MISMATCHED_SCHEMA,
@@ -3431,7 +3438,7 @@ TEST_F(TabletServerTest, TestInvalidScanRequest_BadProjectionTypes) {
 
   // Verify mismatched nullability for the nullable string field
   ASSERT_OK(
-    projection.Reset({ ColumnSchema("string_val", STRING, false) }, // should be NULLABLE
+    projection->Reset({ ColumnSchema("string_val", STRING, false) }, // should be NULLABLE
                      0));
   VerifyScanRequestFailure(projection,
                            TabletServerErrorPB::MISMATCHED_SCHEMA,
@@ -3440,7 +3447,7 @@ TEST_F(TabletServerTest, TestInvalidScanRequest_BadProjectionTypes) {
 
   // Verify mismatched type for the not-null int field
   ASSERT_OK(
-    projection.Reset({ ColumnSchema("int_val", INT16, false) },     // should be INT32 NOT NULL
+    projection->Reset({ ColumnSchema("int_val", INT16, false) },     // should be INT32 NOT NULL
                      0));
   VerifyScanRequestFailure(projection,
                            TabletServerErrorPB::MISMATCHED_SCHEMA,
@@ -3448,7 +3455,7 @@ TEST_F(TabletServerTest, TestInvalidScanRequest_BadProjectionTypes) {
                            "NULL found INT16 NOT NULL");
 
   // Verify mismatched type for the nullable string field
-  ASSERT_OK(projection.Reset(
+  ASSERT_OK(projection->Reset(
         { ColumnSchema("string_val", INT32, true) }, // should be STRING NULLABLE
         0));
   VerifyScanRequestFailure(projection,
@@ -3463,7 +3470,7 @@ TEST_F(TabletServerTest, TestInvalidScanRequest_UnknownOrderMode) {
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
   scan->set_order_mode(OrderMode::UNKNOWN_ORDER_MODE);
-  ASSERT_OK(SchemaToColumnPBs(schema_, scan->mutable_projected_columns()));
+  ASSERT_OK(SchemaToColumnPBs(*schema_.get(), scan->mutable_projected_columns()));
   req.set_call_seq_id(0);
   NO_FATALS(VerifyScanRequestFailure(req,
                                      TabletServerErrorPB::INVALID_SCAN_SPEC,
@@ -3478,9 +3485,9 @@ class InvalidScanRequest_WithIdsParamTest :
     public ::testing::WithParamInterface<ReadMode> {
 };
 TEST_P(InvalidScanRequest_WithIdsParamTest, Test) {
-  const Schema* projection = tablet_replica_->tablet()->schema();
+  const SchemaRefPtr projection = tablet_replica_->tablet()->schema();
   ASSERT_TRUE(projection->has_column_ids());
-  VerifyScanRequestFailure(*projection,
+  VerifyScanRequestFailure(projection,
                            TabletServerErrorPB::INVALID_SCHEMA,
                            "User requests should not have Column IDs");
 }
@@ -3495,7 +3502,7 @@ TEST_F(TabletServerTest, TestScan_NoResults) {
   RpcController rpc;
 
   // Set up a new request with no predicates, all columns.
-  const Schema& projection = schema_;
+  const Schema& projection = *schema_.get();
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
   req.set_batch_size_bytes(0); // so it won't return data right away
@@ -3529,7 +3536,7 @@ TEST_P(InvalidScanSeqIdParamTest, Test) {
 
   {
     // Set up a new scan request with no predicates, all columns.
-    const Schema& projection = schema_;
+    const Schema& projection = *schema_.get();
     NewScanRequestPB* scan = req.mutable_new_scan_request();
     scan->set_tablet_id(kTabletId);
     scan->set_read_mode(mode);
@@ -3591,7 +3598,7 @@ void TabletServerTest::ScanYourWritesTest(uint64_t propagated_timestamp,
   ScanRequestPB req;
 
   // Set up a new request with no predicates, all columns.
-  const Schema &projection = schema_;
+  const Schema& projection = *schema_.get();
   NewScanRequestPB *scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
   scan->set_read_mode(READ_YOUR_WRITES);
@@ -3619,7 +3626,7 @@ void TabletServerTest::ScanYourWritesTest(uint64_t propagated_timestamp,
   ASSERT_TRUE(resp->has_more_results());
 }
 
-void TabletServerTest::DoOrderedScanTest(const Schema& projection,
+void TabletServerTest::DoOrderedScanTest(const SchemaRefPtr& projection_ptr,
                                          const string& expected_rows_as_string) {
   InsertTestRowsDirect(0, 10);
   ASSERT_OK(tablet_replica_->tablet()->Flush());
@@ -3634,7 +3641,7 @@ void TabletServerTest::DoOrderedScanTest(const Schema& projection,
   // Set up a new snapshot scan without a specified timestamp.
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
-  ASSERT_OK(SchemaToColumnPBs(projection, scan->mutable_projected_columns()));
+  ASSERT_OK(SchemaToColumnPBs(*projection_ptr.get(), scan->mutable_projected_columns()));
   req.set_call_seq_id(0);
   scan->set_read_mode(READ_AT_SNAPSHOT);
   scan->set_order_mode(ORDERED);
@@ -3649,7 +3656,7 @@ void TabletServerTest::DoOrderedScanTest(const Schema& projection,
 
   vector<string> results;
   NO_FATALS(
-    DrainScannerToStrings(resp.scanner_id(), projection, &results));
+    DrainScannerToStrings(resp.scanner_id(), projection_ptr, &results));
 
   ASSERT_EQ(30, results.size());
 
@@ -3664,11 +3671,11 @@ void TabletServerTest::DoOrderedScanTest(const Schema& projection,
 TEST_F(TabletServerTest, TestOrderedScan_ProjectionWithKeyColumnsInOrder) {
   // Build a projection with all the columns, but don't mark the key columns as such.
   SchemaBuilder sb;
-  for (int i = 0; i < schema_.num_columns(); i++) {
-    sb.AddColumn(schema_.column(i), false);
+  for (int i = 0; i < schema_->num_columns(); i++) {
+    sb.AddColumn(schema_->column(i), false);
   }
-  const Schema& projection = sb.BuildWithoutIds();
-  DoOrderedScanTest(projection,
+  const SchemaRefPtr projection_ptr = sb.BuildWithoutIds();
+  DoOrderedScanTest(projection_ptr,
                     R"((int32 key=$0, int32 int_val=$1, string string_val="hello $0"))");
 }
 
@@ -3676,22 +3683,22 @@ TEST_F(TabletServerTest, TestOrderedScan_ProjectionWithKeyColumnsInOrder) {
 TEST_F(TabletServerTest, TestOrderedScan_ProjectionWithoutKeyColumns) {
   // Build a projection without the key columns.
   SchemaBuilder sb;
-  for (int i = schema_.num_key_columns(); i < schema_.num_columns(); i++) {
-    sb.AddColumn(schema_.column(i), false);
+  for (int i = schema_->num_key_columns(); i < schema_->num_columns(); i++) {
+    sb.AddColumn(schema_->column(i), false);
   }
-  const Schema& projection = sb.BuildWithoutIds();
-  DoOrderedScanTest(projection, R"((int32 int_val=$1, string string_val="hello $0"))");
+  const SchemaRefPtr projection_ptr = sb.BuildWithoutIds();
+  DoOrderedScanTest(projection_ptr, R"((int32 int_val=$1, string string_val="hello $0"))");
 }
 
 // Same as above but creates a projection with the order of columns reversed.
 TEST_F(TabletServerTest, TestOrderedScan_ProjectionWithKeyColumnsOutOfOrder) {
   // Build a projection with the order of the columns reversed.
   SchemaBuilder sb;
-  for (int i = schema_.num_columns() - 1; i >= 0; i--) {
-    sb.AddColumn(schema_.column(i), false);
+  for (int i = schema_->num_columns() - 1; i >= 0; i--) {
+    sb.AddColumn(schema_->column(i), false);
   }
-  const Schema& projection = sb.BuildWithoutIds();
-  DoOrderedScanTest(projection,
+  const SchemaRefPtr projection_ptr = sb.BuildWithoutIds();
+  DoOrderedScanTest(projection_ptr,
                     R"((string string_val="hello $0", int32 int_val=$1, int32 key=$0))");
 }
 
@@ -3731,9 +3738,10 @@ TEST_F(TabletServerTest, TestAlterSchema) {
   // Add one column with a default value
   const int32_t c2_write_default = 5;
   const int32_t c2_read_default = 7;
-  SchemaBuilder builder(schema_);
+  SchemaBuilder builder(*schema_.get());
   ASSERT_OK(builder.AddColumn("c2", INT32, false, &c2_read_default, &c2_write_default));
-  Schema s2 = builder.Build();
+  SchemaRefPtr s2_ptr = builder.Build();
+  Schema& s2 = *s2_ptr.get();
 
   req.set_dest_uuid(mini_server_->server()->fs_manager()->uuid());
   req.set_tablet_id(kTabletId);
@@ -3755,18 +3763,19 @@ TEST_F(TabletServerTest, TestAlterSchema) {
     ASSERT_OK(tablet->tablet()->Flush());
   }
 
-  const Schema projection({ ColumnSchema("key", INT32), (ColumnSchema("c2", INT32)) }, 1);
+  const SchemaRefPtr projection_ptr(
+      new Schema({ ColumnSchema("key", INT32), (ColumnSchema("c2", INT32)) }, 1));
 
   // Try recovering from the original log
   NO_FATALS(ShutdownAndRebuildTablet());
-  VerifyRows(projection, { KeyValue(0, 7),
+  VerifyRows(projection_ptr, { KeyValue(0, 7),
                            KeyValue(1, 7),
                            KeyValue(2, 5),
                            KeyValue(3, 5) });
 
   // Try recovering from the log generated on recovery
   NO_FATALS(ShutdownAndRebuildTablet());
-  VerifyRows(projection, { KeyValue(0, 7),
+  VerifyRows(projection_ptr, { KeyValue(0, 7),
                            KeyValue(1, 7),
                            KeyValue(2, 5),
                            KeyValue(3, 5) });
@@ -3786,9 +3795,10 @@ TEST_F(TabletServerTest, TestAlterSchema_AddColWithoutWriteDefault) {
 
   // Add a column with a read-default but no write-default.
   const uint32_t c2_read_default = 7;
-  SchemaBuilder builder(schema_);
+  SchemaBuilder builder(*schema_.get());
   ASSERT_OK(builder.AddColumn("c2", INT32, false, &c2_read_default, nullptr));
-  Schema s2 = builder.Build();
+  SchemaRefPtr s2_ptr = builder.Build();
+  Schema& s2 = *s2_ptr.get();
 
   req.set_dest_uuid(mini_server_->server()->fs_manager()->uuid());
   req.set_tablet_id(kTabletId);
@@ -3805,16 +3815,17 @@ TEST_F(TabletServerTest, TestAlterSchema_AddColWithoutWriteDefault) {
 
   // Verify that the old data picked up the read default.
 
-  const Schema projection({ ColumnSchema("key", INT32), ColumnSchema("c2", INT32) }, 1);
-  VerifyRows(projection, { KeyValue(0, 7), KeyValue(1, 7) });
+  const SchemaRefPtr projection_ptr(
+      new Schema({ ColumnSchema("key", INT32), ColumnSchema("c2", INT32) }, 1));
+  VerifyRows(projection_ptr, { KeyValue(0, 7), KeyValue(1, 7) });
 
   // Try recovering from the original log
   NO_FATALS(ShutdownAndRebuildTablet());
-  VerifyRows(projection, { KeyValue(0, 7), KeyValue(1, 7) });
+  VerifyRows(projection_ptr, { KeyValue(0, 7), KeyValue(1, 7) });
 
   // Try recovering from the log generated on recovery
   NO_FATALS(ShutdownAndRebuildTablet());
-  VerifyRows(projection, { KeyValue(0, 7), KeyValue(1, 7) });
+  VerifyRows(projection_ptr, { KeyValue(0, 7), KeyValue(1, 7) });
 }
 
 TEST_F(TabletServerTest, TestCreateTablet_TabletExists) {
@@ -3831,7 +3842,8 @@ TEST_F(TabletServerTest, TestCreateTablet_TabletExists) {
   req.set_table_name("testtb");
   req.mutable_config()->CopyFrom(mini_server_->CreateLocalConfig());
 
-  Schema schema = SchemaBuilder(schema_).Build();
+  SchemaRefPtr schema_ptr = SchemaBuilder(*schema_.get()).Build();
+  Schema& schema = *schema_ptr.get();
   ASSERT_OK(SchemaToPB(schema, req.mutable_schema()));
 
   // Send the call
@@ -4098,15 +4110,15 @@ TEST_F(TabletServerTest, TestRpcServerCreateDestroy) {
 
 TEST_F(TabletServerTest, TestWriteOutOfBounds) {
   const char *tabletId = "TestWriteOutOfBoundsTablet";
-  Schema schema = SchemaBuilder(schema_).Build();
+  SchemaRefPtr schema = SchemaBuilder(*schema_.get()).Build();
 
   PartitionSchema partition_schema;
-  CHECK_OK(PartitionSchema::FromPB(PartitionSchemaPB(), schema, &partition_schema));
+  CHECK_OK(PartitionSchema::FromPB(PartitionSchemaPB(), *schema.get(), &partition_schema));
 
-  KuduPartialRow start_row(&schema);
+  KuduPartialRow start_row(schema.get());
   ASSERT_OK(start_row.SetInt32("key", 10));
 
-  KuduPartialRow end_row(&schema);
+  KuduPartialRow end_row(schema.get());
   ASSERT_OK(end_row.SetInt32("key", 20));
 
   vector<Partition> partitions;
@@ -4126,7 +4138,7 @@ TEST_F(TabletServerTest, TestWriteOutOfBounds) {
   WriteResponsePB resp;
   RpcController controller;
   req.set_tablet_id(tabletId);
-  ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
   vector<RowOperationsPB::Type> ops = { RowOperationsPB::INSERT, RowOperationsPB::UPDATE };
 
@@ -4178,7 +4190,8 @@ TEST_F(TabletServerTest, TestChecksumScan) {
   req.mutable_new_request()->set_tablet_id(kTabletId);
   req.mutable_new_request()->set_read_mode(READ_LATEST);
   req.set_call_seq_id(0);
-  ASSERT_OK(SchemaToColumnPBs(schema_, req.mutable_new_request()->mutable_projected_columns(),
+  ASSERT_OK(SchemaToColumnPBs(*schema_.get(),
+                              req.mutable_new_request()->mutable_projected_columns(),
                               SCHEMA_PB_WITHOUT_IDS));
   ChecksumRequestPB new_req = req;  // Cache "new" request.
 
@@ -4731,7 +4744,7 @@ TEST_F(OpApplyQueueTest, ApplyQueueBackpressure) {
   const int num_cpus = base::NumCPUs();
   WriteRequestPB req;
   req.set_tablet_id(kTabletId);
-  ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
   // Inject latency into WriteOp::Apply().
   FLAGS_tablet_inject_latency_on_apply_write_op_ms = kInjectedLatencyMs;

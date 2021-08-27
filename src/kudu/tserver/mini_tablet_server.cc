@@ -135,15 +135,15 @@ RaftConfigPB MiniTabletServer::CreateLocalConfig() const {
 
 Status MiniTabletServer::AddTestTablet(const std::string& table_id,
                                        const std::string& tablet_id,
-                                       const Schema& schema) {
+                                       const SchemaRefPtr& schema) {
   return AddTestTablet(table_id, tablet_id, schema, CreateLocalConfig());
 }
 
 Status MiniTabletServer::AddTestTablet(const std::string& table_id,
                                        const std::string& tablet_id,
-                                       const Schema& schema,
+                                       const SchemaRefPtr& schema,
                                        const RaftConfigPB& config) {
-  Schema schema_with_ids = SchemaBuilder(schema).Build();
+  SchemaRefPtr schema_with_ids = SchemaBuilder(*schema.get()).Build();
   pair<PartitionSchema, Partition> partition = tablet::CreateDefaultPartition(schema_with_ids);
 
   return server_->tablet_manager()->CreateNewTablet(

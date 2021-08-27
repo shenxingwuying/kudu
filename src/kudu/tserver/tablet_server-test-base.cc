@@ -101,8 +101,8 @@ TabletServerTestBase::TabletServerTestBase()
 void TabletServerTestBase::SetUp() {
   KuduTest::SetUp();
 
-  key_schema_ = schema_.CreateKeyProjection();
-  rb_.reset(new RowBuilder(&schema_));
+  key_schema_ = schema_->CreateKeyProjection();
+  rb_.reset(new RowBuilder(schema_.get()));
 
   rpc::MessengerBuilder bld("Client");
   ASSERT_OK(bld.Build(&client_messenger_));
@@ -161,7 +161,7 @@ void TabletServerTestBase::UpdateTestRowRemote(int32_t row_idx,
                                                TimeSeries* ts) {
   WriteRequestPB req;
   req.set_tablet_id(kTabletId);
-  ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
   WriteResponsePB resp;
   RpcController controller;
@@ -197,8 +197,8 @@ void TabletServerTestBase::InsertTestRowsDirect(int32_t start_row,
   scoped_refptr<tablet::TabletReplica> tablet_replica;
   ASSERT_TRUE(mini_server_->server()->tablet_manager()->LookupTablet(tablet_id,
                                                                      &tablet_replica));
-  tablet::LocalTabletWriter writer(tablet_replica->tablet(), &schema_);
-  KuduPartialRow row(&schema_);
+  tablet::LocalTabletWriter writer(tablet_replica->tablet(), schema_.get());
+  KuduPartialRow row(schema_.get());
   for (int32_t i = 0; i < num_rows; i++) {
     BuildTestRow(start_row + i, &row);
     CHECK_OK(writer.Insert(row));
@@ -233,7 +233,7 @@ void TabletServerTestBase::InsertTestRowsRemote(
 
   RowOperationsPB* data = req.mutable_row_operations();
 
-  ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
   int32_t inserted_since_last_report = 0;
   for (int i = 0; i < num_batches; ++i) {
@@ -292,7 +292,7 @@ void TabletServerTestBase::DeleteTestRowsRemote(int32_t first_row,
   RpcController controller;
 
   req.set_tablet_id(std::move(tablet_id));
-  ASSERT_OK(SchemaToPB(schema_, req.mutable_schema()));
+  ASSERT_OK(SchemaToPB(*schema_.get(), req.mutable_schema()));
 
   RowOperationsPB* ops = req.mutable_row_operations();
   for (int32_t rowid = first_row; rowid < first_row + count; rowid++) {
@@ -312,7 +312,7 @@ void TabletServerTestBase::BuildTestRow(int index, KuduPartialRow* row) {
 }
 
 void TabletServerTestBase::DrainScannerToStrings(const string& scanner_id,
-                                                 const Schema& projection,
+                                                 const SchemaRefPtr& projection,
                                                  vector<string>* results,
                                                  TabletServerServiceProxy* proxy,
                                                  uint32_t call_seq_id) {
@@ -338,7 +338,7 @@ void TabletServerTestBase::DrainScannerToStrings(const string& scanner_id,
     SCOPED_TRACE(SecureDebugString(resp));
     ASSERT_FALSE(resp.has_error());
 
-    StringifyRowsFromResponse(projection, rpc, &resp, results);
+    StringifyRowsFromResponse(*projection.get(), rpc, &resp, results);
     call_seq_id += 1;
   } while (resp.has_more_results());
 }
@@ -404,7 +404,7 @@ Status TabletServerTestBase::ShutdownAndRebuildTablet(int num_data_dirs) {
 }
 
 // Verifies that a set of expected rows (key, value) is present in the tablet.
-void TabletServerTestBase::VerifyRows(const Schema& schema,
+void TabletServerTestBase::VerifyRows(const SchemaRefPtr& schema,
                                       const vector<KeyValue>& expected) {
   unique_ptr<RowwiseIterator> iter;
   ASSERT_OK(tablet_replica_->tablet()->NewRowIterator(schema, &iter));
@@ -412,10 +412,10 @@ void TabletServerTestBase::VerifyRows(const Schema& schema,
 
   int batch_size = std::max<int>(1,
      std::min<int>(expected.size() / 10,
-                   4*1024*1024 / schema.byte_size()));
+                   4*1024*1024 / schema->byte_size()));
 
   RowBlockMemory mem(32 * 1024);
-  RowBlock block(&schema, batch_size, &mem);
+  RowBlock block(schema.get(), batch_size, &mem);
 
   int count = 0;
   while (iter->HasNext()) {
@@ -425,11 +425,11 @@ void TabletServerTestBase::VerifyRows(const Schema& schema,
     for (int i = 0; i < block.nrows(); i++) {
       if (block.selection_vector()->IsRowSelected(i)) {
         rb_row.Reset(&block, i);
-        VLOG(1) << "Verified row " << schema.DebugRow(rb_row);
+        VLOG(1) << "Verified row " << schema->DebugRow(rb_row);
         ASSERT_LT(count, expected.size()) << "Got more rows than expected!";
-        EXPECT_EQ(expected[count].first, *schema.ExtractColumnFromRow<INT32>(rb_row, 0))
+        EXPECT_EQ(expected[count].first, *schema->ExtractColumnFromRow<INT32>(rb_row, 0))
             << "Key mismatch at row: " << count;
-        EXPECT_EQ(expected[count].second, *schema.ExtractColumnFromRow<INT32>(rb_row, 1))
+        EXPECT_EQ(expected[count].second, *schema->ExtractColumnFromRow<INT32>(rb_row, 1))
             << "Value mismatch at row: " << count;
         count++;
       }
@@ -455,13 +455,13 @@ void TabletServerTestBase::VerifyScanRequestFailure(const ScanRequestPB& req,
   }
 }
 
-void TabletServerTestBase::VerifyScanRequestFailure(const Schema& projection,
+void TabletServerTestBase::VerifyScanRequestFailure(const SchemaRefPtr& projection,
                                                     TabletServerErrorPB::Code expected_code,
                                                     const char *expected_message) {
   ScanRequestPB req;
   NewScanRequestPB* scan = req.mutable_new_scan_request();
   scan->set_tablet_id(kTabletId);
-  ASSERT_OK(SchemaToColumnPBs(projection, scan->mutable_projected_columns()));
+  ASSERT_OK(SchemaToColumnPBs(*projection.get(), scan->mutable_projected_columns()));
   req.set_call_seq_id(0);
   NO_FATALS(VerifyScanRequestFailure(req, expected_code, expected_message));
 }
@@ -469,7 +469,7 @@ void TabletServerTestBase::VerifyScanRequestFailure(const Schema& projection,
 Status TabletServerTestBase::FillNewScanRequest(ReadMode read_mode, NewScanRequestPB* scan) const {
   scan->set_tablet_id(kTabletId);
   scan->set_read_mode(read_mode);
-  return SchemaToColumnPBs(schema_, scan->mutable_projected_columns());
+  return SchemaToColumnPBs(*schema_.get(), scan->mutable_projected_columns());
 }
 
 // Open a new scanner which scans all of the columns in the table.

@@ -176,7 +176,7 @@ class LogTestBase : public KuduTest {
   }
 
   Status BuildLog() {
-    Schema schema_with_ids = SchemaBuilder(schema_).Build();
+    SchemaRefPtr schema_with_ids = SchemaBuilder(*schema_.get()).Build();
     return Log::Open(options_,
                      fs_manager_.get(),
                      file_cache_.get(),
@@ -226,7 +226,7 @@ class LogTestBase : public KuduTest {
     replicate->get()->mutable_id()->CopyFrom(opid);
     replicate->get()->set_timestamp(clock_->Now().ToUint64());
     tserver::WriteRequestPB* batch_request = replicate->get()->mutable_write_request();
-    RETURN_NOT_OK(SchemaToPB(schema_, batch_request->mutable_schema()));
+    RETURN_NOT_OK(SchemaToPB(*schema_.get(), batch_request->mutable_schema()));
     AddTestRowToPB(RowOperationsPB::INSERT, schema_,
                    opid.index(),
                    0,
@@ -381,7 +381,7 @@ class LogTestBase : public KuduTest {
     kStartIndex = 1
   };
 
-  const Schema schema_;
+  SchemaRefPtr schema_;
   std::unique_ptr<FsManager> fs_manager_;
   std::unique_ptr<MetricRegistry> metric_registry_;
   std::unique_ptr<FileCache> file_cache_;

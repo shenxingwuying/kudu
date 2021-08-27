@@ -89,6 +89,10 @@
 #include "kudu/util/test_macros.h"
 #include "kudu/util/test_util.h"
 
+namespace kudu {
+class Schema;
+}  // namespace kudu
+
 DECLARE_bool(allow_unsafe_replication_factor);
 DECLARE_bool(catalog_manager_evict_excess_replicas);
 DECLARE_bool(catalog_manager_wait_for_new_tablets_to_elect_leader);
@@ -1003,7 +1007,8 @@ namespace {
 Status GetPartitionForTxnStatusTablet(int64_t start_txn_id, int64_t end_txn_id,
                                       PartitionSchema* partition_schema,
                                       Partition* partition) {
-  const auto& schema = TxnStatusTablet::GetSchema();
+  const auto& schema_ptr = TxnStatusTablet::GetSchema();
+  const Schema& schema = *schema_ptr.get();
   // Add range partitioning on the transaction ID column.
   PartitionSchemaPB partition_pb;
   auto* range_schema = partition_pb.mutable_range_schema();
@@ -1018,7 +1023,7 @@ Status GetPartitionForTxnStatusTablet(int64_t start_txn_id, int64_t end_txn_id,
   RETURN_NOT_OK(upper_bound.SetInt64(TxnStatusTablet::kTxnIdColName, end_txn_id));
   vector<Partition> ps;
   RETURN_NOT_OK(pschema.CreatePartitions(/*split_rows=*/{},
-      { std::make_pair(lower_bound, upper_bound) }, {}, schema, &ps));
+      { std::make_pair(lower_bound, upper_bound) }, {}, schema_ptr, &ps));
   *partition = ps[0];
   *partition_schema = pschema;
   return Status::OK();
@@ -1052,7 +1057,7 @@ class TxnStatusTabletManagementTest : public TsTabletManagerITest {
     req.set_table_name(Substitute("$0_table_name", tablet_id));
     req.set_tablet_id(tablet_id);
     *req.mutable_config() = std::move(raft_config);
-    CHECK_OK(SchemaToPB(TxnStatusTablet::GetSchema(), req.mutable_schema()));
+    CHECK_OK(SchemaToPB(*TxnStatusTablet::GetSchema().get(), req.mutable_schema()));
     return req;
   }
 

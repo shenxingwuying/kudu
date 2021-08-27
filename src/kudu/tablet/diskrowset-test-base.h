@@ -64,24 +64,24 @@ class TestRowSet : public KuduRowSetTest {
   }
 
  protected:
-  static Schema CreateTestSchema() {
+  static SchemaRefPtr CreateTestSchema() {
     SchemaBuilder builder;
     CHECK_OK(builder.AddKeyColumn("key", STRING));
     CHECK_OK(builder.AddColumn("val", UINT32));
     return builder.BuildWithoutIds();
   }
 
-  static Schema CreateProjection(const Schema& schema,
+  static SchemaRefPtr CreateProjection(const SchemaRefPtr& schema,
                                  const std::vector<std::string>& cols) {
     std::vector<ColumnSchema> col_schemas;
     std::vector<ColumnId> col_ids;
     for (const std::string& col : cols) {
-      int idx = schema.find_column(col);
+      int idx = schema->find_column(col);
       CHECK_GE(idx, 0);
-      col_schemas.push_back(schema.column(idx));
-      col_ids.push_back(schema.column_id(idx));
+      col_schemas.push_back(schema->column(idx));
+      col_ids.push_back(schema->column_id(idx));
     }
-    return Schema(col_schemas, col_ids, 0);
+    return make_scoped_refptr(new Schema(col_schemas, col_ids, 0));
   }
 
   void BuildRowKey(RowBuilder *rb, int row_idx) {
@@ -97,7 +97,7 @@ class TestRowSet : public KuduRowSetTest {
   // or 0 if 'zero_vals' is true.
   // The string values are padded out to 15 digits
   void WriteTestRowSet(int n_rows = 0, bool zero_vals = false) {
-    DiskRowSetWriter drsw(rowset_meta_.get(), &schema_,
+    DiskRowSetWriter drsw(rowset_meta_.get(), schema_.get(),
                           BloomFilterSizing::BySizeAndFPRate(32*1024, 0.01f));
     DoWriteTestRowSet(n_rows, &drsw, zero_vals);
   }
@@ -114,7 +114,7 @@ class TestRowSet : public KuduRowSetTest {
       CHECK_OK(writer->Open());
 
       char buf[256];
-      RowBuilder rb(&schema_);
+      RowBuilder rb(schema_.get());
       for (int i = 0; i < n_rows; i++) {
         CHECK_OK(writer->RollIfNecessary());
         rb.Reset();
@@ -138,7 +138,7 @@ class TestRowSet : public KuduRowSetTest {
       uint32_t idx_to_update = random() % n_rows_;
       uint32_t new_val = idx_to_update * 5;
       update.Reset();
-      update.AddColumnUpdate(schema_.column(1), schema_.column_id(1), &new_val);
+      update.AddColumnUpdate(schema_->column(1), schema_->column_id(1), &new_val);
       OperationResultPB result;
       CHECK_OK(MutateRow(rs,
                          idx_to_update,
@@ -169,7 +169,7 @@ class TestRowSet : public KuduRowSetTest {
     faststring update_buf;
     RowChangeListEncoder update(&update_buf);
     update.Reset();
-    update.AddColumnUpdate(schema_.column(1), schema_.column_id(1), &new_val);
+    update.AddColumnUpdate(schema_->column(1), schema_->column_id(1), &new_val);
 
     return MutateRow(rs, row_idx, RowChangeList(update_buf), result);
   }
@@ -179,7 +179,8 @@ class TestRowSet : public KuduRowSetTest {
                    uint32_t row_idx,
                    const RowChangeList &mutation,
                    OperationResultPB* result) {
-    Schema proj_key = schema_.CreateKeyProjection();
+    SchemaRefPtr proj_key_ptr = schema_->CreateKeyProjection();
+    Schema& proj_key = *proj_key_ptr.get();
     RowBuilder rb(&proj_key);
     BuildRowKey(&rb, row_idx);
     Arena arena(64);
@@ -194,7 +195,8 @@ class TestRowSet : public KuduRowSetTest {
   }
 
   Status CheckRowPresent(const DiskRowSet &rs, uint32_t row_idx, bool *present) {
-    Schema proj_key = schema_.CreateKeyProjection();
+    SchemaRefPtr proj_key_ptr = schema_->CreateKeyProjection();
+    Schema& proj_key = *proj_key_ptr.get();
     RowBuilder rb(&proj_key);
     BuildRowKey(&rb, row_idx);
     Arena arena(64);
@@ -215,9 +217,10 @@ class TestRowSet : public KuduRowSetTest {
 
   void VerifyUpdatesWithRowIter(const DiskRowSet &rs,
                                 const std::unordered_set<uint32_t> &updated) {
-    Schema proj_val = CreateProjection(schema_, { "val" });
+    SchemaRefPtr proj_val_ptr = CreateProjection(schema_, { "val" });
+    Schema& proj_val = *proj_val_ptr.get();
     RowIteratorOptions opts;
-    opts.projection = &proj_val;
+    opts.projection = proj_val_ptr;
     std::unique_ptr<RowwiseIterator> row_iter;
     CHECK_OK(rs.NewRowIterator(opts, &row_iter));
     CHECK_OK(row_iter->Init(nullptr));
@@ -259,12 +262,12 @@ class TestRowSet : public KuduRowSetTest {
                         const std::string& expected_val) {
     Arena arena(256);
     ScanSpec spec;
-    auto pred = ColumnPredicate::Equality(schema_.column(0), &row_key);
+    auto pred = ColumnPredicate::Equality(schema_->column(0), &row_key);
     spec.AddPredicate(pred);
-    spec.OptimizeScan(schema_, &arena, true);
+    spec.OptimizeScan(*schema_.get(), &arena, true);
 
     RowIteratorOptions opts;
-    opts.projection = &schema_;
+    opts.projection = schema_;
     std::unique_ptr<RowwiseIterator> row_iter;
     CHECK_OK(rs.NewRowIterator(opts, &row_iter));
     CHECK_OK(row_iter->Init(&spec));
@@ -276,17 +279,17 @@ class TestRowSet : public KuduRowSetTest {
 
   // Iterate over a DiskRowSet, dumping occasional rows to the console,
   // using the given schema as a projection.
-  static void IterateProjection(const DiskRowSet &rs, const Schema &schema,
+  static void IterateProjection(const DiskRowSet &rs, const SchemaRefPtr &schema,
                                 int expected_rows, bool do_log = true) {
     RowIteratorOptions opts;
-    opts.projection = &schema;
+    opts.projection = schema;
     std::unique_ptr<RowwiseIterator> row_iter;
     CHECK_OK(rs.NewRowIterator(opts, &row_iter));
     CHECK_OK(row_iter->Init(nullptr));
 
     int batch_size = 1000;
     RowBlockMemory mem(1024);
-    RowBlock dst(&schema, batch_size, &mem);
+    RowBlock dst(schema.get(), batch_size, &mem);
 
     int i = 0;
     int log_interval = expected_rows/20 / batch_size;
@@ -296,7 +299,7 @@ class TestRowSet : public KuduRowSetTest {
       i += dst.nrows();
 
       if (do_log) {
-        KLOG_EVERY_N(INFO, log_interval) << "Got row: " << schema.DebugRow(dst.row(0));
+        KLOG_EVERY_N(INFO, log_interval) << "Got row: " << schema->DebugRow(dst.row(0));
       }
     }
 
@@ -305,17 +308,17 @@ class TestRowSet : public KuduRowSetTest {
 
   void BenchmarkIterationPerformance(const DiskRowSet &rs,
                                      const std::string &log_message) {
-    Schema proj_val = CreateProjection(schema_, { "val" });
+    SchemaRefPtr proj_val_ptr = CreateProjection(schema_, { "val" });
     LOG_TIMING(INFO, log_message + " (val column only)") {
       for (int i = 0; i < FLAGS_n_read_passes; i++) {
-        IterateProjection(rs, proj_val, n_rows_, false);
+        IterateProjection(rs, proj_val_ptr, n_rows_, false);
       }
     }
 
-    Schema proj_key = CreateProjection(schema_, { "key" });
+    SchemaRefPtr proj_key_ptr = CreateProjection(schema_, { "key" });
     LOG_TIMING(INFO, log_message + " (key string column only)") {
       for (int i = 0; i < FLAGS_n_read_passes; i++) {
-        IterateProjection(rs, proj_key, n_rows_, false);
+        IterateProjection(rs, proj_key_ptr, n_rows_, false);
       }
     }
 

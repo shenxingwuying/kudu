@@ -72,7 +72,7 @@ class TestDeltaCompaction : public KuduTest {
         schema_(CreateSchema()) {
   }
 
-  static Schema CreateSchema() {
+  static SchemaRefPtr CreateSchema() {
     SchemaBuilder builder;
     CHECK_OK(builder.AddColumn("val", UINT32));
     return builder.Build();
@@ -106,13 +106,13 @@ class TestDeltaCompaction : public KuduTest {
 
  protected:
   int64_t deltafile_idx_;
-  Schema schema_;
+  SchemaRefPtr schema_;
   unique_ptr<FsManager> fs_manager_;
 };
 
 TEST_F(TestDeltaCompaction, TestMergeMultipleSchemas) {
-  vector<Schema> schemas;
-  SchemaBuilder builder(schema_);
+  vector<SchemaRefPtr> schemas;
+  SchemaBuilder builder(*schema_.get());
   schemas.push_back(builder.Build());
 
   // Add an int column with default
@@ -131,7 +131,7 @@ TEST_F(TestDeltaCompaction, TestMergeMultipleSchemas) {
   int row_id = 0;
   int curr_timestamp = 0;
   int deltafile_idx = 0;
-  for (const Schema& schema : schemas) {
+  for (const SchemaRefPtr& schema : schemas) {
     // Write the Deltas
     BlockId block_id;
     unique_ptr<DeltaFileWriter> dfw;
@@ -147,12 +147,12 @@ TEST_F(TestDeltaCompaction, TestMergeMultipleSchemas) {
     for (size_t i = 0; i < kNumUpdates; ++i) {
       buf.clear();
       RowChangeListEncoder update(&buf);
-      for (size_t col_idx = schema.num_key_columns(); col_idx < schema.num_columns(); ++col_idx) {
-        ColumnId col_id = schema.column_id(col_idx);
+      for (size_t col_idx = schema->num_key_columns(); col_idx < schema->num_columns(); ++col_idx) {
+        ColumnId col_id = schema->column_id(col_idx);
         DCHECK_GE(col_id, 0);
 
         stats->IncrUpdateCount(col_id, 1);
-        const ColumnSchema& col_schema = schema.column(col_idx);
+        const ColumnSchema& col_schema = schema->column(col_idx);
         int update_value = deltafile_idx * 100 + i;
         switch (col_schema.type_info()->physical_type()) {
           case UINT32:
@@ -194,9 +194,9 @@ TEST_F(TestDeltaCompaction, TestMergeMultipleSchemas) {
   }
 
   // Merge
-  const Schema& merge_schema = schemas.back();
+  const SchemaRefPtr& merge_schema = schemas.back();
   RowIteratorOptions opts;
-  opts.projection = &merge_schema;
+  opts.projection = merge_schema.get();
   unique_ptr<DeltaIterator> merge_iter;
   ASSERT_OK(DeltaIteratorMerger::Create(inputs, opts, &merge_iter));
   unique_ptr<DeltaFileWriter> dfw;

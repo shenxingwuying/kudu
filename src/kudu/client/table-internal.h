@@ -54,7 +54,7 @@ class KuduTable::Data {
   KuduPredicate* MakePredicate(const Slice& col_name,
                                const PredicateMakerFunc& f) {
     StringPiece name_sp(reinterpret_cast<const char*>(col_name.data()), col_name.size());
-    int col_idx = schema_.schema_->find_column(name_sp);
+    int col_idx = (*schema_.schema_)->find_column(name_sp);
     if (col_idx == Schema::kColumnNotFound) {
       // Since the new predicate functions don't return errors, instead we create a special
       // predicate that just returns the errors when we add it to the scanner.
@@ -63,7 +63,7 @@ class KuduTable::Data {
       return new KuduPredicate(new ErrorPredicateData(
           Status::NotFound("column not found", col_name)));
     }
-    return f(schema_.schema_->column(col_idx));
+    return f((*schema_.schema_)->column(col_idx));
   }
 
   sp::shared_ptr<KuduClient> client_;

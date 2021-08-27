@@ -748,10 +748,11 @@ TEST_F(MasterTest, TestRegisterAndHeartbeat) {
 TEST_F(MasterTest, TestCatalog) {
   const char *kTableName = "testtb";
   const char *kOtherTableName = "tbtest";
-  const Schema kTableSchema({ ColumnSchema("key", INT32),
+  const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", INT32),
                               ColumnSchema("v1", UINT64),
                               ColumnSchema("v2", STRING) },
-                            1);
+                            1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
 
   ASSERT_OK(CreateTable(kTableName, kTableSchema));
 
@@ -832,7 +833,9 @@ TEST_F(MasterTest, TestCatalog) {
 TEST_F(MasterTest, ListTablesWithTableFilter) {
   static const char* const kUserTableName = "user_table";
   static const char* const kSystemTableName = "system_table";
-  const Schema kSchema({ColumnSchema("key", INT32), ColumnSchema("v1", INT8)}, 1);
+  const SchemaRefPtr kSchemaPtr(new Schema(
+          {ColumnSchema("key", INT32), ColumnSchema("v1", INT8)}, 1));
+  const Schema& kSchema = *kSchemaPtr.get();
 
   // Make sure this test scenario stays valid
   ASSERT_EQ(TableTypePB_MAX, TableTypePB::TXN_STATUS_TABLE);
@@ -934,7 +937,9 @@ TEST_F(MasterTest, ListTablesWithTableFilter) {
 
 TEST_F(MasterTest, TestCreateTableCheckRangeInvariants) {
   constexpr const char* const kTableName = "testtb";
-  const Schema kTableSchema({ ColumnSchema("key", INT32), ColumnSchema("val", INT32) }, 1);
+  const SchemaRefPtr kTableSchemaPtr(
+      new Schema({ ColumnSchema("key", INT32), ColumnSchema("val", INT32) }, 1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
 
   // No duplicate split rows.
   {
@@ -1100,7 +1105,8 @@ TEST_F(MasterTest, TestCreateTableInvalidKeyType) {
 
   const DataType types[] = { BOOL, FLOAT, DOUBLE };
   for (DataType type : types) {
-    const Schema kTableSchema({ ColumnSchema("key", type) }, 1);
+    const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", type) }, 1));
+    const Schema& kTableSchema = *kTableSchemaPtr.get();
     Status s = CreateTable(kTableName, kTableSchema, vector<KuduPartialRow>());
     ASSERT_TRUE(s.IsInvalidArgument()) << s.ToString();
     ASSERT_STR_CONTAINS(s.ToString(),
@@ -1116,7 +1122,9 @@ TEST_F(MasterTest, TestCreateTableOwnerNameTooLong) {
       "abcdefghijklmnopqrstuvwxyz01234567899"
       "abcdefghijklmnopqrstuvwxyz01234567899";
 
-  const Schema kTableSchema({ ColumnSchema("key", INT32), ColumnSchema("val", INT32) }, 1);
+  const SchemaRefPtr kTableSchemaPtr(
+      new Schema({ ColumnSchema("key", INT32), ColumnSchema("val", INT32) }, 1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
   Status s = CreateTable(kTableName, kTableSchema, none, kOwnerName);
   ASSERT_TRUE(s.IsInvalidArgument()) << s.ToString();
   ASSERT_STR_CONTAINS(s.ToString(), "invalid owner name");
@@ -1236,8 +1244,8 @@ TEST_F(MasterTest, NonPrimaryKeyColumnsForPerRangeCustomHashSchema) {
 // invalid.
 TEST_F(MasterTest, TestInvalidGetTableLocations) {
   const string kTableName = "test";
-  Schema schema({ ColumnSchema("key", INT32) }, 1);
-  ASSERT_OK(CreateTable(kTableName, schema));
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("key", INT32) }, 1));
+  ASSERT_OK(CreateTable(kTableName, *schema_ptr.get()));
   {
     GetTableLocationsRequestPB req;
     GetTableLocationsResponsePB resp;
@@ -1332,8 +1340,8 @@ TEST_F(MasterTest, TestShutdownDuringTableVisit) {
 // use-after-free.
 TEST_F(MasterTest, TestGetTableLocationsDuringRepeatedTableVisit) {
   const char* kTableName = "test";
-  Schema schema({ ColumnSchema("key", INT32) }, 1);
-  ASSERT_OK(CreateTable(kTableName, schema));
+  SchemaRefPtr schema_ptr(new Schema({ ColumnSchema("key", INT32) }, 1));
+  ASSERT_OK(CreateTable(kTableName, *schema_ptr.get()));
 
   AtomicBool done(false);
 
@@ -1363,10 +1371,11 @@ TEST_F(MasterTest, TestGetTableLocationsDuringRepeatedTableVisit) {
 // test ensures that bug does not regress.
 TEST_F(MasterTest, TestGetTableSchemaIsAtomicWithCreateTable) {
   const char* kTableName = "testtb";
-  const Schema kTableSchema({ ColumnSchema("key", INT32),
+  const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", INT32),
                               ColumnSchema("v1", UINT64),
                               ColumnSchema("v2", STRING) },
-                            1);
+                            1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
 
   CountDownLatch started(1);
   AtomicBool done(false);
@@ -1396,7 +1405,8 @@ TEST_F(MasterTest, TestGetTableSchemaIsAtomicWithCreateTable) {
       if (resp.has_error()) {
         CHECK_EQ(MasterErrorPB::TABLE_NOT_FOUND, resp.error().code());
       } else {
-        Schema receivedSchema;
+        SchemaRefPtr receivedSchema_ptr(new Schema);
+        Schema& receivedSchema = *receivedSchema_ptr.get();
         CHECK_OK(SchemaFromPB(resp.schema(), &receivedSchema));
         CHECK(kTableSchema.Equals(receivedSchema)) <<
             strings::Substitute("$0 not equal to $1",
@@ -1429,18 +1439,20 @@ class ConcurrentGetTableSchemaTest :
 
   const bool supports_authz_;
   static const MonoDelta kRunInterval;
-  static const Schema kTableSchema;
+  static const Schema& kTableSchema;
   static const string kTableNamePattern;
 };
 
 const MonoDelta ConcurrentGetTableSchemaTest::kRunInterval =
     MonoDelta::FromSeconds(5);
-const Schema ConcurrentGetTableSchemaTest::kTableSchema = {
+const SchemaRefPtr kTableSchemaPtr = new Schema({
     {
       ColumnSchema("key", INT32),
       ColumnSchema("v1", UINT64),
       ColumnSchema("v2", STRING)
-    }, 1 };
+    }, 1 });
+const Schema& ConcurrentGetTableSchemaTest::kTableSchema = *kTableSchemaPtr.get();
+
 const string ConcurrentGetTableSchemaTest::kTableNamePattern = "test_table_$0"; // NOLINT
 
 // Send multiple GetTableSchema() RPC requests for different tables.
@@ -1772,10 +1784,11 @@ class MasterMetadataVerifier : public TableVisitor,
 };
 
 TEST_F(MasterTest, TestMasterMetadataConsistentDespiteFailures) {
-  const Schema kTableSchema({ ColumnSchema("key", INT32),
+  const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", INT32),
                               ColumnSchema("v1", UINT64),
                               ColumnSchema("v2", STRING) },
-                            1);
+                            1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
 
   // When generating random table names, we use a uniform distribution so
   // as to generate the occasional name collision; the test should cope.
@@ -1917,10 +1930,11 @@ TEST_F(MasterTest, TestMasterMetadataConsistentDespiteFailures) {
 
 TEST_F(MasterTest, TestConcurrentCreateOfSameTable) {
   const char* kTableName = "testtb";
-  const Schema kTableSchema({ ColumnSchema("key", INT32),
+  const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", INT32),
                               ColumnSchema("v1", UINT64),
                               ColumnSchema("v2", STRING) },
-                            1);
+                            1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
 
   // Kick off a bunch of threads all trying to create the same table.
   vector<thread> threads;
@@ -1964,10 +1978,11 @@ TEST_F(MasterTest, TestConcurrentCreateOfSameTable) {
 TEST_F(MasterTest, TestConcurrentRenameOfSameTable) {
   const char* kOldName = "testtb";
   const char* kNewName = "testtb-new";
-  const Schema kTableSchema({ ColumnSchema("key", INT32),
+  const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", INT32),
                               ColumnSchema("v1", UINT64),
                               ColumnSchema("v2", STRING) },
-                            1);
+                            1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
   ASSERT_OK(CreateTable(kOldName, kTableSchema));
 
   // Kick off a bunch of threads all trying to rename the same table.
@@ -2006,10 +2021,11 @@ TEST_F(MasterTest, TestConcurrentRenameOfSameTable) {
 TEST_F(MasterTest, TestConcurrentCreateAndRenameOfSameTable) {
   const char* kOldName = "testtb";
   const char* kNewName = "testtb-new";
-  const Schema kTableSchema({ ColumnSchema("key", INT32),
+  const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", INT32),
                               ColumnSchema("v1", UINT64),
                               ColumnSchema("v2", STRING) },
-                            1);
+                            1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
   ASSERT_OK(CreateTable(kOldName, kTableSchema));
 
   AtomicBool create_success(false);
@@ -2122,7 +2138,8 @@ TEST_F(MasterTest, TestConcurrentCreateAndRenameOfSameTable) {
 
 TEST_F(MasterTest, TestConcurrentRenameAndDeleteOfSameTable) {
   const char* kTableName = "testtb";
-  const Schema kTableSchema({ ColumnSchema("key", INT32) }, 1);
+  const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", INT32) }, 1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
 
   ASSERT_OK(CreateTable(kTableName, kTableSchema));
 
@@ -2287,7 +2304,8 @@ TEST_F(MasterTest, TestSignOwnCertAndLoadTSKs) {
 
 TEST_F(MasterTest, TestTableIdentifierWithIdAndName) {
   const char *kTableName = "testtb";
-  const Schema kTableSchema({ ColumnSchema("key", INT32) }, 1);
+  const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", INT32) }, 1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
 
   ASSERT_OK(CreateTable(kTableName, kTableSchema));
 
@@ -2391,7 +2409,8 @@ TEST_F(MasterTest, TestDuplicateRequest) {
 
   // Create a table with three tablets.
   const char *kTableName = "test_table";
-  const Schema kTableSchema({ ColumnSchema("key", INT32) }, 1);
+  const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", INT32) }, 1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
   ASSERT_OK(CreateTable(kTableName, kTableSchema));
 
   vector<scoped_refptr<TableInfo>> tables;
@@ -2466,7 +2485,8 @@ TEST_F(MasterTest, TestDuplicateRequest) {
 
 TEST_F(MasterTest, TestHideLiveRowCountInTableMetrics) {
   const char* kTableName = "testtable";
-  const Schema kTableSchema({ ColumnSchema("key", INT32) }, 1);
+  const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", INT32) }, 1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
   ASSERT_OK(CreateTable(kTableName, kTableSchema));
 
   vector<scoped_refptr<TableInfo>> tables;
@@ -2533,7 +2553,8 @@ TEST_F(MasterTest, TestHideLiveRowCountInTableMetrics) {
 
 TEST_F(MasterTest, TestTableStatisticsWithOldVersion) {
   const char* kTableName = "testtable";
-  const Schema kTableSchema({ ColumnSchema("key", INT32) }, 1);
+  const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", INT32) }, 1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
   ASSERT_OK(CreateTable(kTableName, kTableSchema));
 
   vector<scoped_refptr<TableInfo>> tables;
@@ -2573,7 +2594,8 @@ TEST_P(AuthzTokenMasterTest, TestGenerateAuthzTokens) {
   bool supports_authz = GetParam();
   FLAGS_master_support_authz_tokens = supports_authz;
   const char* kTableName = "testtb";
-  const Schema kTableSchema({ ColumnSchema("key", INT32) }, 1);
+  const SchemaRefPtr kTableSchemaPtr(new Schema({ ColumnSchema("key", INT32) }, 1));
+  const Schema& kTableSchema = *kTableSchemaPtr.get();
   const auto send_req = [&] (GetTableSchemaResponsePB* resp) {
     RpcController rpc;
     GetTableSchemaRequestPB req;
