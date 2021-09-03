@@ -271,3 +271,8 @@ JWT_CPP_VERSION=3bd600762a70faccc7ec1c2dacb999cba6c6ef5e
 JWT_CPP=jwt-cpp
 JWT_CPP_NAME=$JWT_CPP-$JWT_CPP_VERSION
 JWT_CPP_SOURCE=$TP_SOURCE_DIR/$JWT_CPP_NAME
+
+# https://github.com/jupp0r/prometheus-cpp/releases/download/v0.12.3/prometheus-cpp-with-submodules.tar.gz
+PROMETHEUS_VERSION=master-sensorsdata-c5a5cf4552750ac8e2c4fc93563f8f8318a6a20d
+PROMETHEUS_NAME=prometheus-cpp-$PROMETHEUS_VERSION
+PROMETHEUS_SOURCE=$TP_SOURCE_DIR/$PROMETHEUS_NAME

@@ -2918,6 +2918,7 @@ Status LogBlockManager::Repair(
   // Truncate partial metadata records.
   //
   // This is a fatal inconsistency; if the repair fails, we cannot proceed.
+  // TODO(yingchun): clear partial_record_check after used
   if (report->partial_record_check) {
     for (auto& pr : report->partial_record_check->entries) {
       LogBlockContainerRefPtr container = FindPtrOrNull(containers_by_name, pr.container);
@@ -2958,6 +2959,7 @@ Status LogBlockManager::Repair(
   //
   // This is a non-fatal inconsistency; we can just as easily ignore the
   // leftover container files.
+  // TODO(yingchun): clear incomplete_container_check after used
   if (report->incomplete_container_check) {
     for (auto& ic : report->incomplete_container_check->entries) {
       Status s = env_->DeleteFile(

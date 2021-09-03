@@ -422,6 +422,8 @@ enum class MetricLevel {
   kWarn = 2
 };
 
+const char* MetricLevelName(MetricLevel level);
+
 // Type of behavior when two metrics merge together, it only take effect on the result
 // of MergeFrom.
 enum class MergeType {

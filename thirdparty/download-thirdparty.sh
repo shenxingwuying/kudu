@@ -81,7 +81,7 @@ fetch_and_expand() {
       echo "Archive $FILENAME already exists. Not re-downloading archive."
     else
       echo "Fetching $FILENAME from $FULL_URL"
-      if ! curl --retry 3 -L -O "$FULL_URL"; then
+      if ! curl --retry 3 -L -O $FULL_URL; then
         echo "Error downloading $FILENAME"
         rm -f "$FILENAME"
 
@@ -139,7 +139,7 @@ fetch_with_url_and_patch() {
 
   delete_if_wrong_patchlevel $SOURCE $PATCH_LEVEL
   if [ ! -d $SOURCE ]; then
-    fetch_and_expand $FILENAME $SOURCE $URL_PREFIX
+    fetch_and_expand $FILENAME $SOURCE "$URL_PREFIX"
     pushd $SOURCE
     shift 4
     # Run the patch commands
@@ -481,6 +481,13 @@ fetch_and_patch \
   $JWT_CPP_NAME.tar.gz \
   $JWT_CPP_SOURCE \
   $JWT_CPP_PATCHLEVEL
+
+PROMETHEUS_PATCHLEVEL=0
+fetch_with_url_and_patch \
+ archive.tar.gz \
+ $PROMETHEUS_SOURCE \
+ $PROMETHEUS_PATCHLEVEL \
+ "--header PRIVATE-TOKEN:YS4i1t8kt-87_2JaGmYV http://gitlab.internal.sensorsdata.cn/api/v4/projects/2781/repository"
 
 echo "---------------"
 echo "Thirdparty dependencies downloaded successfully"

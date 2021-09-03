@@ -405,6 +405,182 @@ Status CopyFromRemote(const RunnerContext& context) {
   return client.Finish();
 }
 
+Status GetReplicas(TabletServerServiceProxy* proxy,
+                   vector<ListTabletsResponsePB::StatusAndSchemaPB>* replicas) {
+  ListTabletsRequestPB req;
+  ListTabletsResponsePB resp;
+  RpcController rpc;
+  rpc.set_timeout(MonoDelta::FromMilliseconds(3000));
+
+  // Even with FLAGS_include_schema=false, don't set need_schema_info=false
+  // in the request. The reason is that the schema is still needed to decode
+  // the partition of each replica, and the partition information is pretty
+  // much always nice to have.
+  RETURN_NOT_OK(proxy->ListTablets(req, &resp, &rpc));
+  if (resp.has_error()) {
+    return StatusFromPB(resp.error().status());
+  }
+
+  replicas->assign(resp.status_and_schema().begin(),
+                   resp.status_and_schema().end());
+  return Status::OK();
+}
+
+Status CloneTserver(const RunnerContext& context) {
+  // 1. List all local tablets.
+  FsManager fs_manager(Env::Default(), FsManagerOpts());
+  RETURN_NOT_OK(fs_manager.Open());
+  scoped_refptr<ConsensusMetadataManager> cmeta_manager(new ConsensusMetadataManager(&fs_manager));
+
+  vector<string> tablets;
+  RETURN_NOT_OK(fs_manager.ListTabletIds(&tablets));
+
+  set<string> local_tablets(tablets.begin(), tablets.end());
+
+  // 2. Obtain tablet list from remote tserver to download.
+  const string& rpc_address = FindOrDie(context.required_args, "source");
+
+  HostPort hp;
+  RETURN_NOT_OK(ParseHostPortString(rpc_address, &hp));
+  unique_ptr<TabletServerServiceProxy> proxy;
+  RETURN_NOT_OK(BuildProxy(hp.host(), hp.port(), &proxy));
+
+  vector<ListTabletsResponsePB::StatusAndSchemaPB> replicas;
+  RETURN_NOT_OK(GetReplicas(proxy.get(), &replicas));
+
+  sort(replicas.begin(), replicas.end(),
+       [](const ListTabletsResponsePB::StatusAndSchemaPB& lhs,
+          const ListTabletsResponsePB::StatusAndSchemaPB& rhs) {
+         return lhs.tablet_status().tablet_id() < rhs.tablet_status().tablet_id();
+  });
+
+  // 3. Generate tablet list to download.
+  const vector<string> table_filters = Split(FLAGS_tables, ",", strings::SkipEmpty());
+
+  vector<string> tablets_to_download;
+  std::unordered_map<string, int64_t> tablet_id_to_size;
+  int64_t total_byte_size = 0;
+  for (int i = 0; i < replicas.size(); ++i) {
+    const TabletStatusPB& ts = replicas[i].tablet_status();
+    // Skip if the tablet is not health, or local tserver contains it, or it's been filtered out.
+    if (ts.state() != tablet::RUNNING ||
+        ContainsKey(local_tablets, ts.tablet_id()) ||
+        !MatchesAnyPattern(table_filters, ts.table_name())) {
+      continue;
+    }
+
+    // In multi-processor mode, check whether the replica should be cloned by current processor.
+    // NOTE: We have checked flags, no need to validate again.
+    if (FLAGS_current_bucket >= 0 &&
+        i % FLAGS_num_clone_processes != FLAGS_current_bucket) {
+      continue;
+    }
+
+    tablets_to_download.emplace_back(ts.tablet_id());
+    if (ts.has_estimated_on_disk_size()) {
+      tablet_id_to_size[ts.tablet_id()] = ts.estimated_on_disk_size();
+      total_byte_size += ts.estimated_on_disk_size();
+    } else {
+      tablet_id_to_size[ts.tablet_id()] = 0;
+    }
+  }
+
+  // 4. Start downloading tablets.
+  // Protect finished_byte_size, failed_tablets and succeed_tablets.
+  simple_spinlock lock;
+  int64_t finished_byte_size = 0;
+  vector<string> failed_tablets;
+  vector<string> succeed_tablets;
+  std::unique_ptr<ThreadPool> clone_pool;
+  ThreadPoolBuilder("clone-pool").set_max_threads(FLAGS_num_max_threads)
+                                 .set_min_threads(FLAGS_num_max_threads)
+                                 .Build(&clone_pool);
+  for (const auto& tablet_id : tablets_to_download) {
+    {
+      std::lock_guard<simple_spinlock> l(lock);
+      // Short circuit break when occured error.
+      if (!failed_tablets.empty()) {
+        break;
+      }
+    }
+    RETURN_NOT_OK(clone_pool->Submit([&]() {
+      LOG(INFO) << "Downloading tablet " << tablet_id;
+      MessengerBuilder builder("tablet_clone_client." + tablet_id);
+      shared_ptr<Messenger> messenger;
+      builder.Build(&messenger);
+      TabletCopyClient client(tablet_id, &fs_manager, cmeta_manager,
+                              messenger, nullptr /* no metrics */);
+      client.Start(hp, nullptr);
+      client.FetchAll(nullptr);
+      Status s = client.Finish();
+      {
+        std::lock_guard<simple_spinlock> l(lock);
+        if (!s.ok()) {
+          failed_tablets.emplace_back(tablet_id);
+          LOG(INFO) << Substitute("Tablet $0 download failed, error=$1.",
+                                  tablet_id, s.ToString());
+        } else {
+          succeed_tablets.emplace_back(tablet_id);
+          LOG(INFO) << Substitute("Tablet $0 download success.");
+        }
+        finished_byte_size += tablet_id_to_size[tablet_id];
+        LOG(INFO) << Substitute("$0/$1 tablets, $2/$3 KiB downloaded, include $4 failed tablets.",
+                                succeed_tablets.size() + failed_tablets.size(),
+                                tablets_to_download.size(),
+                                finished_byte_size >> 10,
+                                total_byte_size >> 10,
+                                failed_tablets.size());
+      }
+    }));
+  }
+  clone_pool->Wait();
+  clone_pool->Shutdown();
+
+  if (!failed_tablets.empty()) {
+    return Status::Corruption(Substitute("Failed during download, failed tablets are: $0",
+                                         JoinStrings(failed_tablets, ";")));
+  }
+  CHECK_EQ(tablets_to_download.size(), succeed_tablets.size());
+
+  // 5. Rewrite config to 'uuid:HOSTF:port', indicate this replica need to be re-distributed.
+  if (FLAGS_rewrite_config) {
+    LOG(INFO) << "Rewriting raft config";
+    string fqdn;
+    GetHostname(&fqdn);
+    HostPort hostport(std::move(fqdn), FLAGS_target_port);
+    const string& uuid = fs_manager.uuid();
+    vector<pair<string, HostPort>> peers{{uuid, hostport}};
+
+    int cmeta_updated_count = 0;
+    for (const auto& tablet_id : succeed_tablets) {
+      RETURN_NOT_OK(BackupConsensusMetadata(&fs_manager, tablet_id));
+      scoped_refptr<ConsensusMetadataManager> cmeta_manager =
+        new ConsensusMetadataManager(&fs_manager);
+      scoped_refptr<ConsensusMetadata> cmeta;
+      RETURN_NOT_OK(cmeta_manager->Load(tablet_id, &cmeta));
+      RaftConfigPB current_config = cmeta->CommittedConfig();
+      RaftConfigPB new_config = current_config;
+      new_config.clear_peers();
+      for (const auto& p : peers) {
+        RaftPeerPB new_peer;
+        new_peer.set_member_type(RaftPeerPB::VOTER);
+        new_peer.set_permanent_uuid(p.first);
+        HostPortPB new_peer_host_port_pb = HostPortToPB(p.second);
+        new_peer.mutable_last_known_addr()->CopyFrom(new_peer_host_port_pb);
+        new_config.add_peers()->CopyFrom(new_peer);
+      }
+      cmeta->set_committed_config(new_config);
+      RETURN_NOT_OK(cmeta->Flush());
+      LOG(INFO) << Substitute("$0/$1 tablets rewrite done.",
+                              ++cmeta_updated_count,
+                              succeed_tablets.size());
+    }
+  }
+  LOG(INFO) << "clone tserver succeed";
+
+  return Status::OK();
+}
+
 Status DeleteLocalReplica(const string& tablet_id,
                           FsManager* fs_manager,
                           const scoped_refptr<ConsensusMetadataManager>& cmeta_manager) {

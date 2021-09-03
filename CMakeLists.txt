@@ -1246,6 +1246,27 @@ ADD_THIRDPARTY_LIB(boost_date_time
     STATIC_LIB "${BOOST_DATE_TIME_STATIC_LIB}"
     SHARED_LIB "${BOOST_DATE_TIME_SHARED_LIB}")
 
+## prometheus-cpp
+# TODO(yingchun): there are some link errors if use uniform 'prometheus-cpp' or
+# 'prometheus-cpp-core/pull', I'm not sure how to resolve it currently. I'll fix
+# it later.
+if ("${CMAKE_BUILD_TYPE}" STREQUAL "RELEASE")
+  find_package(prometheus-cpp REQUIRED)
+else()
+  find_package(PrometheusCppCore REQUIRED)
+  include_directories(SYSTEM ${PROMETHEUS_CPP_CORE_INCLUDE_DIR})
+  ADD_THIRDPARTY_LIB(prometheus-cpp-core
+          STATIC_LIB "${PROMETHEUS_CPP_CORE_STATIC_LIB}"
+          SHARED_LIB "${PROMETHEUS_CPP_CORE_SHARED_LIB}")
+
+  ## prometheus-cpp-pull
+  find_package(PrometheusCppPull REQUIRED)
+  include_directories(SYSTEM ${PROMETHEUS_CPP_PULL_INCLUDE_DIR})
+  ADD_THIRDPARTY_LIB(prometheus-cpp-pull
+          STATIC_LIB "${PROMETHEUS_CPP_PULL_STATIC_LIB}"
+          SHARED_LIB "${PROMETHEUS_CPP_PULL_SHARED_LIB}")
+endif ()
+
 ############################################################
 # Enable sized deallocation where supported.
 # This happens down here instead of up with the rest of the
@@ -1480,6 +1501,7 @@ add_subdirectory(src/kudu/cfile)
 add_subdirectory(src/kudu/client)
 add_subdirectory(src/kudu/clock)
 add_subdirectory(src/kudu/codegen)
+add_subdirectory(src/kudu/collector)
 add_subdirectory(src/kudu/common)
 add_subdirectory(src/kudu/consensus)
 add_subdirectory(src/kudu/experiments)

@@ -1141,4 +1141,53 @@ build_jwt_cpp() {
     $JWT_CPP_SOURCE
   make -j$PARALLEL install
   popd
+
+build_prometheus() {
+  PROMETHEUS_SHARED_BDIR=$TP_BUILD_DIR/prometheus-cpp-$PROMETHEUS_NAME.shared$MODE_SUFFIX
+  PROMETHEUS_STATIC_BDIR=$TP_BUILD_DIR/prometheus-cpp-$PROMETHEUS_NAME.static$MODE_SUFFIX
+  pushd $PROMETHEUS_SOURCE
+  cd 3rdparty
+  rm -Rf civetweb
+  git clone https://github.com.cnpmjs.org/civetweb/civetweb.git
+  cd civetweb
+  git reset --hard c1d08d3c35bc939da7bec09973bda77c702c1d00
+  cd ..
+
+  rm -Rf googletest
+  git clone https://github.com.cnpmjs.org/google/googletest.git
+  cd googletest
+  git reset --hard e2239ee6043f73722e7aa812a459f54a28552929
+  popd
+
+  for SHARED in ON OFF; do
+    if [ $SHARED = "ON" ]; then
+      PROMETHEUS_BDIR=$PROMETHEUS_SHARED_BDIR
+    else
+      PROMETHEUS_BDIR=$PROMETHEUS_STATIC_BDIR
+    fi
+    mkdir -p $PROMETHEUS_BDIR
+    pushd $PROMETHEUS_BDIR
+    rm -Rf CMakeCache.txt CMakeFiles/
+
+    cmake -DCMAKE_BUILD_TYPE=release \
+    -DCMAKE_INSTALL_PREFIX=$PREFIX \
+    -DCMAKE_CXX_FLAGS="$EXTRA_CXXFLAGS" \
+    -DCMAKE_EXE_LINKER_FLAGS="$EXTRA_LDFLAGS" \
+    -DCMAKE_MODULE_LINKER_FLAGS="$EXTRA_LDFLAGS" \
+    -DCMAKE_SHARED_LINKER_FLAGS="$EXTRA_LDFLAGS" \
+    -DBUILD_SHARED_LIBS=$SHARED \
+    -DENABLE_PULL=ON \
+    -DENABLE_PUSH=OFF \
+    -DENABLE_COMPRESSION=OFF \
+    -DENABLE_TESTING=OFF \
+    -DUSE_THIRDPARTY_LIBRARIES=ON \
+    -DTHIRDPARTY_CIVETWEB_WITH_SSL=OFF \
+    -DOVERRIDE_CXX_STANDARD_FLAGS=ON \
+    -DRUN_IWYU=OFF \
+    $EXTRA_CMAKE_FLAGS \
+    $PROMETHEUS_SOURCE
+
+    ${NINJA:-make} -j$PARALLEL $EXTRA_MAKEFLAGS install
+    popd
+  done
 }

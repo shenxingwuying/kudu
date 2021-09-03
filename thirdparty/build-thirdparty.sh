@@ -108,6 +108,7 @@ else
       "oatpp")        F_OATPP=1 ;;
       "oatpp-swagger") F_OATPP_SWAGGER=1 ;;
       "jwt-cpp")      F_JWT_CPP=1;;
+      "prometheus")   F_PROMETHEUS=1 ;;
       *)              echo "Unknown module: $arg"; exit 1 ;;
     esac
   done
@@ -424,6 +425,8 @@ fi
 
 if [ -n "$F_UNINSTRUMENTED" -o -n "$F_JWT_CPP" ]; then
   build_jwt_cpp
+if [ -n "$F_UNINSTRUMENTED" -o -n "$F_PROMETHEUS" ]; then
+  build_prometheus
 fi
 
 restore_env
@@ -618,6 +621,8 @@ fi
 
 if [ -n "$F_TSAN" -o -n "$F_JWT_CPP" ]; then
   build_jwt_cpp
+if [ -n "$F_TSAN" -o -n "$F_PROMETHEUS" ]; then
+  build_prometheus
 fi
 
 restore_env
