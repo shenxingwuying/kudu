@@ -245,19 +245,6 @@ bool MatchNameInList(const string& name, const vector<string>& names) {
   return false;
 }
 
-const char* MetricLevelName(MetricLevel level) {
-  switch (level) {
-    case MetricLevel::kDebug:
-      return "debug";
-    case MetricLevel::kInfo:
-      return "info";
-    case MetricLevel::kWarn:
-      return "warn";
-    default:
-      return "UNKNOWN LEVEL";
-  }
-}
-
 int MetricLevelNumeric(MetricLevel level) {
   switch (level) {
     case MetricLevel::kDebug:
@@ -272,6 +259,19 @@ int MetricLevelNumeric(MetricLevel level) {
 }
 
 } // anonymous namespace
+
+const char* MetricLevelName(MetricLevel level) {
+  switch (level) {
+    case MetricLevel::kDebug:
+      return "debug";
+    case MetricLevel::kInfo:
+      return "info";
+    case MetricLevel::kWarn:
+      return "warn";
+    default:
+      return "UNKNOWN LEVEL";
+  }
+}
 
 Status MetricEntity::GetMetricsAndAttrs(const MetricFilters& filters,
                                         MetricMap* metrics,

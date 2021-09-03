@@ -598,7 +598,9 @@ Status CloneTserver(const RunnerContext& context) {
       }
       cmeta->set_committed_config(new_config);
       RETURN_NOT_OK(cmeta->Flush());
-      LOG(INFO) << Substitute("$0/$1 tablets rewrite done.", ++cmeta_updated_count, succeed_tablets.size());
+      LOG(INFO) << Substitute("$0/$1 tablets rewrite done.",
+                              ++cmeta_updated_count,
+                              succeed_tablets.size());
     }
   }
   LOG(INFO) << "clone tserver succeed";

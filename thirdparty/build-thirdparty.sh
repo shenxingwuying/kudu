@@ -105,6 +105,7 @@ else
       "postgres")     F_POSTGRES=1 ;;
       "psql-jdbc")    F_POSTGRES_JDBC=1 ;;
       "ranger")       F_RANGER=1 ;;
+      "prometheus")   F_PROMETHEUS=1 ;;
       *)              echo "Unknown module: $arg"; exit 1 ;;
     esac
   done
@@ -419,6 +420,10 @@ if [ -n "$F_UNINSTRUMENTED" -o -n "$F_GUMBO_QUERY" ]; then
   build_gumbo_query
 fi
 
+if [ -n "$F_UNINSTRUMENTED" -o -n "$F_PROMETHEUS" ]; then
+  build_prometheus
+fi
+
 restore_env
 
 # If we're on macOS best to exit here, otherwise single dependency builds will try to
@@ -599,6 +604,10 @@ fi
 
 if [ -n "$F_TSAN" -o -n "$F_GUMBO_QUERY" ]; then
   build_gumbo_query
+fi
+
+if [ -n "$F_TSAN" -o -n "$F_PROMETHEUS" ]; then
+  build_prometheus
 fi
 
 restore_env

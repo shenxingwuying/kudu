@@ -74,6 +74,15 @@
     } \
   } while (0)
 
+/// @brief Emit a warning if @c to_call returns a bad status and return.
+#define KUDU_WARN_NOT_OK_AND_RETURN(to_call, warning_prefix) do {          \
+    const ::kudu::Status& _s = (to_call);                                  \
+    if (PREDICT_FALSE(!_s.ok())) {                                         \
+      KUDU_LOG(WARNING) << (warning_prefix) << ": " << _s.ToString();      \
+      return;                                                              \
+    }                                                                      \
+  } while (0)
+
 /// @brief Log the given status and return immediately.
 #define KUDU_LOG_AND_RETURN(level, status) do { \
     const ::kudu::Status& _s = (status);        \
