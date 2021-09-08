@@ -28,6 +28,7 @@
 #include <ostream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <utility>
 
 #include <gflags/gflags_declare.h>
@@ -73,51 +74,6 @@ namespace kudu {
 static const int kHistorySize = 10;
 static const char kFakeUuid[] = "12345";
 
-class MaintenanceManagerTest : public KuduTest {
- public:
-  MaintenanceManagerTest()
-      : metric_entity_(METRIC_ENTITY_server.Instantiate(
-                       &metric_registry_, "test_entity")) {
-  }
-
-  void SetUp() override {
-    StartManager(2);
-  }
-
-  void TearDown() override {
-    StopManager();
-  }
-
-  void StartManager(int32_t num_threads) {
-    MaintenanceManager::Options options;
-    options.num_threads = num_threads;
-    options.polling_interval_ms = 1;
-    options.history_size = kHistorySize;
-    manager_.reset(new MaintenanceManager(options, kFakeUuid, metric_entity_));
-    manager_->set_memory_pressure_func_for_tests(
-        [&](double* /* consumption */) {
-          return indicate_memory_pressure_.load();
-        });
-    ASSERT_OK(manager_->Start());
-  }
-
-  void StopManager() {
-    manager_->Shutdown();
-  }
-
- protected:
-  MetricRegistry metric_registry_;
-  scoped_refptr<MetricEntity> metric_entity_;
-
-  shared_ptr<MaintenanceManager> manager_;
-  std::atomic<bool> indicate_memory_pressure_ { false };
-};
-
-// Just create the MaintenanceManager and then shut it down, to make sure
-// there are no race conditions there.
-TEST_F(MaintenanceManagerTest, TestCreateAndShutdown) {
-}
-
 class TestMaintenanceOp : public MaintenanceOp {
  public:
   TestMaintenanceOp(const std::string& name,
@@ -125,7 +81,7 @@ class TestMaintenanceOp : public MaintenanceOp {
                     int32_t priority = 0,
                     CountDownLatch* start_stats_latch = nullptr,
                     CountDownLatch* continue_stats_latch = nullptr)
-    : MaintenanceOp(name, io_usage),
+    : MaintenanceOp(name, io_usage, MaintenanceOp::PerfImprovementOpType::COMPACT_OP),
       start_stats_latch_(start_stats_latch),
       continue_stats_latch_(continue_stats_latch),
       ram_anchored_(500),
@@ -262,11 +218,68 @@ class TestMaintenanceOp : public MaintenanceOp {
   double workload_score_;
 };
 
+class MaintenanceManagerTest : public KuduTest,
+                               public testing::WithParamInterface<std::tuple<int, int>> {
+ public:
+  MaintenanceManagerTest()
+      : metric_entity_(METRIC_ENTITY_server.Instantiate(
+                       &metric_registry_, "test_entity")) {
+  }
+
+  void SetUp() override {
+    int32_t num_threads = std::get<0>(GetParam());
+    int32_t num_flush_threads = std::get<1>(GetParam());
+    StartManager(num_threads, num_flush_threads);
+  }
+
+  void TearDown() override {
+    StopManager();
+  }
+
+  void StartManager(int32_t num_threads, int32_t num_flush_threads) {
+    MaintenanceManager::Options options;
+    options.num_threads = num_threads;
+    options.num_flush_threads = num_flush_threads;
+    options.polling_interval_ms = 1;
+    options.history_size = kHistorySize;
+    manager_.reset(new MaintenanceManager(options, kFakeUuid, metric_entity_));
+    manager_->set_memory_pressure_func_for_tests(
+        [&](double* /* consumption */) {
+          return indicate_memory_pressure_.load();
+        });
+    ASSERT_OK(manager_->Start());
+  }
+
+  void StopManager() {
+    manager_->Shutdown();
+  }
+
+ protected:
+  MetricRegistry metric_registry_;
+  scoped_refptr<MetricEntity> metric_entity_;
+
+  shared_ptr<MaintenanceManager> manager_;
+  std::atomic<bool> indicate_memory_pressure_ { false };
+};
+
+INSTANTIATE_TEST_CASE_P(
+    Parameters, MaintenanceManagerTest,
+    testing::Combine(
+        // --maintenance_manager_num_threads
+        testing::Values(2),
+        // --maintenance_manager_num_flush_threads
+        testing::Values(0, 1)));
+
+// Just create the MaintenanceManager and then shut it down, to make sure
+// there are no race conditions there.
+TEST_P(MaintenanceManagerTest, TestCreateAndShutdown) {
+}
+
 // Create an op and wait for it to start running.  Unregister it while it is
 // running and verify that UnregisterOp waits for it to finish before
 // proceeding.
-TEST_F(MaintenanceManagerTest, TestRegisterUnregister) {
-  TestMaintenanceOp op1("1", MaintenanceOp::HIGH_IO_USAGE);
+TEST_P(MaintenanceManagerTest, TestRegisterUnregister) {
+  TestMaintenanceOp op1("1", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   op1.set_perf_improvement(10);
   // Register initially with no remaining runs. We'll later enable it once it's
   // already registered.
@@ -280,10 +293,11 @@ TEST_F(MaintenanceManagerTest, TestRegisterUnregister) {
   manager_->UnregisterOp(&op1);
 }
 
-TEST_F(MaintenanceManagerTest, TestRegisterUnregisterWithContention) {
+TEST_P(MaintenanceManagerTest, TestRegisterUnregisterWithContention) {
   CountDownLatch start_latch(1);
   CountDownLatch continue_latch(1);
-  TestMaintenanceOp op1("1", MaintenanceOp::HIGH_IO_USAGE, 0, &start_latch, &continue_latch);
+  TestMaintenanceOp op1("1", MaintenanceOp::IOUsage::HIGH_IO_USAGE,
+                        0, &start_latch, &continue_latch);
   manager_->RegisterOp(&op1);
   // Wait for the maintenance manager to start updating stats for this op.
   // This will effectively block the maintenance manager lock until
@@ -291,9 +305,9 @@ TEST_F(MaintenanceManagerTest, TestRegisterUnregisterWithContention) {
   start_latch.Wait();
 
   // Register another op while the maintenance manager lock is held.
-  TestMaintenanceOp op2("2", MaintenanceOp::HIGH_IO_USAGE);
+  TestMaintenanceOp op2("2", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   manager_->RegisterOp(&op2);
-  TestMaintenanceOp op3("3", MaintenanceOp::HIGH_IO_USAGE);
+  TestMaintenanceOp op3("3", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   manager_->RegisterOp(&op3);
 
   // Allow UpdateStats() to complete and release the maintenance manager lock.
@@ -315,8 +329,8 @@ TEST_F(MaintenanceManagerTest, TestRegisterUnregisterWithContention) {
 
 // Regression test for KUDU-1495: when an operation is being unregistered,
 // new instances of that operation should not be scheduled.
-TEST_F(MaintenanceManagerTest, TestNewOpsDontGetScheduledDuringUnregister) {
-  TestMaintenanceOp op1("1", MaintenanceOp::HIGH_IO_USAGE);
+TEST_P(MaintenanceManagerTest, TestNewOpsDontGetScheduledDuringUnregister) {
+  TestMaintenanceOp op1("1", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   op1.set_perf_improvement(10);
 
   // Set the op to run up to 10 times, and each time should sleep for a second.
@@ -339,8 +353,8 @@ TEST_F(MaintenanceManagerTest, TestNewOpsDontGetScheduledDuringUnregister) {
 
 // Test that we'll run an operation that doesn't improve performance when memory
 // pressure gets high.
-TEST_F(MaintenanceManagerTest, TestMemoryPressurePrioritizesMemory) {
-  TestMaintenanceOp op("op", MaintenanceOp::HIGH_IO_USAGE);
+TEST_P(MaintenanceManagerTest, TestMemoryPressurePrioritizesMemory) {
+  TestMaintenanceOp op("op", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   op.set_ram_anchored(100);
   manager_->RegisterOp(&op);
 
@@ -359,8 +373,8 @@ TEST_F(MaintenanceManagerTest, TestMemoryPressurePrioritizesMemory) {
 
 // Test that when under memory pressure, we'll run an op that doesn't improve
 // memory pressure if there's nothing else to do.
-TEST_F(MaintenanceManagerTest, TestMemoryPressurePerformsNoMemoryOp) {
-  TestMaintenanceOp op("op", MaintenanceOp::HIGH_IO_USAGE);
+TEST_P(MaintenanceManagerTest, TestMemoryPressurePerformsNoMemoryOp) {
+  TestMaintenanceOp op("op", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   op.set_ram_anchored(0);
   manager_->RegisterOp(&op);
 
@@ -382,20 +396,20 @@ TEST_F(MaintenanceManagerTest, TestMemoryPressurePerformsNoMemoryOp) {
 }
 
 // Test that ops are prioritized correctly when we add log retention.
-TEST_F(MaintenanceManagerTest, TestLogRetentionPrioritization) {
+TEST_P(MaintenanceManagerTest, TestLogRetentionPrioritization) {
   const int64_t kMB = 1024 * 1024;
 
   StopManager();
 
-  TestMaintenanceOp op1("op1", MaintenanceOp::LOW_IO_USAGE);
+  TestMaintenanceOp op1("op1", MaintenanceOp::IOUsage::LOW_IO_USAGE);
   op1.set_ram_anchored(0);
   op1.set_logs_retained_bytes(100 * kMB);
 
-  TestMaintenanceOp op2("op2", MaintenanceOp::HIGH_IO_USAGE);
+  TestMaintenanceOp op2("op2", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   op2.set_ram_anchored(100);
   op2.set_logs_retained_bytes(100 * kMB);
 
-  TestMaintenanceOp op3("op3", MaintenanceOp::HIGH_IO_USAGE);
+  TestMaintenanceOp op3("op3", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   op3.set_ram_anchored(200);
   op3.set_logs_retained_bytes(100 * kMB);
 
@@ -433,20 +447,20 @@ TEST_F(MaintenanceManagerTest, TestLogRetentionPrioritization) {
 }
 
 // Test that ops are prioritized correctly when under memory pressure.
-TEST_F(MaintenanceManagerTest, TestPrioritizeLogRetentionUnderMemoryPressure) {
+TEST_P(MaintenanceManagerTest, TestPrioritizeLogRetentionUnderMemoryPressure) {
   StopManager();
 
   // We should perform these in the order of WAL bytes retained, followed by
   // amount of memory anchored.
-  TestMaintenanceOp op1("op1", MaintenanceOp::HIGH_IO_USAGE);
+  TestMaintenanceOp op1("op1", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   op1.set_logs_retained_bytes(100);
   op1.set_ram_anchored(100);
 
-  TestMaintenanceOp op2("op2", MaintenanceOp::HIGH_IO_USAGE);
+  TestMaintenanceOp op2("op2", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   op2.set_logs_retained_bytes(100);
   op2.set_ram_anchored(99);
 
-  TestMaintenanceOp op3("op3", MaintenanceOp::HIGH_IO_USAGE);
+  TestMaintenanceOp op3("op3", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   op3.set_logs_retained_bytes(99);
   op3.set_ram_anchored(101);
 
@@ -475,8 +489,8 @@ TEST_F(MaintenanceManagerTest, TestPrioritizeLogRetentionUnderMemoryPressure) {
 }
 
 // Test retrieving a list of an op's running instances
-TEST_F(MaintenanceManagerTest, TestRunningInstances) {
-  TestMaintenanceOp op("op", MaintenanceOp::HIGH_IO_USAGE);
+TEST_P(MaintenanceManagerTest, TestRunningInstances) {
+  TestMaintenanceOp op("op", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   op.set_perf_improvement(10);
   op.set_remaining_runs(2);
   op.set_sleep_time(MonoDelta::FromSeconds(1));
@@ -505,10 +519,10 @@ TEST_F(MaintenanceManagerTest, TestRunningInstances) {
 
 // Test adding operations and make sure that the history of recently completed operations
 // is correct in that it wraps around and doesn't grow.
-TEST_F(MaintenanceManagerTest, TestCompletedOpsHistory) {
+TEST_P(MaintenanceManagerTest, TestCompletedOpsHistory) {
   for (int i = 0; i < kHistorySize + 1; i++) {
     string name = Substitute("op$0", i);
-    TestMaintenanceOp op(name, MaintenanceOp::HIGH_IO_USAGE);
+    TestMaintenanceOp op(name, MaintenanceOp::IOUsage::HIGH_IO_USAGE);
     op.set_perf_improvement(1);
     op.set_ram_anchored(100);
     manager_->RegisterOp(&op);
@@ -531,15 +545,16 @@ TEST_F(MaintenanceManagerTest, TestCompletedOpsHistory) {
 
 // Test maintenance OP factors.
 // The OPs on different priority levels have different OP score multipliers.
-TEST_F(MaintenanceManagerTest, TestOpFactors) {
+TEST_P(MaintenanceManagerTest, TestOpFactors) {
   StopManager();
 
   ASSERT_GE(FLAGS_max_priority_range, 1);
-  TestMaintenanceOp op1("op1", MaintenanceOp::HIGH_IO_USAGE, -FLAGS_max_priority_range - 1);
-  TestMaintenanceOp op2("op2", MaintenanceOp::HIGH_IO_USAGE, -1);
-  TestMaintenanceOp op3("op3", MaintenanceOp::HIGH_IO_USAGE, 0);
-  TestMaintenanceOp op4("op4", MaintenanceOp::HIGH_IO_USAGE, 1);
-  TestMaintenanceOp op5("op5", MaintenanceOp::HIGH_IO_USAGE, FLAGS_max_priority_range + 1);
+  TestMaintenanceOp op1("op1", MaintenanceOp::IOUsage::HIGH_IO_USAGE,
+                        -FLAGS_max_priority_range - 1);
+  TestMaintenanceOp op2("op2", MaintenanceOp::IOUsage::HIGH_IO_USAGE, -1);
+  TestMaintenanceOp op3("op3", MaintenanceOp::IOUsage::HIGH_IO_USAGE, 0);
+  TestMaintenanceOp op4("op4", MaintenanceOp::IOUsage::HIGH_IO_USAGE, 1);
+  TestMaintenanceOp op5("op5", MaintenanceOp::IOUsage::HIGH_IO_USAGE, FLAGS_max_priority_range + 1);
 
   ASSERT_DOUBLE_EQ(pow(FLAGS_maintenance_op_multiplier, -FLAGS_max_priority_range),
                    manager_->AdjustedPerfScore(1, 0, op1.priority()));
@@ -552,14 +567,20 @@ TEST_F(MaintenanceManagerTest, TestOpFactors) {
                    manager_->AdjustedPerfScore(1, 0, op5.priority()));
 }
 
-// Test priority OP launching.
-TEST_F(MaintenanceManagerTest, TestPriorityOpLaunch) {
-  StopManager();
-  StartManager(1);
+class MaintenanceManagerPriorityTest : public MaintenanceManagerTest {
+};
+INSTANTIATE_TEST_CASE_P(
+    Parameters, MaintenanceManagerPriorityTest,
+    testing::Combine(
+        // --maintenance_manager_num_threads
+        testing::Values(1),
+        // --maintenance_manager_num_flush_threads
+        testing::Values(0)));
 
+TEST_P(MaintenanceManagerPriorityTest, TestPriorityOpLaunch) {
   // Register an op whose sole purpose is to allow us to delay the rest of this
   // test until we know that the MM scheduler thread is running.
-  TestMaintenanceOp early_op("early", MaintenanceOp::HIGH_IO_USAGE, 0);
+  TestMaintenanceOp early_op("early", MaintenanceOp::IOUsage::HIGH_IO_USAGE, 0);
   early_op.set_perf_improvement(1);
   manager_->RegisterOp(&early_op);
   // From this point forward if an ASSERT fires, we'll hit a CHECK failure if
@@ -585,43 +606,44 @@ TEST_F(MaintenanceManagerTest, TestPriorityOpLaunch) {
   // op's raw perf improvement, workload score and its priority.
   // The 'op0' would never launch because it has a raw perf improvement 0, even if
   // it has a high workload_score and a high priority.
-  TestMaintenanceOp op0("op0", MaintenanceOp::HIGH_IO_USAGE, FLAGS_max_priority_range + 1);
+  TestMaintenanceOp op0("op0", MaintenanceOp::IOUsage::HIGH_IO_USAGE, FLAGS_max_priority_range + 1);
   op0.set_perf_improvement(0);
   op0.set_workload_score(10);
   op0.set_remaining_runs(1);
   op0.set_sleep_time(MonoDelta::FromMilliseconds(1));
 
-  TestMaintenanceOp op1("op1", MaintenanceOp::HIGH_IO_USAGE, -FLAGS_max_priority_range - 1);
+  TestMaintenanceOp op1("op1", MaintenanceOp::IOUsage::HIGH_IO_USAGE,
+                        -FLAGS_max_priority_range - 1);
   op1.set_perf_improvement(10);
   op1.set_remaining_runs(1);
   op1.set_sleep_time(MonoDelta::FromMilliseconds(1));
 
-  TestMaintenanceOp op2("op2", MaintenanceOp::HIGH_IO_USAGE, -1);
+  TestMaintenanceOp op2("op2", MaintenanceOp::IOUsage::HIGH_IO_USAGE, -1);
   op2.set_perf_improvement(10);
   op2.set_remaining_runs(1);
   op2.set_sleep_time(MonoDelta::FromMilliseconds(1));
 
-  TestMaintenanceOp op3("op3", MaintenanceOp::HIGH_IO_USAGE, 0);
+  TestMaintenanceOp op3("op3", MaintenanceOp::IOUsage::HIGH_IO_USAGE, 0);
   op3.set_perf_improvement(10);
   op3.set_remaining_runs(1);
   op3.set_sleep_time(MonoDelta::FromMilliseconds(1));
 
-  TestMaintenanceOp op4("op4", MaintenanceOp::HIGH_IO_USAGE, 1);
+  TestMaintenanceOp op4("op4", MaintenanceOp::IOUsage::HIGH_IO_USAGE, 1);
   op4.set_perf_improvement(10);
   op4.set_remaining_runs(1);
   op4.set_sleep_time(MonoDelta::FromMilliseconds(1));
 
-  TestMaintenanceOp op5("op5", MaintenanceOp::HIGH_IO_USAGE, 0);
+  TestMaintenanceOp op5("op5", MaintenanceOp::IOUsage::HIGH_IO_USAGE, 0);
   op5.set_perf_improvement(12);
   op5.set_remaining_runs(1);
   op5.set_sleep_time(MonoDelta::FromMilliseconds(1));
 
-  TestMaintenanceOp op6("op6", MaintenanceOp::HIGH_IO_USAGE, FLAGS_max_priority_range + 1);
+  TestMaintenanceOp op6("op6", MaintenanceOp::IOUsage::HIGH_IO_USAGE, FLAGS_max_priority_range + 1);
   op6.set_perf_improvement(10);
   op6.set_remaining_runs(1);
   op6.set_sleep_time(MonoDelta::FromMilliseconds(1));
 
-  TestMaintenanceOp op7("op7", MaintenanceOp::HIGH_IO_USAGE, 0);
+  TestMaintenanceOp op7("op7", MaintenanceOp::IOUsage::HIGH_IO_USAGE, 0);
   op7.set_perf_improvement(9);
   op7.set_workload_score(10);
   op7.set_remaining_runs(1);
@@ -685,8 +707,8 @@ TEST_F(MaintenanceManagerTest, TestPriorityOpLaunch) {
 
 // Regression test for KUDU-3268, where the unregistering and destruction of an
 // op may race with the scheduling of that op, resulting in a segfault.
-TEST_F(MaintenanceManagerTest, TestUnregisterWhileScheduling) {
-  TestMaintenanceOp op1("1", MaintenanceOp::HIGH_IO_USAGE);
+TEST_P(MaintenanceManagerTest, TestUnregisterWhileScheduling) {
+  TestMaintenanceOp op1("1", MaintenanceOp::IOUsage::HIGH_IO_USAGE);
   op1.set_perf_improvement(10);
   // Set a bunch of runs so we continually schedule the op.
   op1.set_remaining_runs(1000000);
