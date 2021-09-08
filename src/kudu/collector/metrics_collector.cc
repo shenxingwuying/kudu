@@ -56,8 +56,6 @@
 #include "kudu/util/trace.h"
 #include "kudu/util/zlib.h"
 
-DEFINE_bool(collector_simplify_labels, true, "Whether to simplify prometheus metric labels. "
-            "If true, 'alert_level' and 'unit' labels are hided");
 DEFINE_string(collector_attributes_filter, "",
               "Entity attributes to collect (semicolon-separated list of entity attribute "
               "name and values). e.g. attr_name1:attr_val1,attr_val2;attr_name2:attr_val3");
@@ -124,7 +122,7 @@ string GenerateMetricsRequestUrl() {
   }
   return metric_url_parameters;
 }
-}
+} // anonymous namespace
 
 bool ValidateMetricsCollectorFlags() {
   vector<string> cluster_collect_metrics =
@@ -289,23 +287,19 @@ Status MetricsCollector::InitMetrics() {
     }
   }
 
-#define ADD_MORE_GAUGE_METRIC(metric)                                                     \
-  do {                                                                                    \
-    std::string name(METRIC_##metric.name());                                             \
-    const auto* m = FindOrNull(master_metrics_dict.gauges_, name);                        \
-    if (m) {                                                                              \
-      break;                                                                              \
-    }                                                                                     \
-    auto& builder = prometheus::BuildGauge()                                              \
-          .Name(name)                                                                     \
-          .Help(METRIC_##metric.description());                                           \
-      if (!FLAGS_collector_simplify_labels) {                                             \
-        builder.Labels({{"unit", MetricUnit::Name(METRIC_##metric.unit())},               \
-                        {"alert_level", MetricLevelName(METRIC_##metric.level())}});      \
-      }                                                                                   \
-      auto& gauge = builder.Register(PrometheusReporter::instance()->registry());         \
-      InsertOrDie(&(master_metrics_dict.gauges_), gauge.GetName(), &gauge);               \
-      InsertOrDie(&(master_metrics_dict.metric_type_), name, MetricType::kGauge);         \
+#define ADD_MORE_GAUGE_METRIC(metric)                                                        \
+  do {                                                                                       \
+    std::string name(METRIC_##metric.name());                                                \
+    const auto* m = FindOrNull(master_metrics_dict.gauges_, name);                           \
+    if (m) {                                                                                 \
+      break;                                                                                 \
+    }                                                                                        \
+    auto& gauge = prometheus::BuildGauge()                                                   \
+        .Name(name)                                                                          \
+        .Help(StringReplace(METRIC_##metric.description(), "\n", " ", true /*replace_all*/)) \
+        .Register(PrometheusReporter::instance()->registry());                               \
+    InsertOrDie(&(master_metrics_dict.gauges_), gauge.GetName(), &gauge);                    \
+    InsertOrDie(&(master_metrics_dict.metric_type_), name, MetricType::kGauge);              \
  } while (false)
 
   // In case of initialized metrics from a table with a single tablet on a server,
@@ -373,6 +367,8 @@ Status MetricsCollector::ExtractMetricTypes(const JsonReader& r,
     RETURN_NOT_OK(r.ExtractString(metric, "name", &name));
     string description;
     RETURN_NOT_OK(r.ExtractString(metric, "description", &description));
+    // Replace '\n' to ' ' to ensure Prometheus could process it correctly.
+    description = StringReplace(description, "\n", " ", true /*replace_all*/);
     string unit;
     RETURN_NOT_OK(r.ExtractString(metric, "unit", &unit));
     string alert_level;
@@ -382,13 +378,10 @@ Status MetricsCollector::ExtractMetricTypes(const JsonReader& r,
     }
 
     if (HasPrefixString(name, "average_")) {
-      auto& builder = prometheus::BuildManualSummary()
+      auto& histogram = prometheus::BuildManualSummary()
           .Name(name)
-          .Help(description);
-      if (!FLAGS_collector_simplify_labels) {
-        builder.Labels({{"unit", unit}, {"alert_level", alert_level}});
-      }
-      auto& histogram = builder.Register(PrometheusReporter::instance()->registry());
+          .Help(description)
+          .Register(PrometheusReporter::instance()->registry());
       InsertOrDie(&(metrics_dict->summary_), histogram.GetName(), &histogram);
       InsertOrDie(&(metrics_dict->metric_type_), histogram.GetName(), MetricType::kMeanSummary);
       continue;
@@ -399,39 +392,30 @@ Status MetricsCollector::ExtractMetricTypes(const JsonReader& r,
     string upper_type;
     ToUpperCase(type, &upper_type);
     if (upper_type == "COUNTER") {
-      auto& builder = prometheus::BuildCounter()
+      auto& counter = prometheus::BuildCounter()
           .Name(name)
-          .Help(description);
-      if (!FLAGS_collector_simplify_labels) {
-        builder.Labels({{"unit", unit}, {"alert_level", alert_level}});
-      }
-      auto& counter = builder.Register(PrometheusReporter::instance()->registry());
+          .Help(description)
+          .Register(PrometheusReporter::instance()->registry());
       InsertOrDie(&(metrics_dict->counters_), counter.GetName(), &counter);
       InsertOrDie(&(metrics_dict->metric_type_), counter.GetName(), MetricType::kCounter);
       continue;
     }
 
     if (upper_type == "GAUGE") {
-      auto& builder = prometheus::BuildGauge()
+      auto& gauge = prometheus::BuildGauge()
           .Name(name)
-          .Help(description);
-      if (!FLAGS_collector_simplify_labels) {
-        builder.Labels({{"unit", unit}, {"alert_level", alert_level}});
-      }
-      auto& gauge = builder.Register(PrometheusReporter::instance()->registry());
+          .Help(description)
+          .Register(PrometheusReporter::instance()->registry());
       InsertOrDie(&(metrics_dict->gauges_), gauge.GetName(), &gauge);
       InsertOrDie(&(metrics_dict->metric_type_), gauge.GetName(), MetricType::kGauge);
       continue;
     }
 
     if (upper_type == "HISTOGRAM") {
-      auto& builder = prometheus::BuildManualSummary()
+      auto& histogram = prometheus::BuildManualSummary()
           .Name(name)
-          .Help(description);
-      if (!FLAGS_collector_simplify_labels) {
-        builder.Labels({{"unit", unit}, {"alert_level", alert_level}});
-      }
-      auto& histogram = builder.Register(PrometheusReporter::instance()->registry());
+          .Help(description)
+          .Register(PrometheusReporter::instance()->registry());
       InsertOrDie(&(metrics_dict->summary_), histogram.GetName(), &histogram);
       InsertOrDie(&(metrics_dict->metric_type_), histogram.GetName(), MetricType::kSummary);
       continue;

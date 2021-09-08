@@ -93,9 +93,9 @@ class MetricsCollector : public RefCounted<MetricsCollector> {
     //       {95, 59},
     //       {99, 220}}
     std::map<int, double> percentile_values;
-    SimpleHistogram(int64_t c = 0,  // NOLINT(runtime/explicit)
-                    int64_t s = 0,
-                    std::map<int, double> pvs = {})
+
+    SimpleHistogram() {}
+    SimpleHistogram(int64_t c, int64_t s, std::map<int, double> pvs)
         : count(c), sum(s), percentile_values(std::move(pvs)) {
     }
     inline bool operator==(const SimpleHistogram& rhs) const {

@@ -264,6 +264,6 @@ RANGER_NAME=ranger-$RANGER_VERSION-admin
 RANGER_SOURCE=$TP_SOURCE_DIR/$RANGER_NAME
 
 # https://github.com/jupp0r/prometheus-cpp/releases/download/v0.12.3/prometheus-cpp-with-submodules.tar.gz
-PROMETHEUS_VERSION=master-sensorsdata-b5ba4c6489f8e5deacbff3012ed2da76e7c4b1cc
+PROMETHEUS_VERSION=master-sensorsdata-c5a5cf4552750ac8e2c4fc93563f8f8318a6a20d
 PROMETHEUS_NAME=prometheus-cpp-$PROMETHEUS_VERSION
 PROMETHEUS_SOURCE=$TP_SOURCE_DIR/$PROMETHEUS_NAME

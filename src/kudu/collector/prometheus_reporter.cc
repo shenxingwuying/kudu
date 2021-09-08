@@ -33,7 +33,6 @@
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/util/curl_util.h"
 #include "kudu/util/debug/trace_event.h"
-#include "kudu/util/curl_util.h"
 #include "kudu/util/jsonwriter.h"
 #include "kudu/util/monotime.h"
 #include "kudu/util/status.h"
@@ -67,7 +66,7 @@ Registry& PrometheusReporter::registry() {
   return *registry_;
 }
 
-faststring PrometheusReporter::exportOnce() const {
+faststring PrometheusReporter::exportOnce() {
   EasyCurl curl;
   faststring dst;
   CHECK_OK(curl.FetchURL(Substitute("localhost:$0/metrics",

@@ -142,7 +142,7 @@ void Collector::Shutdown() {
     metrics_collector_->Shutdown();
     nodes_checker_->Shutdown();
     if (RunOnceMode()) {
-      std::cout << PrometheusReporter::instance()->exportOnce().data();
+      std::cout << PrometheusReporter::exportOnce().data();
     } else {
       service_monitor_->Shutdown();
     }

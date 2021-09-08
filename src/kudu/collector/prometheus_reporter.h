@@ -44,7 +44,7 @@ class PrometheusReporter {
 
   prometheus::Registry& registry();
 
-  faststring exportOnce() const;
+  static faststring exportOnce();
 
  private:
   PrometheusReporter();

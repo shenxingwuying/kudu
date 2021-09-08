@@ -1126,7 +1126,7 @@ build_prometheus() {
     $EXTRA_CMAKE_FLAGS \
     $PROMETHEUS_SOURCE
 
-    make -j$PARALLEL $EXTRA_MAKEFLAGS install
+    ${NINJA:-make} -j$PARALLEL $EXTRA_MAKEFLAGS install
     popd
   done
 }
