@@ -11,7 +11,6 @@ if [ ! -d build/release ]; then
   mkdir -p build/release
 fi
 cd build/release
-
 mkdir -p $INSTALL_DIR
 ../../build-support/enable_devtoolset.sh \
   ../../thirdparty/installed/common/bin/cmake \
