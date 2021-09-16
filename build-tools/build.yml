@@ -13,4 +13,4 @@ build_modules:
         # 添加自定义 build 命令
         add_cmds:
           - ["RUN", "sh build.sh"]
-          - ["COPY", "/data/opt/kudu/*", "./"]
+          - ["COPY", "/opt/kudu/installed/*", "./"]

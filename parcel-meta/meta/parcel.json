@@ -1,9 +1,9 @@
 {
   "schema_version":     1,
   "name":               "KUDU_SENSORS_DATA",
-  "version":            "{autogen_version}-cdh5.12.1.p0",
+  "version":            "{autogen_version}-cdh5.12.1.p0{level}",
   "extraVersionInfo": {
-    "fullVersion":        "{autogen_version}-cdh5.12.1.p0-{od}",
+    "fullVersion":        "{autogen_version}-cdh5.12.1.p0{level}-{od}",
     "baseVersion":        "cdh5.12.1",
     "patchCount":         "0"
   },

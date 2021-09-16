@@ -1,33 +1,42 @@
 set -ex
 
-# install 路径
-mkdir -p /data/opt/kudu
+rm -rf thirdparty
+tar xzf /opt/kudu/thirdparty.tgz
 
-# 代码路径
-cd /data/code/kudu
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/thirdparty/installed/uninstrumented/lib/
 
-# build 路径
-mkdir -p build/release
+INSTALL_DIR=/opt/kudu/installed
+
+if [ ! -d build/release ]; then
+  mkdir -p build/release
+fi
 cd build/release
 
-# 编译 & 安装
+mkdir -p $INSTALL_DIR
 ../../build-support/enable_devtoolset.sh \
   ../../thirdparty/installed/common/bin/cmake \
-  -DCMAKE_INSTALL_PREFIX=/data/opt/kudu \
+  -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
   -DCMAKE_BUILD_TYPE=release ../..
 
-make -j6
+PARALLEL=$(grep -c processor /proc/cpuinfo)
+make -j${PARALLEL}
 make install
 
-# 二进制瘦身
-strip --remove-section=.symtab /data/opt/kudu/bin/kudu
-strip --remove-section=.strtab /data/opt/kudu/bin/kudu
+mkdir -p $INSTALL_DIR/lib/kudu
+cp -r ../../www $INSTALL_DIR/lib/kudu/
 
-strip --remove-section=.symtab /data/opt/kudu/sbin/kudu-master
-strip --remove-section=.strtab /data/opt/kudu/sbin/kudu-master
+strip --remove-section=.symtab $INSTALL_DIR/bin/kudu
+strip --remove-section=.strtab $INSTALL_DIR/bin/kudu
 
-strip --remove-section=.symtab /data/opt/kudu/sbin/kudu-tserver
-strip --remove-section=.strtab /data/opt/kudu/sbin/kudu-tserver
+strip --remove-section=.symtab $INSTALL_DIR/sbin/kudu-master
+strip --remove-section=.strtab $INSTALL_DIR/sbin/kudu-master
 
-strip --remove-section=.symtab /data/opt/kudu/lib64/libkudu_client.so.0.1.0
-strip --remove-section=.strtab /data/opt/kudu/lib64/libkudu_client.so.0.1.0
+strip --remove-section=.symtab $INSTALL_DIR/sbin/kudu-tserver
+strip --remove-section=.strtab $INSTALL_DIR/sbin/kudu-tserver
+
+strip --remove-section=.symtab $INSTALL_DIR/lib64/libkudu_client.so.0.1.0
+strip --remove-section=.strtab $INSTALL_DIR/lib64/libkudu_client.so.0.1.0
+
+cat << EOF > $INSTALL_DIR/files.yml
+files: ['kudu/bin', 'kudu/include', 'kudu/lib64', 'kudu/sbin', 'kudu/share', 'kudu/lib']
+EOF
