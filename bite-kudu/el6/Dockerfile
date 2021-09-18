@@ -10,12 +10,12 @@ RUN yum install -y python-argparse lsof scl-utils
 RUN yum install -y centos-release-scl-rh
 RUN yum install -y devtoolset-8
 
-WORKDIR /data
+WORKDIR /data/jenkins/workspace/sp-kudu
 RUN git clone http://cd-token:iznQUqBe4hu5kNrdgQK5@gitlab.internal.sensorsdata.cn/sensors-analytics/kudu.git
-RUN mv /data/code /data/code.old && mv /data/kudu /data/code
+RUN mv kudu build-develop-el6
 
-WORKDIR /data/code
+WORKDIR /data/jenkins/workspace/sp-kudu/build-develop-el6
 RUN git checkout infinity/branch-1.14.x
-RUN export PARALLEL=$(grep -c processor /proc/cpuinfo) && build-support/enable_devtoolset.sh thirdparty/build-if-necessary.sh
-RUN mkdir -p /opt/kudu/ && tar czf thirdparty.tgz thirdparty && mv thirdparty.tgz /opt/kudu/
-RUN rm -rf /data/code && mv /data/code.old /data/code
+RUN build-support/enable_devtoolset.sh thirdparty/build-if-necessary.sh
+RUN mkdir -p /opt/kudu/ && mv thirdparty /opt/kudu/
+RUN rm -rf /data/jenkins/workspace/sp-kudu/build-develop-el6

@@ -1,7 +1,7 @@
 set -ex
 
 rm -rf thirdparty
-tar xzf /opt/kudu/thirdparty.tgz
+cp -r /opt/kudu/thirdparty thirdparty
 
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/thirdparty/installed/uninstrumented/lib/
 
