@@ -9,12 +9,9 @@ RUN yum install -y python-argparse lsof scl-utils
 RUN yum install -y centos-release-scl-rh
 RUN yum install -y devtoolset-8
 
-WORKDIR /data/jenkins/workspace/sp-kudu
-RUN git clone http://cd-token:iznQUqBe4hu5kNrdgQK5@gitlab.internal.sensorsdata.cn/sensors-analytics/kudu.git
-RUN mv kudu build-develop-el7
+# copy kudu code from local to the /opt/kudu_code, we need the absolutely path
+RUN rm -rf /opt/kudu_code && rsync -aP -r ./ /opt/kudu_code
 
-WORKDIR /data/jenkins/workspace/sp-kudu/build-develop-el7
-RUN git checkout infinity/branch-1.14.x
+WORKDIR /opt/kudu_code
 RUN build-support/enable_devtoolset.sh thirdparty/build-if-necessary.sh
-RUN mkdir -p /opt/kudu/ && mv thirdparty /opt/kudu/
-RUN rm -rf /data/jenkins/workspace/sp-kudu/build-develop-el7
+RUN mkdir -p /opt/kudu && mv thirdparty /opt/kudu/
