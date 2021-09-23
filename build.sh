@@ -1,12 +1,13 @@
 set -ex
 
-absolute_kudu_path=/opt/kudu_code
+kudu_source_code_absolute_path=/opt/kudu_code/kudu
 
 # copy kudu code from local to the /opt/kudu_code, we need the absolutely path
-rm -rf $absolute_kudu_path
-rsync -aP -r ./ $absolute_kudu_path
+rm -rf $kudu_source_code_absolute_path
+mkdir -p $kudu_source_code_absolute_path
+rsync -aP -r ./ $kudu_source_code_absolute_path
 
-cd $absolute_kudu_path
+cd $kudu_source_code_absolute_path
 rm -rf thirdparty
 cp -r /opt/kudu/thirdparty thirdparty
 
