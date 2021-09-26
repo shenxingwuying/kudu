@@ -205,6 +205,52 @@ public class KuduScanToken implements Comparable<KuduScanToken> {
     return columns;
   }
 
+  /**
+   * Given table and tablet, to get the RemoteTablet object of leader.
+   * Tablet can be fixed with implicit info in token.
+   * HostAndPort is given to double check whether it is the leader or not.
+   */
+  public static RemoteTablet getLeaderInfoByToken(KuduTable table, KuduScanToken token, HostAndPort hp)
+      throws KuduException {
+    Client.TabletMetadataPB tabletMetadata = token.message.getTabletMetadata();
+    List<LocatedTablet.Replica> replicas = new ArrayList<>();
+    for (Client.TabletMetadataPB.ReplicaMetadataPB replicaMetadataPB :
+         tabletMetadata.getReplicasList()) {
+      Client.ServerMetadataPB server = 
+          tabletMetadata.getTabletServers(replicaMetadataPB.getTsIdx());
+        if (hp.getHost().equals(server.getRpcAddresses(0).getHost()) && 
+            hp.getPort() == server.getRpcAddresses(0).getPort()) {
+
+          LocatedTablet.Replica replica = new LocatedTablet.Replica(
+              server.getRpcAddresses(0).getHost(),
+              server.getRpcAddresses(0).getPort(),
+              replicaMetadataPB.getRole(), replicaMetadataPB.getDimensionLabel());
+          replicas.add(replica);
+
+          Partition partition =
+              ProtobufHelper.pbToPartition(tabletMetadata.getPartition());
+          List<ServerInfo> servers = new ArrayList<>();
+          for (Client.ServerMetadataPB serverMetadataPB : tabletMetadata.getTabletServersList()) {
+            HostAndPort hostPort =
+                ProtobufHelper.hostAndPortFromPB(serverMetadataPB.getRpcAddresses(0));
+            if (!hp.equals(hostPort)) {
+              continue;
+            }
+            final InetAddress inetAddress = NetUtil.getInetAddress(hostPort.getHost());
+            ServerInfo serverInfo = new ServerInfo(serverMetadataPB.getUuid().toString(),
+                hostPort, inetAddress, serverMetadataPB.getLocation());
+            servers.add(serverInfo);
+          }
+
+          RemoteTablet remoteTablet = new RemoteTablet(table.getTableId(), 
+                                                       tabletMetadata.getTabletId(), 
+                                                       partition, replicas, servers);
+          return remoteTablet;
+        }
+    }
+    return null;
+  }
+
   @SuppressWarnings("deprecation")
   private static KuduScanner.KuduScannerBuilder pbIntoScannerBuilder(
       ScanTokenPB message, KuduClient client) throws KuduException {

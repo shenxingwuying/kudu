@@ -96,6 +96,7 @@ public abstract class KuduRpc<R> {
   static final int MAX_RPC_SIZE = 256 * 1024 * 1024; // 256MB
 
   // Service names.
+  protected static final String CONSENSUS_SERVICE_NAME = "kudu.consensus.ConsensusService";
   protected static final String MASTER_SERVICE_NAME = "kudu.master.MasterService";
   protected static final String TABLET_SERVER_SERVICE_NAME = "kudu.tserver.TabletServerService";
 

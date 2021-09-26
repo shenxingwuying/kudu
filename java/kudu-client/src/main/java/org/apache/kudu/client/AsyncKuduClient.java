@@ -32,11 +32,14 @@ import static org.apache.kudu.rpc.RpcHeader.ErrorStatusPB.RpcErrorCodePB.ERROR_I
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
 import java.security.cert.CertificateException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
@@ -301,6 +304,7 @@ public class AsyncKuduClient implements AutoCloseable {
   public static final byte[] EMPTY_ARRAY = new byte[0];
   public static final long NO_TIMESTAMP = -1;
   public static final long INVALID_TXN_ID = -1;
+  public static final String BEEF_ID = "beefbeefbeefbeefbeefbeefbeefbeef";
   public static final long DEFAULT_OPERATION_TIMEOUT_MS = 30000;
   public static final long DEFAULT_KEEP_ALIVE_PERIOD_MS = 15000; // 25% of the default scanner ttl.
   private static final long MAX_RPC_ATTEMPTS = 100;
@@ -830,6 +834,18 @@ public class AsyncKuduClient implements AutoCloseable {
     ListTabletServersRequest rpc = new ListTabletServersRequest(this.masterTable,
                                                                 timer,
                                                                 defaultAdminOperationTimeoutMs);
+    return sendRpcToTablet(rpc);
+  }
+
+  /**
+   * Get the list of running tablet servers with instance id for tserver respectively.
+   * @return a deferred object that yields a list of tablet servers
+   */
+  public Deferred<ListTabletServersWithUUIDResponse> listTabletServersWithUUID() {
+    checkIsClosed();
+    ListTabletServersWithUUIDRequest rpc = new ListTabletServersWithUUIDRequest(this.masterTable,
+                                                                                timer,
+                                                                                defaultAdminOperationTimeoutMs);
     return sendRpcToTablet(rpc);
   }
 
@@ -2355,6 +2371,49 @@ public class AsyncKuduClient implements AutoCloseable {
    */
   private void releaseMasterLookupPermit() {
     masterLookups.release();
+  }
+
+  /**
+   * Create non-voter peers "beef" for each tablet of given table.
+   *
+   * This is not under test when range schema is introduced in.
+   */
+  void createNonVotersForBeefByTable(KuduTable table,
+                                     Common.HostPortPB beefPB)
+      throws Exception {
+    checkIsClosed();
+    KuduScanToken.KuduScanTokenBuilder builder = new KuduScanToken.KuduScanTokenBuilder(this,
+                                                                                        table);
+    List<KuduScanToken> tokens = builder.build();
+
+    for (KuduScanToken token : tokens) {
+      String tabletId = new String(token.getTablet().getTabletId(), StandardCharsets.UTF_8);
+      LocatedTablet.Replica replica = token.getTablet().getLeaderReplica();
+
+      HostAndPort leaderHp = new HostAndPort(replica.getRpcHost(), replica.getRpcPort());
+
+      RemoteTablet remoteTablet = KuduScanToken.getLeaderInfoByToken(table, token, leaderHp);
+      if (remoteTablet == null || remoteTablet.getLeaderServerInfo() == null) {
+        String errorMsg = String.format("cant get the leader of table %s tablet %s",
+                                        table.getName(),
+                                        tabletId);
+        throw new NonRecoverableException(Status.NetworkError(errorMsg));
+      }
+      ChangeConfigRequest changeConfigRequest =
+          new ChangeConfigRequest(table, tabletId, remoteTablet, beefPB,
+                                  BEEF_ID, timer, defaultAdminOperationTimeoutMs);
+
+      try {
+        Deferred<ChangeConfigResponse> d = sendRpcToTablet(changeConfigRequest);
+        // Call result are captured by exception.
+        d.join();
+      } catch (KuduException e) {
+        // If it's already in peers, just ignore the exception.
+        if (!e.getMessage().contains("already a member of the config")) {
+          throw e;
+        }
+      }
+    }
   }
 
   /**
