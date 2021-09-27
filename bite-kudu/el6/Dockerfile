@@ -16,6 +16,6 @@ RUN git clone http://cd-token:iznQUqBe4hu5kNrdgQK5@gitlab.internal.sensorsdata.c
 
 WORKDIR /opt/kudu_code/kudu
 RUN git checkout infinity/branch-1.14.x
-RUN build-support/enable_devtoolset.sh thirdparty/build-if-necessary.sh
+RUN build-support/enable_devtoolset.sh thirdparty/build-if-necessary.sh all
 RUN mkdir -p /opt/kudu/ && mv thirdparty /opt/kudu/
 RUN rm -rf /opt/kudu_code
