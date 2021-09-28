@@ -152,8 +152,8 @@ Status ExtraConfigPBToMap(const TableExtraConfigPB& pb,
                           std::map<std::string, std::string>* configs);
 
 // Update or insert the table's extra configuration according to protobuf::map.
-Status UpdateExtraConfigPB(
-    const google::protobuf::Map<std::string, std::string>& new_extra_configs,
+Status ExtraConfigPBFromPBMap(
+    const google::protobuf::Map<std::string, std::string>& configs,
     bool external_request,
     TableExtraConfigPB* pb);
 

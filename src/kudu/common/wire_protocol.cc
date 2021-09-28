@@ -25,6 +25,7 @@
 #include <ostream>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <boost/optional/optional.hpp>
@@ -70,6 +71,7 @@ using kudu::pb_util::SecureShortDebugString;
 using std::map;
 using std::set;
 using std::string;
+using std::unordered_set;
 using std::vector;
 using strings::Substitute;
 
@@ -674,23 +676,24 @@ Status ParseUint32Config(const string& name, const string& value, uint32_t* resu
   return Status::OK();
 }
 
-Status UpdateExtraConfigPB(const Map<string, string>& new_extra_configs,
-                           bool external_request,
-                           TableExtraConfigPB* pb) {
-  static const set<string> kSupportedConfigs({kTableHistoryMaxAgeSec,
-                                              kTableMaintenancePriority,
-                                              kTableConfigReserveSeconds});
-  static const set<string> kInternalConfigs({kTableConfigReserveSeconds});
-  for (const auto& config : new_extra_configs) {
+Status ExtraConfigPBFromPBMap(const Map<string, string>& configs,
+                              bool external_request,
+                              TableExtraConfigPB* pb) {
+  static const unordered_set<string> kSupportedConfigs({kTableHistoryMaxAgeSec,
+                                                        kTableMaintenancePriority,
+                                                        kTableConfigReserveSeconds});
+  static const unordered_set<string> kInternalConfigs({kTableConfigReserveSeconds});
+  TableExtraConfigPB result;
+  for (const auto& config : configs) {
     const string& name = config.first;
     const string& value = config.second;
     if (!ContainsKey(kSupportedConfigs, name)) {
       return Status::InvalidArgument(
-        Substitute("invalid extra configuration property: $0", name));
+          Substitute("invalid extra configuration property: $0", name));
     }
     if (external_request && ContainsKey(kInternalConfigs, name)) {
       return Status::InvalidArgument(
-        Substitute("forbidden to change internal extra configuration by user, property: $0", name));
+          Substitute("forbidden to change internal extra configuration by user, property: $0", name));
     }
 
     if (name == kTableHistoryMaxAgeSec) {
@@ -718,7 +721,7 @@ Status UpdateExtraConfigPB(const Map<string, string>& new_extra_configs,
         pb->clear_reserve_seconds();
       }
     } else {
-      LOG(FATAL) << "unparsed property: " << name;
+      LOG(FATAL) << "Unknown extra configuration property: " << name;
     }
   }
   return Status::OK();

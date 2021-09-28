@@ -1788,7 +1788,7 @@ Status CatalogManager::CreateTable(const CreateTableRequestPB* orig_req,
 
   // Verify the table's extra configuration properties.
   TableExtraConfigPB extra_config_pb;
-  RETURN_NOT_OK(UpdateExtraConfigPB(req.extra_configs(), true, &extra_config_pb));
+  RETURN_NOT_OK(ExtraConfigPBFromPBMap(req.extra_configs(), true, &extra_config_pb));
 
   scoped_refptr<TableInfo> table;
   {
@@ -2945,9 +2945,9 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
     for (auto config : req.new_extra_configs()) {
       new_extra_configs[config.first] = config.second;
     }
-    RETURN_NOT_OK(UpdateExtraConfigPB(new_extra_configs,
-                                      external_request,
-                                      l.mutable_data()->pb.mutable_extra_config()));
+    RETURN_NOT_OK(ExtraConfigPBFromPBMap(new_extra_configs,
+                                         external_request,
+                                         l.mutable_data()->pb.mutable_extra_config()));
   }
 
   // Set to true if columns are altered, added or dropped.
