@@ -143,6 +143,11 @@ class AlterSchemaOp : public Op {
   // Executes an Apply for the alter schema op
   Status Apply(consensus::CommitMsg** commit_msg) override;
 
+  Status Duplicate() override {
+    // Do nothing.
+    return Status::OK();
+  }
+
   // Actually commits the op.
   void Finish(OpResult result) override;
 

@@ -148,6 +148,11 @@ class ParticipantOp : public Op {
   // Perform the state change.
   Status Apply(consensus::CommitMsg** commit_msg) override;
 
+  Status Duplicate() override {
+    // Do nothing.
+    return Status::OK();
+  }
+
   // Release the transaction reference and the lock on its state. If this was
   // the only op referencing the transaction and it was left in the
   // kInitializing state (e.g. we tried to start the transaction in this op but

@@ -37,5 +37,9 @@ tserver_flag_config['fs_wal_dir'] = tserver_fs_wal_dir
 tserver_flag_config['rpc_bind_addresses'] = '0.0.0.0:' + str(params.tserver_service_port)
 tserver_flag_config['webserver_port'] = params.tserver_webserver_port
 
+from hyperion_client.config_manager import ConfigManager
+kafka_broker_list = ','.join(ConfigManager().get_client_conf("sp", "kafka")['broker_list'])
+tserver_flag_config['kafka_broker_list'] = kafka_broker_list
+
 # 探活用
 webserver_port = params.tserver_webserver_port

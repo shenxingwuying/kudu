@@ -17,13 +17,13 @@
 
 package org.apache.kudu.client;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.Executor;
 
 import com.google.common.base.Preconditions;
 import com.stumbleupon.async.Deferred;
+import org.apache.kudu.tablet.Metadata;
+import org.apache.kudu.tserver.Tserver;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
 import org.slf4j.Logger;
@@ -32,6 +32,11 @@ import org.slf4j.LoggerFactory;
 import org.apache.kudu.Common.HostPortPB;
 import org.apache.kudu.Schema;
 import org.apache.kudu.master.Master.TableIdentifierPB;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.Charset;
 
 /**
  * A synchronous and thread-safe client for Kudu.
@@ -260,18 +265,30 @@ public class KuduClient implements AutoCloseable {
   /**
    * Call of kudu-cli.
    * `echo tablets | xargs -i kudu tablet change_config add_replica {} BEEF NON_VOTER`
-   * 
+   *
    * Use this for adding ksycner as cluster LEARNER.
-   * 
+   *
    *   Return OK: Added beef as LEARNER successful.
    *   Return Aborted: Something wrong with Defer, re-try is needed.
    *   Return NotFound: Ksyncer process is dead. No need to re-try.
    *   Return others like RemoteError, re-try is needed.
-   * 
-   * This is not eventually status to be returned to user, for this rpc call 
+   *
+   * This is not eventually status to be returned to user, for this rpc call
    * have no warranty that the peer relationship would be created.
    */
   public Status createKsyncerLearnerForTable(KuduTable kuduTable) {
+    // Check kudu-master version whether kudu cluster support duplication.
+    if (asyncClient.supportDuplication()) {
+      try {
+        asyncClient.addDuplicator(kuduTable, AsyncKuduClient.DEFAULT_TOPIC_NAME);
+        return Status.OK();
+      } catch (Exception e) {
+        // This is throw by defered.join().
+        LOG.error("Problem occurred when add a duplicator for table. ", e);
+        return Status.Aborted("Something error happened, check status of kudu cluster.");
+      }
+    }
+
     Map<String, HostPortPB> serverMap;
     try {
       serverMap = listTabletServersWithUUID().getTabletServersMap();
@@ -279,6 +296,7 @@ public class KuduClient implements AutoCloseable {
       LOG.error("Problem occurred when fetching all tservers info. ", e);
       return e.getStatus();
     }
+    // Check kudu cluster whether ksyncer exists.
     if (serverMap.containsKey(AsyncKuduClient.BEEF_ID)) {
       HostPortPB beefPB = serverMap.get(AsyncKuduClient.BEEF_ID);
       try {
@@ -287,13 +305,44 @@ public class KuduClient implements AutoCloseable {
       } catch (Exception e) {
         // This is throw by defered.join().
         LOG.error("Problem occurred when fetching all tservers info. ", e);
-        return Status.Aborted("Something error happened, " +
-                              "go check status of kudu cluster holistically.");
+        return Status.Aborted("Something error happened, check status of kudu cluster.");
       }
     } else {
       LOG.error("Ksyncer instance may be dead, go check the status.");
       return Status.NotFound("Ksyncer instance may be dead, go check the status.");
     }
+  }
+
+  public Set<String> getSubscribedTables() throws Exception {
+    Set<String> subscribedTables = new TreeSet<>();
+
+    if (asyncClient.supportDuplication()) {
+      // TODO(duyuqi)
+    } else {
+      Map<String, ServerInfo> serverMap;
+      try {
+        serverMap = listTabletServersWithUUID().getServerInfoMap();
+      } catch (KuduException e) {
+        LOG.error("Problem occurred when fetching all tservers info. ", e);
+        throw e;
+      }
+      if (serverMap.containsKey(AsyncKuduClient.BEEF_ID)) {
+        ServerInfo serverInfo = serverMap.get(AsyncKuduClient.BEEF_ID);
+        RpcProxy proxy = asyncClient.newRpcProxy(serverInfo);
+        ListTabletsRequest req = new ListTabletsRequest(asyncClient.getTimer(), 10000);
+        Deferred<ListTabletsResponse> d = req.getDeferred();
+        proxy.sendRpc(req);
+        ListTabletsResponse resp = d.join();
+        for (Tserver.ListTabletsResponsePB.StatusAndSchemaPB tabletInfo : resp.getTabletInfoMap()) {
+          if (tabletInfo.getTabletStatus().getState() == Metadata.TabletStatePB.RUNNING) {
+            subscribedTables.add(tabletInfo.getTabletStatus().getTableName());
+          }
+        }
+      } else {
+        throw new Exception("no ksyncer server.");
+      }
+    }
+    return subscribedTables;
   }
 
   /**

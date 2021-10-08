@@ -60,6 +60,7 @@ class MonoDelta;
 class ThreadPool;
 class ThreadPoolToken;
 
+
 namespace consensus {
 class ConsensusMetadataManager;
 class OpStatusPB;
@@ -133,6 +134,7 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
                scoped_refptr<log::Log> log,
                ThreadPool* prepare_pool,
                DnsResolver* resolver);
+
 
   // Synchronously transition this replica to STOPPED state from any other
   // state. This also stops RaftConsensus. If a Stop() operation is already in

@@ -159,7 +159,9 @@ Status OpDriver::Init(unique_ptr<Op> op,
       const rpc::RequestIdPB& request_id = state()->request_id();
       const google::protobuf::Message* response = state()->response();
       unique_ptr<OpCompletionCallback> callback(
-          new FollowerOpCompletionCallback(request_id, response, state()->result_tracker()));
+          new FollowerOpCompletionCallback(request_id,
+                                           response,
+                                           state()->result_tracker()));
       mutable_state()->set_completion_callback(std::move(callback));
     }
   } else {

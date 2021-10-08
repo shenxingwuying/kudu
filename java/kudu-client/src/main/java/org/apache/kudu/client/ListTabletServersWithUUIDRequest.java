@@ -44,16 +44,21 @@ public class ListTabletServersWithUUIDRequest extends KuduRpc<ListTabletServersW
     int serversCount = respBuilder.getServersCount();
 
     Map<String, HostPortPB> serversWithHP = new HashMap<>(serversCount);
+    Map<String, ServerInfo> serverInfoMap = new HashMap<>(serversCount);
     for (ListTabletServersResponsePB.Entry entry : respBuilder.getServersList()) {
       HostPortPB pb = entry.getRegistration().getRpcAddresses(0);
       String uuid = entry.getInstanceId().getPermanentUuid().toStringUtf8();
       serversWithHP.put(uuid, pb);
+      ServerInfo serverInfo = new ServerInfo(uuid,
+              new HostAndPort(pb.getHost(), pb.getPort()), null, entry.getLocation());
+      serverInfoMap.put(uuid, serverInfo);
     }
     ListTabletServersWithUUIDResponse response =
-        new ListTabletServersWithUUIDResponse(timeoutTracker.getElapsedMillis(),
-                                              tsUUID,
-                                              serversCount,
-                                              serversWithHP);
+            new ListTabletServersWithUUIDResponse(timeoutTracker.getElapsedMillis(),
+                    tsUUID,
+                    serversCount,
+                    serversWithHP,
+                    serverInfoMap);
     return new Pair<ListTabletServersWithUUIDResponse, Object>(
         response, respBuilder.hasError() ? respBuilder.getError() : null);
   }

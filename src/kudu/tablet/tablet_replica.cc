@@ -765,7 +765,7 @@ Status TabletReplica::StartFollowerOp(const scoped_refptr<ConsensusRound>& round
     {
       DCHECK(replicate_msg->has_write_request()) << "WRITE_OP replica"
           " op must receive a WriteRequestPB";
-      unique_ptr<WriteOpState> op_state(
+      std::unique_ptr<WriteOpState> op_state(
           new WriteOpState(
               this,
               &replicate_msg->write_request(),
@@ -800,6 +800,9 @@ Status TabletReplica::StartFollowerOp(const scoped_refptr<ConsensusRound>& round
     }
     case DUPLICATE_OP:
     {
+      // TODO(duyuqi) Mark, CHECK.
+      // MUTST MUST BUG BUG alarming.  If duplicator was removed and DUPLICATE_OP.
+      // Should normal running and no core dump.
       const consensus::DuplicateRequestPB& request = replicate_msg->duplicate_request();
       consensus::DuplicateResponsePB response;
       auto op_state = std::make_unique<DuplicationOpState>(this, request, response);

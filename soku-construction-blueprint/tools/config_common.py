@@ -5,6 +5,7 @@ import os
 import sys
 
 sys.path.append(os.path.join(os.environ['SENSORS_PLATFORM_HOME'], '..', 'armada', 'hyperion'))
+from hyperion_client.config_manager import ConfigManager
 from hyperion_client.deploy_info import DeployInfo
 from hyperion_client.directory_info import DirectoryInfo
 from hyperion_client.hyperion_inner_client.inner_node_info import InnerNodeInfo
@@ -58,7 +59,6 @@ def get_dynamic_config_value(key, is_simplified_cluster, random_dirs_count, host
 def start_cdh_server(api):
     api.waiting_service_ready(True)
 
-
 KUDU_COMMON_CONFIG = {
     'max_log_size': '100',
     'superuser_acl': 'sa_cluster,kudu,root',
@@ -71,11 +71,18 @@ KUDU_COMMON_CONFIG = {
     'raft_heartbeat_interval_ms': '1000'
 }
 
+# The config item 'kafka_broker_list' maybe need kafka cluster exists because it use the api to get
+# broker_list, which means kafka cluster should deploy before kudu.
+# If Kafka cluster doesn't exist, but it will be deloyed in the future, and the incoming kafka cluster's
+# broker_list is definitive, that's ok.
+# In a word, we need config a default valid kafka broker_list now or later.
+kafka_broker_list = ','.join(ConfigManager().get_client_conf("sp", "kafka")['broker_list'])
 KUDU_MASTER_CONFIG = {
     'auto_rebalancing_enabled': 'true',
     'auto_rebalancing_load_imbalance_threshold': '0.5',
     'master_default_reserve_trashed_table_seconds': '43200',
-    'table_locations_cache_capacity_mb': '64'
+    'table_locations_cache_capacity_mb': '64',
+    'kafka_broker_list': kafka_broker_list
 }
 
 

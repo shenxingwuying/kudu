@@ -30,6 +30,9 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.kudu.client.ExternalConsistencyMode.CLIENT_PROPAGATED;
 import static org.apache.kudu.rpc.RpcHeader.ErrorStatusPB.RpcErrorCodePB.ERROR_INVALID_REQUEST;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
@@ -305,6 +308,7 @@ public class AsyncKuduClient implements AutoCloseable {
   public static final long NO_TIMESTAMP = -1;
   public static final long INVALID_TXN_ID = -1;
   public static final String BEEF_ID = "beefbeefbeefbeefbeefbeefbeefbeef";
+  public static final String DEFAULT_TOPIC_NAME = "kudu_profile_record_stream";
   public static final long DEFAULT_OPERATION_TIMEOUT_MS = 30000;
   public static final long DEFAULT_KEEP_ALIVE_PERIOD_MS = 15000; // 25% of the default scanner ttl.
   private static final long MAX_RPC_ATTEMPTS = 100;
@@ -1180,6 +1184,46 @@ public class AsyncKuduClient implements AutoCloseable {
    */
   public String getMasterAddressesAsString() {
     return Joiner.on(",").join(masterAddresses);
+  }
+
+  /**
+   * @return whether kudu cluster support duplication.
+   */
+  public boolean supportDuplication() {
+    boolean supportDuplication = false;;
+    Runtime runtime = Runtime.getRuntime();
+    for (HostAndPort hostAndPort : masterAddresses) {
+      String host = hostAndPort.getHost();
+      int webPort = hostAndPort.getPort() + 1000;
+      String bashCommand = new StringBuilder().append("curl http://")
+                                              .append(host).append(":")
+                                              .append(webPort).append("/version")
+                                              .toString();
+      try {
+        Process pro = runtime.exec(bashCommand);
+        int status = pro.waitFor();
+        if (status != 0) {
+          continue;
+        }
+        BufferedReader br = new BufferedReader(
+            new InputStreamReader(pro.getInputStream(),
+            java.nio.charset.Charset.forName("utf8")));
+        StringBuilder result = new StringBuilder();
+        String line;
+        while ((line = br.readLine()) != null) {
+          result.append(line);
+        }
+        if (result.indexOf("duplication") >= 0) {
+          supportDuplication = true;
+        }
+        break;
+      } catch (IOException e) {
+        LOG.error("run bash command error ", e.getMessage());
+      } catch (Exception e) {
+        LOG.error("something error ", e.getMessage());
+      }
+    }
+    return supportDuplication;
   }
 
   /**
@@ -2374,10 +2418,12 @@ public class AsyncKuduClient implements AutoCloseable {
   }
 
   /**
-   * Create non-voter peers "beef" for each tablet of given table.
+   * For old ksyncer api compatible.
    *
+   * Create non-voter peers "beef" for each tablet of given table.
    * This is not under test when range schema is introduced in.
    */
+  @Deprecated
   void createNonVotersForBeefByTable(KuduTable table,
                                      Common.HostPortPB beefPB)
       throws Exception {
@@ -2414,6 +2460,21 @@ public class AsyncKuduClient implements AutoCloseable {
         }
       }
     }
+  }
+
+  void addDuplicator(KuduTable table,
+                     String duplicationName) throws Exception {
+    checkIsClosed();
+    AlterTableOptions options = new AlterTableOptions();
+    options.enableDuplication(duplicationName);
+    alterTable(table.getName(), options);
+  }
+
+  void dropDuplicator(KuduTable table, String duplicationName) throws Exception {
+    checkIsClosed();
+    AlterTableOptions options = new AlterTableOptions();
+    options.disableDuplication(duplicationName);
+    alterTable(table.getName(), options);
   }
 
   /**

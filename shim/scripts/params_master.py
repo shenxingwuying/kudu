@@ -46,3 +46,7 @@ master_flag_config['webserver_port'] = params.master_webserver_port
 
 # 探活用
 webserver_port = params.master_service_port
+
+from hyperion_client.config_manager import ConfigManager
+kafka_broker_list = ','.join(ConfigManager().get_client_conf("sp", "kafka")['broker_list'])
+master_flag_config['kafka_broker_list'] = kafka_broker_list
