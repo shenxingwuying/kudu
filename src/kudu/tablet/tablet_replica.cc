@@ -42,6 +42,7 @@
 #include "kudu/consensus/log_anchor_registry.h"
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid.pb.h"
+#include "kudu/consensus/opid_util.h"
 #include "kudu/consensus/quorum_util.h"
 #include "kudu/consensus/raft_consensus.h"
 #include "kudu/consensus/time_manager.h"
@@ -183,7 +184,9 @@ TabletReplica::TabletReplica(
                          this->TxnStatusReplicaStateChanged(this->tablet_id(), reason);
                        } : std::move(cb)),
       state_(NOT_INITIALIZED),
-      last_status_("Tablet initializing...") {
+      last_status_("Tablet initializing..."),
+      duplicator_(nullptr),
+      last_committed_opid_(consensus::MinimumOpId()) {
 }
 
 TabletReplica::TabletReplica()
@@ -193,7 +196,24 @@ TabletReplica::TabletReplica()
       last_status_("Fake replica created") {
 }
 
+// MockTabletReplica just for Test
+TabletReplica::TabletReplica(consensus::RaftPeerPB local_peer_pb) :
+    meta_(nullptr), cmeta_manager_(nullptr),
+    local_peer_pb_(std::move(local_peer_pb)), log_anchor_registry_(nullptr),
+    apply_pool_(nullptr),
+    reload_txn_status_tablet_pool_(nullptr),
+    txn_coordinator_(nullptr),
+    mark_dirty_clbk_([](const std::string& reason){}),
+    state_(SHUTDOWN),
+    last_status_("Tablet initializing..."), duplicator_(nullptr),
+    last_committed_opid_(consensus::MinimumOpId()) {
+}
+
 TabletReplica::~TabletReplica() {
+  if (duplicator_ != nullptr) {
+    delete duplicator_;
+    duplicator_ = nullptr;
+  }
   // We are required to call Shutdown() before destroying a TabletReplica.
   CHECK(state_ == SHUTDOWN || state_ == FAILED)
       << "TabletReplica not fully shut down. State: "
@@ -207,12 +227,22 @@ Status TabletReplica::Init(ServerContext server_ctx) {
   ConsensusOptions options;
   options.tablet_id = meta_->tablet_id();
   shared_ptr<RaftConsensus> consensus;
+  ThreadPool* duplicate_pool = server_ctx.duplicate_pool;
   RETURN_NOT_OK(RaftConsensus::Create(std::move(options),
                                       local_peer_pb_,
                                       cmeta_manager_,
                                       std::move(server_ctx),
                                       &consensus));
   consensus_ = std::move(consensus);
+  is_duplicator_ = consensus_->IsDuplicator();
+  if (is_duplicator_) {
+    // Init a ThreadPoolToken for the TabletReplica
+    CHECK(duplicate_pool != nullptr);
+    duplicator_ = new duplicator::Duplicator(duplicate_pool, meta_->table_name());
+    duplicator_->Init();
+    VLOG(2) << "Init duplicator Table " << meta_->table_name() << " TableId " <<
+      tablet_id() << " PeerUUID " << consensus_->peer_uuid();
+  }
   set_state(INITIALIZED);
   SetStatusMessage("Initialized. Waiting to start...");
   return Status::OK();
@@ -282,7 +312,6 @@ Status TabletReplica::Start(
       peer_proxy_factory.reset(new RpcPeerProxyFactory(messenger_, resolver));
       time_manager.reset(new TimeManager(clock_, tablet_->mvcc_manager()->GetCleanTimestamp()));
     }
-
     // We cannot hold 'lock_' while we call RaftConsensus::Start() because it
     // may invoke TabletReplica::StartFollowerOp() during startup,
     // causing a self-deadlock. We take a ref to members protected by 'lock_'
@@ -342,6 +371,10 @@ void TabletReplica::Stop() {
   UnregisterMaintenanceOps();
 
   if (consensus_) consensus_->Stop();
+
+  if (IsDuplicator()) {
+    duplicator_->Shutdown();
+  }
 
   // TODO(KUDU-183): Keep track of the pending tasks and send an "abort" message.
   LOG_SLOW_EXECUTION(WARNING, 1000,
@@ -539,7 +572,7 @@ Status TabletReplica::WaitUntilConsensusRunning(const MonoDelta& timeout) {
 }
 
 Status TabletReplica::SubmitTxnWrite(
-    std::unique_ptr<WriteOpState> op_state,
+    std::shared_ptr<WriteOpState> op_state,
     const std::function<Status(int64_t txn_id, RegisteredTxnCallback cb)>& scheduler) {
   DCHECK(op_state);
   DCHECK(op_state->request()->has_txn_id());
@@ -591,7 +624,7 @@ Status TabletReplica::UnregisterTxnOpDispatcher(int64_t txn_id,
   return unregister_status;
 }
 
-Status TabletReplica::SubmitWrite(unique_ptr<WriteOpState> op_state) {
+Status TabletReplica::SubmitWrite(std::shared_ptr<WriteOpState> op_state) {
   RETURN_NOT_OK(CheckRunning());
 
   op_state->SetResultTracker(result_tracker_);
@@ -799,19 +832,25 @@ Status TabletReplica::StartFollowerOp(const scoped_refptr<ConsensusRound>& round
 
   consensus::ReplicateMsg* replicate_msg = round->replicate_msg();
   DCHECK(replicate_msg->has_timestamp());
+  consensus::DriverType driver_type = consensus::FOLLOWER;
+  if (IsDuplicator()) {
+    LOG(INFO) << LogPrefix() << ", IsDuplicator()";
+    driver_type = consensus::DUPLICA;
+  }
   unique_ptr<Op> op;
   switch (replicate_msg->op_type()) {
     case WRITE_OP:
     {
       DCHECK(replicate_msg->has_write_request()) << "WRITE_OP replica"
           " op must receive a WriteRequestPB";
-      unique_ptr<WriteOpState> op_state(
+      std::shared_ptr<WriteOpState> op_state(
           new WriteOpState(
               this,
               &replicate_msg->write_request(),
               replicate_msg->has_request_id() ? &replicate_msg->request_id() : nullptr));
       op_state->SetResultTracker(result_tracker_);
-      op.reset(new WriteOp(std::move(op_state), consensus::FOLLOWER));
+
+      op.reset(new WriteOp(std::move(op_state), driver_type));
       break;
     }
     case PARTICIPANT_OP:
@@ -824,7 +863,7 @@ Status TabletReplica::StartFollowerOp(const scoped_refptr<ConsensusRound>& round
               tablet_->txn_participant(),
               &replicate_msg->participant_request()));
       op_state->SetResultTracker(result_tracker_);
-      op.reset(new ParticipantOp(std::move(op_state), consensus::FOLLOWER));
+      op.reset(new ParticipantOp(std::move(op_state), driver_type));
       break;
     }
     case ALTER_SCHEMA_OP:
@@ -835,7 +874,7 @@ Status TabletReplica::StartFollowerOp(const scoped_refptr<ConsensusRound>& round
           new AlterSchemaOpState(this, &replicate_msg->alter_schema_request(),
                                  nullptr));
       op.reset(
-          new AlterSchemaOp(std::move(op_state), consensus::FOLLOWER));
+          new AlterSchemaOp(std::move(op_state), driver_type));
       break;
     }
     default:
@@ -847,7 +886,11 @@ Status TabletReplica::StartFollowerOp(const scoped_refptr<ConsensusRound>& round
   state->set_consensus_round(round);
 
   scoped_refptr<OpDriver> driver;
-  RETURN_NOT_OK(NewReplicaOpDriver(std::move(op), &driver));
+  if (IsDuplicator()) {
+    RETURN_NOT_OK(NewDuplicaOpDriver(std::move(op), &driver));
+  } else {
+    RETURN_NOT_OK(NewReplicaOpDriver(std::move(op), &driver));
+  }
 
   // A raw pointer is required to avoid a refcount cycle.
   auto* driver_raw = driver.get();
@@ -912,7 +955,7 @@ Status TabletReplica::NewLeaderOpDriver(unique_ptr<Op> op,
 }
 
 Status TabletReplica::NewReplicaOpDriver(unique_ptr<Op> op,
-                                                  scoped_refptr<OpDriver>* driver) {
+                                         scoped_refptr<OpDriver>* driver) {
   scoped_refptr<OpDriver> op_driver = new OpDriver(
     &op_tracker_,
     consensus_.get(),
@@ -921,6 +964,21 @@ Status TabletReplica::NewReplicaOpDriver(unique_ptr<Op> op,
     apply_pool_,
     &op_order_verifier_);
   RETURN_NOT_OK(op_driver->Init(std::move(op), consensus::FOLLOWER));
+  *driver = std::move(op_driver);
+
+  return Status::OK();
+}
+
+Status TabletReplica::NewDuplicaOpDriver(unique_ptr<Op> op,
+                                         scoped_refptr<OpDriver>* driver) {
+  scoped_refptr<OpDriver> op_driver = new OpDriver(
+    &op_tracker_,
+    consensus_.get(),
+    log_.get(),
+    prepare_pool_token_.get(),
+    apply_pool_,
+    &op_order_verifier_);
+  RETURN_NOT_OK(op_driver->Init(std::move(op), consensus::DUPLICA));
   *driver = std::move(op_driver);
 
   return Status::OK();
@@ -1176,7 +1234,7 @@ void TabletReplica::MakeUnavailable(const Status& error) {
 }
 
 Status TabletReplica::TxnOpDispatcher::Dispatch(
-    std::unique_ptr<WriteOpState> op,
+    std::shared_ptr<WriteOpState> op,
     const std::function<Status(int64_t txn_id, RegisteredTxnCallback cb)>& scheduler) {
   const auto txn_id = op->request()->txn_id();
   std::lock_guard<simple_spinlock> guard(lock_);
@@ -1318,7 +1376,7 @@ Status TabletReplica::TxnOpDispatcher::MarkUnregistered() {
   return Status::OK();
 }
 
-Status TabletReplica::TxnOpDispatcher::EnqueueUnlocked(unique_ptr<WriteOpState> op) {
+Status TabletReplica::TxnOpDispatcher::EnqueueUnlocked(std::shared_ptr<WriteOpState> op) {
   // TODO(aserbin): do we need to track username coming with write operations
   //                to make sure there is no way to slip in write operations for
   //                transactions of other users?
@@ -1336,7 +1394,7 @@ Status TabletReplica::TxnOpDispatcher::EnqueueUnlocked(unique_ptr<WriteOpState> 
 Status TabletReplica::TxnOpDispatcher::RespondWithStatus(
     const Status& status,
     TabletServerErrorPB::Code code,
-    deque<unique_ptr<WriteOpState>> ops) {
+    const deque<std::shared_ptr<WriteOpState>>& ops) {
   // Invoke the callback for every operation in the queue.
   for (auto& op : ops) {
     auto* cb = op->completion_callback();

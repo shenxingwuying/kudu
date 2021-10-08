@@ -189,12 +189,12 @@ class Tablet {
   void StartApplying(ParticipantOpState* op_state);
 
   // Apply all of the row operations associated with this op.
-  Status ApplyRowOperations(WriteOpState* op_state) WARN_UNUSED_RESULT;
+  Status ApplyRowOperations(const std::shared_ptr<WriteOpState>& op_state_ptr) WARN_UNUSED_RESULT;
 
   // Apply a single row operation, which must already be prepared.
   // The result is set back into row_op->result.
   Status ApplyRowOperation(const fs::IOContext* io_context,
-                           WriteOpState* op_state,
+                           const std::shared_ptr<WriteOpState>& op_state_ptr,
                            RowOp* row_op,
                            ProbeStats* stats) WARN_UNUSED_RESULT;
 

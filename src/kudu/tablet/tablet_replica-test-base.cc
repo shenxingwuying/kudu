@@ -26,6 +26,7 @@
 #include <gtest/gtest.h>
 
 #include "kudu/common/common.pb.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.h"
 #include "kudu/consensus/consensus_meta.h"
 #include "kudu/consensus/consensus_meta_manager.h"
@@ -81,7 +82,7 @@ const MonoDelta kLeadershipTimeout = MonoDelta::FromSeconds(10);
 
 Status TabletReplicaTestBase::ExecuteWrite(TabletReplica* replica, const WriteRequestPB& req) {
   WriteResponsePB resp;
-  unique_ptr<WriteOpState> op_state(new WriteOpState(replica,
+  std::shared_ptr<WriteOpState> op_state(new WriteOpState(replica,
                                                      &req,
                                                      nullptr, // No RequestIdPB
                                                      &resp));

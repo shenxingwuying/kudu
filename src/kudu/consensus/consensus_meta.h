@@ -96,6 +96,10 @@ class ConsensusMetadata : public RefCountedThreadSafe<ConsensusMetadata> {
   // local Raft config.
   bool IsMemberInConfig(const std::string& uuid, RaftConfigState type);
 
+  // Return true iff peer with specified uuid is a duplicator in the specified
+  // local Raft config.
+  bool IsDuplicatorInConfig(const std::string& uuid, RaftConfigState type);
+
   // Returns a count of the number of voters in the specified local Raft
   // config.
   int CountVotersInConfig(RaftConfigState type);

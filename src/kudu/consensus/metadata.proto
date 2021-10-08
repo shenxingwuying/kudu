@@ -88,12 +88,19 @@ message RaftPeerPB {
     // participate in elections or majorities. This is usually the role of a node
     // that leaves the configuration.
     NON_PARTICIPANT = 3;
+
+    // DUP_LEARNER is a special LEARNER which cann't promote to VOTER,
+    // and just do wal duplication.
+    DUP_LEARNER = 4;
   };
 
   enum MemberType {
     UNKNOWN_MEMBER_TYPE = 999;
     NON_VOTER = 0;
     VOTER = 1;
+    // DUPLICATOR is a special NON_VOTER which cann't promote to VOTER,
+    // the raft role is LEARNER
+    DUPLICATOR = 2;
   };
 
   // Permanent uuid is optional: RaftPeerPB/RaftConfigPB instances may

@@ -238,7 +238,7 @@ class DelayedApplyOp : public WriteOp {
  public:
   DelayedApplyOp(CountDownLatch* apply_started,
                  CountDownLatch* apply_continue,
-                 unique_ptr<WriteOpState> state)
+                 shared_ptr<WriteOpState> state)
       : WriteOp(std::move(state), consensus::LEADER),
         apply_started_(DCHECK_NOTNULL(apply_started)),
         apply_continue_(DCHECK_NOTNULL(apply_continue)) {
@@ -415,7 +415,7 @@ TEST_F(TabletReplicaTest, TestActiveOpPreventsLogGC) {
   {
     // Long-running mutation.
     ASSERT_OK(GenerateSequentialDeleteRequest(req.get()));
-    unique_ptr<WriteOpState> op_state(new WriteOpState(tablet_replica_.get(),
+    std::shared_ptr<WriteOpState> op_state(new WriteOpState(tablet_replica_.get(),
                                                        req.get(),
                                                        nullptr, // No RequestIdPB
                                                        resp.get()));

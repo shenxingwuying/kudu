@@ -45,6 +45,7 @@ TypeInfo::TypeInfo(TypeTraitsClass /*t*/)
     max_value_(TypeTraitsClass::max_value()),
     is_virtual_(TypeTraitsClass::IsVirtual()),
     append_func_(TypeTraitsClass::AppendDebugStringForValue),
+    stringify_func_(TypeTraitsClass::StringForValue),
     compare_func_(TypeTraitsClass::Compare),
     are_consecutive_func_(TypeTraitsClass::AreConsecutive) {
 }
@@ -55,6 +56,10 @@ void TypeInfo::AppendDebugStringForValue(const void *ptr, string *str) const {
   } else {
     append_func_(ptr, str);
   }
+}
+
+void TypeInfo::StringForValue(const void *ptr, string *str) const {
+  stringify_func_(ptr, str);
 }
 
 int TypeInfo::Compare(const void *lhs, const void *rhs) const {

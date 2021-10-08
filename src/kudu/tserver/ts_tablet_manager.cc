@@ -1007,7 +1007,8 @@ Status TSTabletManager::CreateAndRegisterTabletReplica(
                         }));
   Status s = replica->Init({ server_->mutable_quiescing(),
                              server_->num_raft_leaders(),
-                             server_->raft_pool() });
+                             server_->raft_pool(),
+                             server_->duplicate_pool() });
   if (PREDICT_FALSE(!s.ok())) {
     replica->SetError(s);
     replica->Shutdown();

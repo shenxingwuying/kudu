@@ -81,6 +81,8 @@ class KuduTableCreator::Data {
 
   boost::optional<std::map<std::string, std::string>> extra_configs_;
 
+  boost::optional<client::DuplicationInfo> dup_info_;
+
   boost::optional<TableTypePB> table_type_;
 
   MonoDelta timeout_;

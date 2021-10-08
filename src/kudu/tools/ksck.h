@@ -61,10 +61,11 @@ struct KsckChecksumOptions;
 // Representation of a tablet replica on a tablet server.
 class KsckTabletReplica {
  public:
-  KsckTabletReplica(std::string ts_uuid, bool is_leader, bool is_voter)
+  KsckTabletReplica(std::string ts_uuid, bool is_leader, bool is_voter, bool is_duplicator = false)
       : ts_uuid_(std::move(ts_uuid)),
         is_leader_(is_leader),
-        is_voter_(is_voter) {
+        is_voter_(is_voter),
+        is_duplicator_(is_duplicator) {
   }
 
   const std::string& ts_uuid() const {
@@ -79,10 +80,18 @@ class KsckTabletReplica {
     return is_voter_;
   }
 
+  // TODO(duyuqi), In fact, !is_voter stable is duplicator, but
+  // not strict correct. When recovering a replica, the replica is non voter,
+  // and when recovering finished, it promote to voter.
+  bool is_duplicator() {
+    return is_duplicator_;
+  }
+
  private:
   const std::string ts_uuid_;
   const bool is_leader_;
   const bool is_voter_;
+  const bool is_duplicator_;
 
   DISALLOW_COPY_AND_ASSIGN(KsckTabletReplica);
 };

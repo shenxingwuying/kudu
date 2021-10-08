@@ -169,6 +169,12 @@ bool ConsensusMetadata::IsMemberInConfig(const string& uuid,
   return IsRaftConfigMember(uuid, GetConfig(type));
 }
 
+bool ConsensusMetadata::IsDuplicatorInConfig(const string& uuid,
+                                             RaftConfigState type) {
+  DFAKE_SCOPED_RECURSIVE_LOCK(fake_lock_);
+  return IsRaftConfigDuplicator(uuid, GetConfig(type));
+}
+
 int ConsensusMetadata::CountVotersInConfig(RaftConfigState type) {
   DFAKE_SCOPED_RECURSIVE_LOCK(fake_lock_);
   return CountVoters(GetConfig(type));

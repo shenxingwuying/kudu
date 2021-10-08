@@ -134,6 +134,15 @@ namespace {
                                        lower, upper, get<2>(test_case)));
 
       ASSERT_EQ(get<2>(test_case), info->AreConsecutive(&get<0>(test_case), &get<1>(test_case)));
+
+      string slower;
+      string supper;
+      info->StringForValue(&get<0>(test_case), &slower);
+      info->StringForValue(&get<1>(test_case), &supper);
+
+      SCOPED_TRACE(strings::Substitute("lower: $0, upper: $1, expected: $2",
+                                       slower, supper, get<2>(test_case)));
+      ASSERT_EQ(get<2>(test_case), info->AreConsecutive(&get<0>(test_case), &get<1>(test_case)));
     }
   }
 } // anonymous namespace

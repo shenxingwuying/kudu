@@ -270,6 +270,70 @@ public class CreateTableOptions {
     return this;
   }
 
+  /**
+   *  Enable the table's duplication, default kafka
+   *
+   * @param name Kafka Topic Name
+  */
+  public CreateTableOptions enableDuplication(String name) {
+    Master.DuplicationInfo.Builder builder = Master.DuplicationInfo.newBuilder();
+    builder.setName(name)
+        .setType(Master.DuplicationDownstream.KAFKA);
+    pb.addDupInfos(builder.build());
+    return this;
+  }
+
+  /**
+   * Enable the table's duplication
+   * TODO(duyuqi) support more than one duplication
+   *
+   * @param name
+   * @param streamType duplication's destination system, such as Kafka
+   * @return CreateTableOptions
+   */
+  public CreateTableOptions addDuplications(String name, Master.DuplicationDownstream streamType) {
+    return addDuplications(name, streamType, null, null);
+  }
+
+  /**
+   * Enable the table's duplication
+   * TODO(duyuqi) support more than one duplication
+   *
+   * @param name
+   * @param streamType duplication's destination system, such as Kafka
+   * @param uri optional, destination's discovered service name
+   * @return CreateTableOptions
+   */
+  public CreateTableOptions addDuplications(String name, Master.DuplicationDownstream streamType,
+          String uri) {
+    return addDuplications(name, streamType, uri, null);
+  }
+
+  /**
+   * Enable the table's duplication
+   * TODO(duyuqi) support more than one duplication
+   *
+   * @param name
+   * @param streamType duplication's destination system, such as Kafka
+   * @param uri optional, destination's discovered service name
+   * @param options such as user token infomation, json format
+   * @return CreateTableOptions
+   */
+  public CreateTableOptions addDuplications(String name, Master.DuplicationDownstream streamType,
+      String uri, String options) {
+    Master.DuplicationInfo.Builder builder = Master.DuplicationInfo.newBuilder();
+    builder.setName(name)
+        .setType(streamType);
+    if (uri != null && "".equals(uri)) {
+      builder.setUri(uri);
+    }
+    if (options != null && "".equals(options)) {
+      builder.setOptions(options);
+    }
+    pb.addDupInfos(builder.build());
+    return this;
+  }
+
   Master.CreateTableRequestPB.Builder getBuilder() {
     if (!splitRows.isEmpty() || !rangePartitions.isEmpty()) {
       pb.setSplitRowsRangeBounds(new Operation.OperationsEncoder()

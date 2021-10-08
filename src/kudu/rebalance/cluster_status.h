@@ -76,17 +76,18 @@ struct ConsensusState {
                         boost::optional<int64_t> opid_index,
                         boost::optional<std::string> leader_uuid,
                         const std::vector<std::string>& voters,
-                        const std::vector<std::string>& non_voters)
+                        const std::vector<std::string>& non_voters,
+                        const std::vector<std::string>& duplicators = {})
     : type(type),
-      term(std::move(term)),
-      opid_index(std::move(opid_index)),
+      term(term),
+      opid_index(opid_index),
       leader_uuid(std::move(leader_uuid)),
       voter_uuids(voters.cbegin(), voters.cend()),
-      non_voter_uuids(non_voters.cbegin(), non_voters.cend()) {
+      non_voter_uuids(non_voters.cbegin(), non_voters.cend()),
+      duplicator_uuids(duplicators.cbegin(), duplicators.cend()) {
    // A consensus state must have a term unless it's one sourced from the master.
    CHECK(type == ConsensusConfigType::MASTER || term);
   }
-
   // Two ConsensusState structs match if they have the same
   // leader_uuid, the same set of peers, and one of the following holds:
   // - at least one of them is of type MASTER
@@ -95,7 +96,8 @@ struct ConsensusState {
     bool same_leader_and_peers =
         leader_uuid == other.leader_uuid &&
         voter_uuids == other.voter_uuids &&
-        non_voter_uuids == other.non_voter_uuids;
+        non_voter_uuids == other.non_voter_uuids &&
+        duplicator_uuids == other.duplicator_uuids;
     if (type == ConsensusConfigType::MASTER ||
         other.type == ConsensusConfigType::MASTER) {
       return same_leader_and_peers;
@@ -109,6 +111,7 @@ struct ConsensusState {
   boost::optional<std::string> leader_uuid;
   std::set<std::string> voter_uuids;
   std::set<std::string> non_voter_uuids;
+  std::set<std::string> duplicator_uuids;
 };
 
 // Represents the health of a server.
