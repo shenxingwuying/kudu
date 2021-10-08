@@ -33,6 +33,7 @@ enum RaftConfigState {
 
 bool IsRaftConfigMember(const std::string& uuid, const RaftConfigPB& config);
 bool IsRaftConfigVoter(const std::string& uuid, const RaftConfigPB& config);
+bool IsRaftConfigDuplicator(const std::string& uuid, const RaftConfigPB& config);
 
 // Whether the specified Raft role is attributed to a peer which can participate
 // in leader elections.
@@ -61,6 +62,7 @@ bool ReplicaTypesEqual(const RaftPeerPB& peer1, const RaftPeerPB& peer2);
 
 // Counts the number of voters in the configuration.
 int CountVoters(const RaftConfigPB& config);
+int CountMembers(const RaftConfigPB& config, RaftPeerPB::MemberType type);
 
 // Calculates size of a configuration majority based on # of voters.
 int MajoritySize(int num_voters);
@@ -113,6 +115,10 @@ bool ShouldAddReplica(const RaftConfigPB& config,
                       int replication_factor,
                       const std::unordered_set<std::string>& uuids_ignored_for_underreplication =
                           std::unordered_set<std::string>());
+bool ShouldAddDuplicator(const RaftConfigPB& config,
+                         int duplication_factor,
+                         const std::unordered_set<std::string>& uuid_ignored_for_underreplication =
+                         std::unordered_set<std::string>());
 
 // Check if the given Raft configuration contains at least one extra replica
 // which should (and can) be removed in accordance with the specified

@@ -128,7 +128,8 @@ ExternalMiniClusterOptions::ExternalMiniClusterOptions()
       enable_encryption(FLAGS_encrypt_data_at_rest),
       logtostderr(true),
       start_process_timeout(MonoDelta::FromSeconds(70)),
-      rpc_negotiation_timeout(MonoDelta::FromSeconds(3))
+      rpc_negotiation_timeout(MonoDelta::FromSeconds(3)),
+      enable_duplication(false)
 #if !defined(NO_CHRONY)
       ,
       num_ntp_servers(1),

@@ -1246,6 +1246,23 @@ ADD_THIRDPARTY_LIB(boost_date_time
     STATIC_LIB "${BOOST_DATE_TIME_STATIC_LIB}"
     SHARED_LIB "${BOOST_DATE_TIME_SHARED_LIB}")
 
+## librdkafka
+find_package(RdKafka REQUIRED)
+include_directories(SYSTEM ${RDKAFKA_INCLUDE_DIR})
+ADD_THIRDPARTY_LIB(rdkafka
+    STATIC_LIB "${RDKAFKA_STATIC_LIB}"
+    SHARED_LIB "${RDKAFKA_SHARED_LIB}")
+
+## cppkafka
+find_package(CppKafka REQUIRED)
+include_directories(SYSTEM ${CPPKAFKA_INCLUDE_DIR})
+ADD_THIRDPARTY_LIB(cppkafka
+    STATIC_LIB "${CPPKAFKA_STATIC_LIB}"
+    SHARED_LIB "${CPPKAFKA_SHARED_LIB}")
+
+# prepare for kafka env for duplication test.
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/kafka-simple-control.sh DESTINATION /tmp)
+
 ############################################################
 # Enable sized deallocation where supported.
 # This happens down here instead of up with the rest of the
@@ -1482,6 +1499,8 @@ add_subdirectory(src/kudu/clock)
 add_subdirectory(src/kudu/codegen)
 add_subdirectory(src/kudu/common)
 add_subdirectory(src/kudu/consensus)
+# for duplication hot backup or others functions
+add_subdirectory(src/kudu/duplicator)
 add_subdirectory(src/kudu/experiments)
 add_subdirectory(src/kudu/fs)
 # Google util libraries borrowed from supersonic, tcmalloc, Chromium, etc.

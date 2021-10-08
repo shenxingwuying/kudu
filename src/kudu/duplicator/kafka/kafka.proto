@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package kudu.kafka;
+
+message RawProperty {
+  string name = 1;
+  string value = 2;
+  bool primary_key_column = 3;
+  bool null_value = 4;
+}
+
+// kudu 数据描述
+message RawKuduRecord {
+  string user_id = 1 [deprecated = true];
+  string project_id = 2 [deprecated = true];
+  string table_name = 4;
+  repeated RawProperty properties = 3;
+
+  enum KuduOperationType {
+    KUDU_OPERATION_TYPE_UNSPECIFIED = 0;
+    // 新增或者修改
+    SET = 1;
+    // 数据删除
+    DELETE = 2;
+  }
+  KuduOperationType operation_type = 5;
+}

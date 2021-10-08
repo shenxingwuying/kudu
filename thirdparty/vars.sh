@@ -271,3 +271,13 @@ JWT_CPP_VERSION=3bd600762a70faccc7ec1c2dacb999cba6c6ef5e
 JWT_CPP=jwt-cpp
 JWT_CPP_NAME=$JWT_CPP-$JWT_CPP_VERSION
 JWT_CPP_SOURCE=$TP_SOURCE_DIR/$JWT_CPP_NAME
+
+# librdkafka
+LIBRDKAFKA_VERSION=1.8.2-RC4
+LIBRDKAFKA_NAME=librdkafka-$LIBRDKAFKA_VERSION
+LIBRDKAFKA_URL=https://github.com/edenhill/librdkafka/archive/refs/tags/v$LIBRDKAFKA_VERSION.tar.gz
+
+# cppkafka
+CPPKAFKA_VERSION=0.3.1
+CPPKAFKA_NAME=cppkafka-$CPPKAFKA_VERSION
+CPPKAFKA_URL=https://github.com/mfontanini/cppkafka/archive/refs/tags/v$CPPKAFKA_VERSION.tar.gz

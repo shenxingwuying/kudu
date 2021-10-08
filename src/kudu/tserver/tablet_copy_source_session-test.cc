@@ -213,7 +213,7 @@ class TabletCopyTest : public KuduTabletTest {
       WriteResponsePB resp;
       CountDownLatch latch(1);
 
-      unique_ptr<tablet::WriteOpState> state(
+      std::shared_ptr<tablet::WriteOpState> state(
           new tablet::WriteOpState(tablet_replica_.get(),
                                    &req,
                                    nullptr, // No RequestIdPB

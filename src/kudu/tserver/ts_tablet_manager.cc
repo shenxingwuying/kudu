@@ -1007,7 +1007,8 @@ Status TSTabletManager::CreateAndRegisterTabletReplica(
                         }));
   Status s = replica->Init({ server_->mutable_quiescing(),
                              server_->num_raft_leaders(),
-                             server_->raft_pool() });
+                             server_->raft_pool(),
+                             server_->duplicate_pool() });
   if (PREDICT_FALSE(!s.ok())) {
     replica->SetError(s);
     replica->Shutdown();
@@ -1393,7 +1394,8 @@ void TSTabletManager::OpenTablet(const scoped_refptr<tablet::TabletReplica>& rep
                        server_->result_tracker(),
                        log,
                        server_->tablet_prepare_pool(),
-                       server_->dns_resolver());
+                       server_->dns_resolver(),
+                       server_->duplicate_pool());
     if (!s.ok()) {
       LOG(ERROR) << LogPrefix(tablet_id) << "Tablet failed to start: "
                  << s.ToString();

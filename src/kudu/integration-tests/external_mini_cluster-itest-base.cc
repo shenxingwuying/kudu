@@ -69,6 +69,9 @@ void ExternalMiniClusterITestBase::StartClusterWithOpts(
                                          cluster_->messenger(),
                                          &ts_map_));
   ASSERT_OK(cluster_->CreateClient(nullptr, &client_));
+  if (opts.enable_duplication) {
+    LOG(INFO) << "test duplication enabled";
+  }
 }
 
 void ExternalMiniClusterITestBase::StopCluster() {

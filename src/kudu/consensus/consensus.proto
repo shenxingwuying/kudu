@@ -103,6 +103,7 @@ enum DriverType {
   UNKNOWN_DRIVER = 0;
   LEADER = 1;
   FOLLOWER = 2;
+  DUPLICA = 3;
 }
 
 // A configuration change request for the tablet with 'tablet_id'.

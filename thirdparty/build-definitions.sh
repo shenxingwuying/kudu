@@ -1142,3 +1142,26 @@ build_jwt_cpp() {
   make -j$PARALLEL install
   popd
 }
+
+build_librdkafka() {
+    local RDKAFKA_ROOT=$TP_SOURCE_DIR/$LIBRDKAFKA_NAME
+    pushd $RDKAFKA_ROOT
+    ./configure --prefix=$PREFIX_DEPS
+    make -j$PARALLEL
+    make install
+    popd
+}
+build_cppkafka() {
+    local CPPKAFKA_ROOT=$TP_SOURCE_DIR/$CPPKAFKA_NAME
+    mkdir -p $CPPKAFKA_ROOT/build
+
+    pushd $CPPKAFKA_ROOT/build
+    cmake .. -DRDKAFKA_ROOT_DIR=$PREFIX_DEPS -DCMAKE_INSTALL_PREFIX=$PREFIX_DEPS
+    make -j$PARALLEL
+    make install
+
+    cmake .. -DRDKAFKA_ROOT_DIR=$PREFIX_DEPS -DCMAKE_INSTALL_PREFIX=$PREFIX_DEPS -DCPPKAFKA_BUILD_SHARED=0
+    make -j$PARALLEL
+    make install
+    popd
+}

@@ -490,6 +490,7 @@ Status SysCatalogTable::SetupTablet(
   consensus::ServerContext server_ctx{/*quiescing*/nullptr,
                                       master_->num_raft_leaders(),
                                       master_->raft_pool(),
+                                      nullptr,
                                       // Allow sending status-only Raft messages to a master peer
                                       // in FAILED_UNRECOVERABLE state if we allow dynamically
                                       // adding/removing masters.
@@ -580,7 +581,7 @@ Status SysCatalogTable::SyncWrite(const WriteRequestPB& req) {
   WriteResponsePB resp;
   unique_ptr<tablet::OpCompletionCallback> op_callback(
       new LatchOpCompletionCallback<WriteResponsePB>(&latch, &resp));
-  unique_ptr<tablet::WriteOpState> op_state(
+  std::shared_ptr<tablet::WriteOpState> op_state(
       new tablet::WriteOpState(tablet_replica_.get(),
                                &req,
                                nullptr, // No RequestIdPB

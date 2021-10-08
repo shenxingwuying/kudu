@@ -68,6 +68,15 @@ bool IsRaftConfigVoter(const std::string& uuid, const RaftConfigPB& config) {
   return false;
 }
 
+bool IsRaftConfigDuplicator(const std::string& uuid, const RaftConfigPB& config) {
+  for (const RaftPeerPB& peer : config.peers()) {
+    if (peer.permanent_uuid() == uuid) {
+      return peer.member_type() == RaftPeerPB::DUPLICATOR;
+    }
+  }
+  return false;
+}
+
 bool IsVoterRole(RaftPeerPB::Role role) {
   return role == RaftPeerPB::LEADER || role == RaftPeerPB::FOLLOWER;
 }
@@ -122,6 +131,16 @@ int CountVoters(const RaftConfigPB& config) {
   return voters;
 }
 
+int CountMembers(const RaftConfigPB& config, RaftPeerPB::MemberType type) {
+    int count = 0;
+    for (const RaftPeerPB& peer : config.peers()) {
+        if (peer.member_type() == type) {
+            count++;
+        }
+    }
+    return count;
+}
+
 int MajoritySize(int num_voters) {
   DCHECK_GE(num_voters, 1);
   return (num_voters / 2) + 1;
@@ -142,6 +161,8 @@ RaftPeerPB::Role GetConsensusRole(const std::string& peer_uuid,
             return RaftPeerPB::LEADER;
           }
           return RaftPeerPB::FOLLOWER;
+        // case RaftPeerPB::NON_VOTER:
+        // case RaftPeerPB::DUPLICATOR:
         default:
           return RaftPeerPB::LEARNER;
       }
@@ -489,6 +510,9 @@ bool ShouldAddReplica(const RaftConfigPB& config,
           }
         }
         break;
+      case RaftPeerPB::DUPLICATOR:
+        // @TODO do something
+        break;
       default:
         LOG(DFATAL) << peer.member_type() << ": unsupported member type";
         break;
@@ -512,6 +536,29 @@ bool ShouldAddReplica(const RaftConfigPB& config,
   return should_add_replica;
 }
 
+bool ShouldAddDuplicator(const RaftConfigPB& config,
+                      int duplication_factor,
+                      const unordered_set<string>& uuids_ignored_for_underreplication) {
+  int num_duplicators_total = 0;
+//  int num_duplicators_healthy = 0;
+
+  for (const RaftPeerPB& peer : config.peers()) {
+    switch (peer.member_type()) {
+      case RaftPeerPB::DUPLICATOR:
+        ++num_duplicators_total;
+        break;
+      case RaftPeerPB::VOTER:
+      case RaftPeerPB::NON_VOTER:
+        break;
+      default:
+        LOG(DFATAL) << peer.member_type() << ": unsupported member type";
+        break;
+    }
+  }
+
+  return (num_duplicators_total < duplication_factor);
+}
+
 // Whether there is an excess replica to evict.
 bool ShouldEvictReplica(const RaftConfigPB& config,
                         const string& leader_uuid,
@@ -531,6 +578,7 @@ bool ShouldEvictReplica(const RaftConfigPB& config,
 
   PeerPriorityQueue pq_non_voters(kCmp);
   PeerPriorityQueue pq_voters(kCmp);
+  PeerPriorityQueue pq_duplicators(kCmp);
 
   const auto peer_to_elem = [](const RaftPeerPB& peer) {
     const string& peer_uuid = peer.permanent_uuid();
@@ -654,6 +702,10 @@ bool ShouldEvictReplica(const RaftConfigPB& config,
         has_non_voter_failed_unrecoverable |= failed_unrecoverable;
         break;
 
+      case RaftPeerPB::DUPLICATOR:
+        // @TODO do something
+        pq_duplicators.emplace(peer_to_elem(peer));
+        break;
       default:
         LOG(DFATAL) << peer.member_type() << ": unsupported member type";
         break;

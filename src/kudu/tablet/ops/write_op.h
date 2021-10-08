@@ -339,10 +339,12 @@ class WriteOpState : public OpState {
 // Executes a write op.
 class WriteOp : public Op {
  public:
-  WriteOp(std::unique_ptr<WriteOpState> state, consensus::DriverType type);
+  WriteOp(std::shared_ptr<WriteOpState> state, consensus::DriverType type);
 
   WriteOpState* state() override { return state_.get(); }
   const WriteOpState* state() const override { return state_.get(); }
+
+  std::shared_ptr<WriteOpState> shared_state() { return state_; }
 
   void NewReplicateMsg(std::unique_ptr<consensus::ReplicateMsg>* replicate_msg) override;
 
@@ -396,7 +398,7 @@ class WriteOp : public Op {
   // this op's start time
   MonoTime start_time_;
 
-  std::unique_ptr<WriteOpState> state_;
+  std::shared_ptr<WriteOpState> state_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(WriteOp);

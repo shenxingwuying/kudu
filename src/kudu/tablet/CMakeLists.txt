@@ -84,7 +84,8 @@ target_link_libraries(tablet
   gutil
   kudu_fs
   kudu_util
-  consensus)
+  consensus
+  kafka)
 
 add_library(tablet_test_util
   tablet-test-util.cc

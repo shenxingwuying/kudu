@@ -26,6 +26,7 @@ import java.util.Map;
 
 import com.google.common.base.Preconditions;
 import com.google.protobuf.ByteString;
+import org.apache.kudu.master.Master;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
 
@@ -454,6 +455,73 @@ public class AlterTableOptions {
    */
   public AlterTableOptions alterExtraConfigs(Map<String, String> extraConfig) {
     pb.putAllNewExtraConfigs(extraConfig);
+    return this;
+  }
+
+  /**
+   * Enable the table's duplication, default Kafka
+   *
+   * @param name Kafka Topic Name
+   */
+  public AlterTableOptions enableDuplication(String name) {
+    Master.AlterTableRequestPB.Step.Builder stepBuilder = Master.AlterTableRequestPB.Step.newBuilder();
+    Master.DuplicationInfo.Builder builder = Master.DuplicationInfo.newBuilder()
+        .setName(name).setType(Master.DuplicationDownstream.KAFKA);
+    stepBuilder.setType(AlterTableRequestPB.StepType.ADD_DUPLICATION)
+        .setAddDuplication(Master.AlterTableRequestPB.AddDuplication
+        .newBuilder().setDupInfo(builder.build()).build());
+    pb.addAlterSchemaSteps(stepBuilder.build());
+    return this;
+  }
+
+  public AlterTableOptions disableDuplication(String name) {
+    Master.AlterTableRequestPB.Step.Builder stepBuilder = Master.AlterTableRequestPB.Step.newBuilder();
+    stepBuilder.setType(AlterTableRequestPB.StepType.DROP_DUPLICATION)
+        .setDropDuplication(Master.AlterTableRequestPB.DropDuplication
+            .newBuilder().setName(name).build());
+    pb.addAlterSchemaSteps(stepBuilder.build());
+    return this;
+  }
+
+  /**
+   * Enable the table's duplication
+   * @TODO support more than one duplication
+   *
+   * @param name
+   * @param streamType duplication's destination system, such as Kafka
+   * @return
+   */
+  public AlterTableOptions addDuplications(String name, Master.DuplicationDownstream streamType) {
+    return addDuplications(name, streamType, null, null);
+  }
+  public AlterTableOptions addDuplications(String name, Master.DuplicationDownstream streamType, String uri) {
+    return addDuplications(name, streamType, uri, null);
+  }
+  /**
+   * Enable the table's duplication
+   * @TODO support more than one duplication
+   *
+   * @param name
+   * @param streamType duplication's destination system, such as Kafka
+   * @param uri optional
+   * @param options such as user token infomation, json format
+   * @return
+   */
+  public AlterTableOptions addDuplications(String name, Master.DuplicationDownstream streamType,
+      String uri, String options) {
+    Master.AlterTableRequestPB.Step.Builder stepBuilder = Master.AlterTableRequestPB.Step.newBuilder();
+    Master.DuplicationInfo.Builder builder = Master.DuplicationInfo.newBuilder();
+    builder.setName(name).setType(streamType);
+    if (uri != null && "".equals(uri)) {
+      builder.setUri(uri);
+    }
+    if (options != null && "".equals(options)) {
+      builder.setOptions(options);
+    }
+    stepBuilder.setType(AlterTableRequestPB.StepType.ADD_DUPLICATION)
+        .setAddDuplication(Master.AlterTableRequestPB.AddDuplication
+        .newBuilder().setDupInfo(builder.build()).build());
+    pb.addAlterSchemaSteps(stepBuilder.build());
     return this;
   }
 
