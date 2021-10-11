@@ -15,6 +15,22 @@ export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/thirdparty/installed/uninstrument
 
 INSTALL_DIR=/opt/kudu/installed
 
+script_path=$(cd "$(dirname "$0")"; pwd)
+if [ -d ${script_path}/_dragon/build/cdh_parcel-${os_tag} ]; then
+    # 打 parcel 包已经编译过了，正常退出
+    exit 0
+fi
+
+if [ -d ${script_path}/_dragon/build/kudu-${os_tag} ]; then
+    # 打 kudu 包已经编译过了，正常退出
+    exit 0
+fi
+
+if [ -d ${script_path}/_dragon/build/collector-${os_tag} ]; then
+    # 打 collector 包已经编译过了，正常退出
+    exit 0
+fi
+
 if [ ! -d build/release ]; then
   mkdir -p build/release
 fi

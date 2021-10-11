@@ -14,44 +14,40 @@ else
     exit 1
 fi
 
-level=develop
-if [ $# -gt 0 ]; then
-    level=$1
-fi
-
+# 根据 soku_parcel 在 /opt/soku 生成的 parcel 目录，上传最终的 parcel 文件
 script_path=`dirname $0`
 bin_path='/opt/kudu'
+cdh_parcel=${bin_path}/'cdh_parcel'
 
 pub_report=${script_path}/../_dragon/pub/publish_report.yml
-version=`cat ${pub_report} | sed -n 's/ *full_version://p'`
+version=`cat ${pub_report} | sed -n 's/ *archive_name: cdh_parcel-//p' | awk -F '-' '{print $1}'`
+level=`cat ${pub_report} | sed -n 's/ *level: //p' | head -1`
 
 #去首尾空格
 version=`echo ${version}`
 full_version='KUDU_SENSORS_DATA-'${version}'-cdh5.12.1.p0'
+parcel_name=${full_version}-${od}.parcel
 
 # 如果是 develop 版本，则打上 develop 标记
 if [ "x"${level} = "xdevelop" ]; then
-  full_version=${full_version}"."${level}
-fi
-
-cp -rf ${bin_path}/installed ${bin_path}/${full_version}
-cp -rf ${script_path}/../parcel-meta/meta ${bin_path}/${full_version}/
-
-#生成 meta 版本
-sed -i "s/{autogen_version}/${version}/g" ${bin_path}/${full_version}/meta/parcel.json
-if [ "x"${level} = "xdevelop" ]; then
-  sed -i "s/{level}/\.develop/g" ${bin_path}/${full_version}/meta/parcel.json
+  full_develop_version=${full_version}"."${level}
+  mv ${bin_path}/${full_version} ${bin_path}/${full_develop_version}
+  cp -f ${script_path}/../parcel-meta/meta/parcel.json ${bin_path}/${full_develop_version}/meta
+  # 生成 meta 版本
+  sed -i "s/{autogen_version}/${version}/g" ${bin_path}/${full_develop_version}/meta/parcel.json
+  sed -i "s/{od}/${od}/g" ${bin_path}/${full_develop_version}/meta/kudu_env.sh
+  sed -i "s/{level}/\.develop/g" ${bin_path}/${full_develop_version}/meta/parcel.json
+  sed -i "s/{autogen_version}/${version}/g" ${bin_path}/${full_develop_version}/meta/kudu_env.sh
+  # 生成 parcel
+  parcel_name=${full_develop_version}-${od}.parcel
+  tar czf ${parcel_name} -C ${bin_path}/ ${full_develop_version}
+  sha1sum ${parcel_name} | awk '{print $1}' > ${parcel_name}.sha
 else
-  sed -i "s/{level}//g" ${bin_path}/${full_version}/meta/parcel.json
+  cp ${cdh_parcel}/${parcel_name} ${script_path}
+  cp ${cdh_parcel}/${parcel_name}.sha ${script_path}
 fi
-sed -i "s/{od}/${od}/g" ${bin_path}/${full_version}/meta/kudu_env.sh
-sed -i "s/{autogen_version}/${version}/g" ${bin_path}/${full_version}/meta/kudu_env.sh
 
-
-#生成 parcel
-parcel_name=${full_version}-${od}.parcel
-tar czf ${parcel_name} -C ${bin_path}/ ${full_version}
-sha1sum ${parcel_name} |awk '{print $1}' > ${parcel_name}.sha
+# 生成 manifest 文件
 python3 make_manifest.py .
 mv manifest.json ${parcel_name}.manifest.json
 

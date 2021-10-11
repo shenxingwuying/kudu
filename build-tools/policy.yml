@@ -2,4 +2,4 @@ policy:
   # 产品组件名
   # 注意，产品组件不是产品线名，也不是模块名
   # 此参数，决定了产品组件被上传到 jfrog-internal.sensorsdata.cn 的路径
-  product_component: sp
+  product_component: soku

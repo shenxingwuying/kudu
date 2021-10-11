@@ -8,7 +8,7 @@ fi
 
 base_path=$(cd "$(dirname "$0")"; pwd)
 
-source_version=`cat ${base_path}/build-tools/package.yml | grep version | sed 's/.*\"\([0-9]*\.[0-9]*\.[0-9]*\)\"/\1/g'`
+source_version=`cat ${base_path}/build-tools/package.yml | grep version | sed 's/.*\"\([0-9]*\.[0-9]*\.[0-9]*\)\"/\1/g' | head -1`
 release_version=`echo ${version} |sed 's/^\([0-9]*\.[0-9]*\.[0-9]*\)\.[0-9]/\1/g'`
 
 next_version=

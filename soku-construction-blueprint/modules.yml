@@ -1,0 +1,45 @@
+product_spec:
+    product_name: soku
+    product_full_name: sensors soku
+    product_global_conf:
+modules:
+    collector:
+        module_desc:
+            module_type: custom
+            module_installer_type: custom
+            service_continuous_level: offline
+        server_conf:
+            common: CALL get_common_gflags()
+            collector: CALL get_collector_gflags()
+            collector_host:  CALL get_collector_host_gflags()
+        # 此处只是写空的key
+        client_conf:
+            master_address: ''
+            track_statistic_kudu_master_address: ''
+            track_statistic_kudu_table_name: ''
+        roles:
+            kudu_collector:
+                role_desc:
+                    role_group: service
+                    port: 9050
+                role_monitor_conf:
+                    stop_policy:
+                        timeout: 60
+                        retry_times: 1
+                        retry_interval: 0
+                    start_policy:
+                        timeout: 60
+                        retry_times: 3
+                        retry_interval: 10
+                    check_alive_policy:
+                        timeout: 10
+                        retry_times: 5
+                        retry_interval: 10
+                    fix_strategy:              # 一个集群里面只需要挑选一台机器安装
+                        max_num: 1
+                        min_num: 1
+                        restart_all_role: False
+                        restart_module: False
+                    process_keyword: 'kudu_collector.gflagfile'
+                    start_cmd: 'cd ${SENSORS_SOKU_HOME}/collector && sh start_kudu.sh collector'
+                    stateful: FALSE
