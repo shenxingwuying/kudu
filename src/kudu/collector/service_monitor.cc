@@ -18,16 +18,17 @@
 #include "kudu/collector/service_monitor.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <ostream>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 #include <gflags/gflags.h>
-#include <gflags/gflags_declare.h>
 #include <glog/logging.h>
+#include <prometheus/family.h>
 #include <prometheus/gauge.h>
+#include <prometheus/summary.h>
 
 #include "kudu/client/client.h"
 #include "kudu/client/scan_batch.h"
@@ -38,12 +39,12 @@
 #include "kudu/collector/prometheus_reporter.h"
 #include "kudu/common/partial_row.h"
 #include "kudu/gutil/map-util.h"
+#include "kudu/gutil/port.h"
 #include "kudu/gutil/stl_util.h"
 #include "kudu/gutil/strings/split.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/gutil/walltime.h"
 #include "kudu/tools/tool_test_util.h"
-#include "kudu/util/debug/trace_event.h"
 #include "kudu/util/status.h"
 #include "kudu/util/thread.h"
 #include "kudu/util/trace.h"

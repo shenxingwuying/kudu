@@ -32,6 +32,7 @@
 #include <vector>
 
 #include <boost/optional/optional.hpp>
+#include <gflags/gflags_declare.h>
 #include <glog/logging.h>
 
 #include "kudu/consensus/quorum_util.h"

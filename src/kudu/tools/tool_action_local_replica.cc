@@ -568,7 +568,7 @@ Status CloneTserver(const RunnerContext& context) {
                                   tablet_id, s.ToString());
         } else {
           succeed_tablets.emplace_back(tablet_id);
-          LOG(INFO) << Substitute("Tablet $0 download success.");
+          LOG(INFO) << Substitute("Tablet $0 download success.", tablet_id);
         }
         finished_byte_size += tablet_id_to_size[tablet_id];
         LOG(INFO) << Substitute("$0/$1 tablets, $2/$3 KiB downloaded, include $4 failed tablets.",

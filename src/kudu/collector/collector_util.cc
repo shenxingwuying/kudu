@@ -16,15 +16,19 @@
 // under the License.
 
 #include "kudu/collector/collector_util.h"
+#include <stdint.h>
 
 #include <cmath>
 #include <cstddef>
+#include <mutex>
+#include <ostream>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include <gflags/gflags.h>
-#include <gflags/gflags_declare.h>
-
+#include <glog/logging.h>
+#include <prometheus/summary.h>
 #include "kudu/gutil/strings/numbers.h"
 #include "kudu/gutil/strings/split.h"
 #include "kudu/gutil/strings/substitute.h"

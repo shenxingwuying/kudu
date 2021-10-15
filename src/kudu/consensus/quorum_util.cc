@@ -24,7 +24,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
+#include <gflags/gflags_declare.h>
 #include <glog/logging.h>
 
 #include "kudu/common/common.pb.h"

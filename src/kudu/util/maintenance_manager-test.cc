@@ -28,7 +28,6 @@
 #include <ostream>
 #include <string>
 #include <thread>
-#include <tuple>
 #include <utility>
 
 #include <gflags/gflags_declare.h>

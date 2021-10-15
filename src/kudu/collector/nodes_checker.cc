@@ -18,23 +18,22 @@
 #include "kudu/collector/nodes_checker.h"
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <ostream>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <gflags/gflags_declare.h>
 #include <glog/logging.h>
-#include <rapidjson/document.h>
+#include <prometheus/family.h>
 #include <prometheus/gauge.h>
+#include <rapidjson/document.h>
 
 #include "kudu/collector/collector_util.h"
 #include "kudu/collector/prometheus_reporter.h"
 #include "kudu/gutil/strings/substitute.h"
-#include "kudu/gutil/walltime.h"
 #include "kudu/tools/tool_test_util.h"
-#include "kudu/util/debug/trace_event.h"
 #include "kudu/util/jsonreader.h"
 #include "kudu/util/locks.h"
 #include "kudu/util/monotime.h"
