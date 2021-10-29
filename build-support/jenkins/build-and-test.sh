@@ -305,16 +305,21 @@ if [ "$BUILD_TYPE" = "TSAN" ]; then
   THIRDPARTY_TYPE=tsan
 fi
 
-# The settings for PARALLEL (see above) also affects the thirdparty build.
-$SOURCE_ROOT/build-support/enable_devtoolset.sh thirdparty/build-if-necessary.sh $THIRDPARTY_TYPE
+if [ ! -n "${THIRDPARTY_DIR}" ]; then
+  THIRDPARTY_DIR=$BASE_DIR/thirdparty
+fi
+if [ ! -n "${NO_REBUILD_THIRDPARTY}" ]; then
+  # The settings for PARALLEL (see above) also affects the thirdparty build.
+  $SOURCE_ROOT/build-support/enable_devtoolset.sh $THIRDPARTY_DIR/build-if-necessary.sh $THIRDPARTY_TYPE
+fi
 
-THIRDPARTY_BIN=$(pwd)/thirdparty/installed/common/bin
+THIRDPARTY_BIN=$THIRDPARTY_DIR/installed/common/bin
 export PPROF_PATH=$THIRDPARTY_BIN/pprof
 
 if which ccache >/dev/null ; then
   CLANG=$(pwd)/build-support/ccache-clang/clang
 else
-  CLANG=$(pwd)/thirdparty/clang-toolchain/bin/clang
+  CLANG=$THIRDPARTY_DIR/clang-toolchain/bin/clang
 fi
 
 # Make sure we use JDK8
@@ -510,7 +515,7 @@ if [ "$DO_COVERAGE" == "1" ]; then
   echo
   echo Generating coverage report...
   echo ------------------------------------------------------------
-  if ! $SOURCE_ROOT/thirdparty/installed/common/bin/gcovr \
+  if ! $THIRDPARTY_DIR/installed/common/bin/gcovr \
       -r $SOURCE_ROOT \
       --gcov-filter='.*src#kudu.*' \
       --gcov-executable=$SOURCE_ROOT/build-support/llvm-gcov-wrapper \

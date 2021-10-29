@@ -1,124 +1,116 @@
+image: jcr-large-files.sensorsdata.cn/docker-impala/com.sensorsdata.dragon/bite_kudu:1.14.0.12
+
+variables:
+  THIRDPARTY_DIR: "/opt/code/kudu/thirdparty"
+  CODE_ROOT: "/builds/sensors-analytics/kudu"
+  GRADLE_USER_HOME: "${CODE_ROOT}/java/.gradle"
+  KUDU_USE_LARGE_KEYS_IN_TESTS: 0
+  NO_REBUILD_THIRDPARTY: 1
+
+cache:
+  key: kudu_114_java_cache
+  when: 'always'
+  paths:
+    - ${GRADLE_USER_HOME}/caches
+    - ${GRADLE_USER_HOME}/wrapper
+
 stages:
   - style_check
   - test
   - coverage
- 
-
-
-variables:
-  GIT_STRATEGY: fetch
-  KUDU_DOCKER_IMAGE: jcr-large-files.sensorsdata.cn/docker-impala/com.sensorsdata.dragon/bite_kudu:1.14.0.10
-
 
 job ilint:
   stage: style_check
   script:
-    - if [ $(docker ps -aq --filter name=kudu_ilint_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_ilint_${CI_JOB_ID};fi
-    - docker run -dit -v `pwd`:/opt/kudu_code/kudu --name kudu_ilint_${CI_JOB_ID} $KUDU_DOCKER_IMAGE
-    - mkdir -p build/asan
-    - cd build/asan
-    - docker exec -i kudu_ilint_${CI_JOB_ID} bash -c  "rm -rf /opt/kudu_code/kudu/thirdparty && cp -rf /opt/kudu/thirdparty /opt/kudu_code/kudu/ && cd /opt/kudu_code/kudu/build/asan && export LD_LIBRARY_PATH=/opt/kudu_code/kudu/thirdparty/installed/uninstrumented/lib && CC=../../thirdparty/clang-toolchain/bin/clang CXX=../../thirdparty/clang-toolchain/bin/clang++ ../../thirdparty/installed/common/bin/cmake  -DKUDU_USE_ASAN=1 ../.. && make ilint -j32"
-  after_script:
-    - if [ $(docker ps -aq --filter name=kudu_ilint_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_ilint_${CI_JOB_ID};fi
+    - mkdir -p build/debug
+    - cd build/debug
+    - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
+    - make ilint -j32
   tags:
-    - kudu
+    - kudu_docker_runner
   only:
     - merge_requests
-
-
 
 job tidy:
   stage: style_check
   script:
-    - if [ $(docker ps -aq --filter name=kudu_tidy_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_tidy_${CI_JOB_ID};fi
-    - docker run -dit -v `pwd`:/opt/kudu_code/kudu --name kudu_tidy_${CI_JOB_ID} $KUDU_DOCKER_IMAGE
-    - mkdir -p build/asan
-    - cd build/asan
-    - docker exec -i kudu_tidy_${CI_JOB_ID} bash -c  "rm -rf /opt/kudu_code/kudu/thirdparty && cp -rf /opt/kudu/thirdparty /opt/kudu_code/kudu/ && cd /opt/kudu_code/kudu/build/asan && export LD_LIBRARY_PATH=/opt/kudu_code/kudu/thirdparty/installed/uninstrumented/lib && CC=../../thirdparty/clang-toolchain/bin/clang CXX=../../thirdparty/clang-toolchain/bin/clang++ ../../thirdparty/installed/common/bin/cmake  -DKUDU_USE_ASAN=1 ../.. && make tidy -j32"
-  after_script:
-    - if [ $(docker ps -aq --filter name=kudu_ilint_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_ilint_${CI_JOB_ID};fi
+    - mkdir -p build/debug
+    - cd build/debug
+    - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
+    - make tidy -j32
   tags:
-    - kudu
+    - kudu_docker_runner
   only:
     - merge_requests
-
-
 
 job iwyu:
   stage: style_check
   script:
-    - if [ $(docker ps -aq --filter name=kudu_iwyu_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_iwyu_${CI_JOB_ID};fi
-    - docker run -dit -v `pwd`:/opt/kudu_code/kudu --name kudu_iwyu_${CI_JOB_ID} $KUDU_DOCKER_IMAGE
-    - mkdir -p build/asan
-    - cd build/asan
-    - docker exec -i kudu_iwyu_${CI_JOB_ID} bash -c  "rm -rf /opt/kudu_code/kudu/thirdparty && cp -rf /opt/kudu/thirdparty /opt/kudu_code/kudu/ && cd /opt/kudu_code/kudu/build/asan && export LD_LIBRARY_PATH=/opt/kudu_code/kudu/thirdparty/installed/uninstrumented/lib && CC=../../thirdparty/clang-toolchain/bin/clang CXX=../../thirdparty/clang-toolchain/bin/clang++ ../../thirdparty/installed/common/bin/cmake  -DKUDU_USE_ASAN=1 ../.. && make iwyu -j32"
-  after_script:
-    - if [ $(docker ps -aq --filter name=kudu_ilint_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_ilint_${CI_JOB_ID};fi
+    - mkdir -p build/debug
+    - cd build/debug
+    - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
+    - make iwyu -j32
   tags:
-    - kudu
+    - kudu_docker_runner
   only:
     - merge_requests
-
 
 job asan:
   stage: test
   script:
-    - if [ $(docker ps -aq --filter name=kudu_asan_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_asan_${CI_JOB_ID};fi
-    - docker run -dit -v `pwd`:/opt/kudu_code/kudu --name kudu_asan_${CI_JOB_ID} $KUDU_DOCKER_IMAGE
+    - export KUDU_ALLOW_SLOW_TESTS=0
     - mkdir -p build/asan
     - cd build/asan
-    - docker exec -i kudu_asan_${CI_JOB_ID} bash -c  "rm -rf /opt/kudu_code/kudu/thirdparty && cp -rf /opt/kudu/thirdparty /opt/kudu_code/kudu/ && cd /opt/kudu_code/kudu/build/asan && export LD_LIBRARY_PATH=/opt/kudu_code/kudu/thirdparty/installed/uninstrumented/lib && CC=../../thirdparty/clang-toolchain/bin/clang CXX=../../thirdparty/clang-toolchain/bin/clang++ ../../thirdparty/installed/common/bin/cmake  -DKUDU_USE_ASAN=1 ../.. && make -j32 && ../../thirdparty/installed/common/bin/ctest -j32"
-  after_script:
-    - if [ $(docker ps -aq --filter name=kudu_ilint_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_ilint_${CI_JOB_ID};fi
+    - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DKUDU_USE_ASAN=1 ../..
+    - make -j32
+    - cd ../..
+    - bash check_test.sh
   tags:
-    - kudu
+    - kudu_docker_runner
   only:
     - merge_requests
-
 
 job debug:
   stage: test
   script:
-    - if [ $(docker ps -aq --filter name=kudu_debug_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_debug_${CI_JOB_ID};fi
-    - docker run -dit -v `pwd`:/opt/kudu_code/kudu --name kudu_debug_${CI_JOB_ID} $KUDU_DOCKER_IMAGE
+    - export KUDU_ALLOW_SLOW_TESTS=0
     - mkdir -p build/debug
-    - docker exec -i kudu_debug_${CI_JOB_ID} bash -c  "rm -rf /opt/kudu_code/kudu/thirdparty && cp -rf /opt/kudu/thirdparty /opt/kudu_code/kudu/ && cd /opt/kudu_code/kudu/build/debug && export LD_LIBRARY_PATH=/opt/kudu_code/kudu/thirdparty/installed/uninstrumented/lib &&  ../../build-support/enable_devtoolset.sh ../../thirdparty/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../.. && make -j32 && ../../thirdparty/installed/common/bin/ctest -j32"
-  after_script:
-    - if [ $(docker ps -aq --filter name=kudu_ilint_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_ilint_${CI_JOB_ID};fi
+    - cd build/debug
+    - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
+    - make -j32
+    - cd ../..
+    - bash check_test.sh
   tags:
-    - kudu
+    - kudu_docker_runner
   only:
     - merge_requests
-
 
 job tsan:
   stage: test
   script:
-    - if [ $(docker ps -aq --filter name=kudu_tsan_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_tsan_${CI_JOB_ID};fi
-    - docker run -dit -v `pwd`:/opt/kudu_code/kudu --name kudu_tsan_${CI_JOB_ID} $KUDU_DOCKER_IMAGE
+    - export KUDU_ALLOW_SLOW_TESTS=0
     - mkdir -p build/tsan
-    - docker exec -i kudu_tsan_${CI_JOB_ID} bash -c  "rm -rf /opt/kudu_code/kudu/thirdparty && cp -rf /opt/kudu/thirdparty /opt/kudu_code/kudu/ && cd /opt/kudu_code/kudu/build/tsan && CC=../../thirdparty/clang-toolchain/bin/clang CXX=../../thirdparty/clang-toolchain/bin/clang++ ../../thirdparty/installed/common/bin/cmake  -DKUDU_USE_TSAN=1 ../.. && make -j32 && ../../thirdparty/installed/common/bin/ctest -j8"
-  after_script:
-    - if [ $(docker ps -aq --filter name=kudu_ilint_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_ilint_${CI_JOB_ID};fi
+    - cd build/tsan
+    - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DKUDU_USE_TSAN=1 ../..
+    - make -j32
+    - cd ../..
+    - bash -x check_test.sh
   tags:
-    - kudu
+    - kudu_docker_runner
   only:
     - merge_requests
-
 
 job base coverage:
   stage: coverage
   script:
-    - if [ $(docker ps -aq --filter name=kudu_coverage_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_coverage_${CI_JOB_ID};fi
-    - docker run -dit -v `pwd`:/opt/kudu_code/kudu --name kudu_coverage_${CI_JOB_ID} $KUDU_DOCKER_IMAGE
+    - export KUDU_ALLOW_SLOW_TESTS=0
     - mkdir -p build/coverage
-    - docker exec -i kudu_coverage_${CI_JOB_ID} bash -c "rm -rf /opt/kudu_code/kudu/thirdparty && cp -rf /opt/kudu/thirdparty /opt/kudu_code/kudu/ && cd /opt/kudu_code/kudu/build/coverage && export LD_LIBRARY_PATH=/opt/kudu_code/kudu/thirdparty/installed/uninstrumented/lib && CC=../../thirdparty/clang-toolchain/bin/clang CXX=../../thirdparty/clang-toolchain/bin/clang++ ../../thirdparty/installed/common/bin/cmake -DKUDU_GENERATE_COVERAGE=1 ../.. && make -j32 && ctest -j32"
-  after_script:
-    - if [ $(docker ps -aq --filter name=kudu_ilint_${CI_JOB_ID}) ]; then sudo docker rm -f kudu_ilint_${CI_JOB_ID};fi
+    - cd build/coverage
+    - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DKUDU_GENERATE_COVERAGE=1 ../..
+    - make -j32
+    - cd ../..
+    - bash check_test.sh
   tags:
-    - kudu
+    - kudu_docker_runner
   only:
     - merge_requests
-
-
-

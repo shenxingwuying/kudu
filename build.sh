@@ -1,32 +1,24 @@
+#!/bin/bash
+
 set -ex
 
-kudu_source_code_absolute_path=/opt/kudu_code/kudu
-
-# copy kudu code from local to the /opt/kudu_code, we need the absolutely path
-rm -rf $kudu_source_code_absolute_path
-mkdir -p $kudu_source_code_absolute_path
-rsync -aP -r ./ $kudu_source_code_absolute_path
-
-cd $kudu_source_code_absolute_path
-rm -rf thirdparty
-cp -r /opt/kudu/thirdparty thirdparty
-
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/thirdparty/installed/uninstrumented/lib/
+export THIRDPARTY_DIR=/opt/code/kudu/thirdparty
+export NO_REBUILD_THIRDPARTY=1
 
 INSTALL_DIR=/opt/kudu/installed
+CODE_ROOT=$(cd "$(dirname "$0")"; pwd)
 
-script_path=$(cd "$(dirname "$0")"; pwd)
-if [ -d ${script_path}/_dragon/build/cdh_parcel-${os_tag} ]; then
+if [ -d ${CODE_ROOT}/_dragon/build/cdh_parcel-${os_tag} ]; then
     # 打 parcel 包已经编译过了，正常退出
     exit 0
 fi
 
-if [ -d ${script_path}/_dragon/build/kudu-${os_tag} ]; then
+if [ -d ${CODE_ROOT}/_dragon/build/kudu-${os_tag} ]; then
     # 打 kudu 包已经编译过了，正常退出
     exit 0
 fi
 
-if [ -d ${script_path}/_dragon/build/collector-${os_tag} ]; then
+if [ -d ${CODE_ROOT}/_dragon/build/collector-${os_tag} ]; then
     # 打 collector 包已经编译过了，正常退出
     exit 0
 fi
@@ -36,17 +28,19 @@ if [ ! -d build/release ]; then
 fi
 cd build/release
 mkdir -p $INSTALL_DIR
-../../build-support/enable_devtoolset.sh \
-  ../../thirdparty/installed/common/bin/cmake \
+${CODE_ROOT}/build-support/enable_devtoolset.sh \
+  ${THIRDPARTY_DIR}/installed/common/bin/cmake \
   -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
-  -DCMAKE_BUILD_TYPE=release ../..
+  -DCMAKE_BUILD_TYPE=release \
+  -DNO_TESTS=1 \
+  ${CODE_ROOT}
 
 PARALLEL=$(grep -c processor /proc/cpuinfo)
 make -j${PARALLEL}
 make install
 
 mkdir -p $INSTALL_DIR/lib/kudu
-cp -r ../../www $INSTALL_DIR/lib/kudu/
+cp -r ${CODE_ROOT}/www $INSTALL_DIR/lib/kudu/
 
 strip --remove-section=.symtab $INSTALL_DIR/bin/kudu
 strip --remove-section=.strtab $INSTALL_DIR/bin/kudu

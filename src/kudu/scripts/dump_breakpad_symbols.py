@@ -53,7 +53,7 @@
 #   ./dump_breakpad_symbols.py -d /tmp/syms -b kudu/build/debug
 #
 # * After, to process a minidump file, use the 'minidump_stackwalk' tool:
-#   $KUDU_HOME/thirdparty/installed/uninstrumented/bin/dump_syms \
+#   $THIRDPARTY_DIR/installed/uninstrumented/bin/dump_syms \
 #   /tmp/kudu-minidumps/kudu-tserver/03c0ee26-bfd1-cf3e-43fa49ca-1a6aae25.dmp /tmp/syms
 #
 # For more information, see the getting started docs at
@@ -83,6 +83,11 @@ def die(msg=''):
   sys.exit(1)
 
 
+def get_thirdparty_dir():
+  env = os.environ.copy()
+  return env['THIRDPARTY_DIR'] if env.has_key('THIRDPARTY_DIR') else os.path.join(ROOT, "thirdparty")
+
+
 def find_dump_syms_binary():
   """Locate the 'dump_syms' binary from Breakpad.
 
@@ -95,7 +100,7 @@ def find_dump_syms_binary():
     if not os.path.isdir(kudu_home):
       die('Could not find KUDU_HOME directory')
     # TODO: Use dump_syms_mac if on macOS.
-    dump_syms = os.path.join(kudu_home, 'thirdparty', 'installed', 'uninstrumented', 'bin', 'dump_syms')
+    dump_syms = os.path.join(get_thirdparty_dir(), 'installed', 'uninstrumented', 'bin', 'dump_syms')
     if not os.path.isfile(dump_syms):
       die('Could not find dump_syms executable at %s' % dump_syms)
     return dump_syms
