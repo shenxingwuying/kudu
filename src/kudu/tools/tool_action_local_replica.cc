@@ -89,19 +89,12 @@
 #include "kudu/util/faststring.h"
 #include "kudu/util/flag_validators.h"
 #include "kudu/util/locks.h"
-#include "kudu/util/memory/arena.h"
 #include "kudu/util/metrics.h"
 #include "kudu/util/monotime.h"
 #include "kudu/util/net/net_util.h"
 #include "kudu/util/pb_util.h"
 #include "kudu/util/status.h"
 #include "kudu/util/threadpool.h"
-
-namespace kudu {
-namespace rpc {
-class Messenger;
-}  // namespace rpc
-}  // namespace kudu
 
 DEFINE_bool(dump_all_columns, true,
             "If true, dumped rows include all of the columns in the rowset. If "

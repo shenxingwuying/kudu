@@ -326,7 +326,7 @@ class TestCFile : public CFileTestBase {
   }
 
   void TestReadWriteStrings(EncodingType encoding,
-                            std::function<string(size_t)> formatter);
+                            const std::function<string(size_t)>& formatter);
 
 #ifdef NDEBUG
   void TestWrite100MFileStrings(EncodingType encoding) {
@@ -364,7 +364,7 @@ class TestCFile : public CFileTestBase {
 
     LOG_TIMING(INFO, Substitute("reading $0 strings with dupes", num_rows)) {
       LOG(INFO) << "Starting readfile";
-      size_t n;
+      size_t n = 0;
       TimeReadFile(fs_manager_.get(), block_id, &n);
       ASSERT_EQ(num_rows, n);
       LOG(INFO) << "End readfile";
@@ -616,7 +616,7 @@ void EncodeStringKey(const Schema& schema,
 }
 
 void TestCFile::TestReadWriteStrings(EncodingType encoding,
-                                     std::function<string(size_t)> formatter) {
+                                     const std::function<string(size_t)>& formatter) {
   Schema schema({ ColumnSchema("key", STRING) }, 1);
 
   const int nrows = 10000;

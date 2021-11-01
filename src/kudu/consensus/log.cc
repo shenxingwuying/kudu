@@ -1005,7 +1005,7 @@ int GetPrefixSizeToGC(RetentionIndexes retention_indexes,
 
 // test compactiable purpose
 int GetPrefixSizeToGC(RetentionIndexes retention_indexes,
-                      const SegmentSequence segments) {
+                      const SegmentSequence &segments) {
   return GetPrefixSizeToGC(retention_indexes, /* is_to_sync_table */ false, segments);
 }
 

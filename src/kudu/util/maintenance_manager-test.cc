@@ -241,7 +241,7 @@ class MaintenanceManagerTest : public KuduTest,
     options.num_flush_threads = num_flush_threads;
     options.polling_interval_ms = 1;
     options.history_size = kHistorySize;
-    manager_.reset(new MaintenanceManager(options, kFakeUuid, metric_entity_));
+    manager_ = std::make_shared<MaintenanceManager>(options, kFakeUuid, metric_entity_);
     manager_->set_memory_pressure_func_for_tests(
         [&](double* /* consumption */) {
           return indicate_memory_pressure_.load();
