@@ -129,7 +129,7 @@ add_custom_target(init_gradle DEPENDS ${GRADLE_WRAPPER_JAR})
 # generation.
 set(PROTO_JAR ${JAVA_DIR}/kudu-proto/build/libs/kudu-proto-${KUDU_VERSION_NUMBER}.jar)
 add_custom_command(OUTPUT ${PROTO_JAR}
-        COMMAND ./gradlew :kudu-proto:jar ${GRADLE_FLAGS}
+        COMMAND ./gradlew :kudu-proto:jar ${GRADLE_FLAGS} -i
         WORKING_DIRECTORY "${JAVA_DIR}"
         DEPENDS init_gradle)
 add_custom_target(proto_jar DEPENDS ${PROTO_JAR})

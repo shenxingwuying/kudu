@@ -34,6 +34,7 @@ allprojects {
   // These are common to all projects, including this
   // top level parent project.
   repositories {
+    maven{url 'http://maven.aliyun.com/nexus/content/groups/public/'}
     mavenCentral()
     mavenLocal()
   }
@@ -42,6 +43,12 @@ allprojects {
   project.version = file("$rootDir/../version.txt").text.trim()
 
   apply from: "$rootDir/gradle/docs.gradle"
+
+  gradle.projectsEvaluated {
+    tasks.withType(JavaCompile) {
+      options.compilerArgs << "-Xlint:unchecked" << "-Xlint:deprecation"
+    }
+  }
 }
 
 subprojects {

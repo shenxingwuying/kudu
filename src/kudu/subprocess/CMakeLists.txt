@@ -38,7 +38,7 @@ target_link_libraries(subprocess_proto
 set(SUBPROCESS_JAR ${EXECUTABLE_OUTPUT_PATH}/kudu-subprocess.jar)
 
 add_custom_command(OUTPUT ${SUBPROCESS_JAR}
-  COMMAND ./gradlew :kudu-subprocess:jar ${GRADLE_FLAGS}
+  COMMAND ./gradlew :kudu-subprocess:jar ${GRADLE_FLAGS} -i
   COMMAND cp -f
     "${JAVA_DIR}/kudu-subprocess/build/libs/kudu-subprocess-${KUDU_VERSION_NUMBER}.jar"
     "${SUBPROCESS_JAR}"
