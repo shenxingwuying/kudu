@@ -20,12 +20,22 @@ rm -rf retry_tests
 rm -rf still_failed_tests
 while read ctest_failed_test
 do
+  echo "ctest_failed_test"
+  echo $ctest_failed_test
   arr=(${ctest_failed_test//./ })
-  failed_test=$(egrep "^\[  FAILED  \] .*[0-9a-zA-Z]$" ${TEST_LOGS_PATH}/${ctest_failed_test}.txt)
-  if [ -z "$failed_test" ]; then
-    egrep "^\[ RUN      \] .*[0-9a-zA-Z]$" ${TEST_LOGS_PATH}/${ctest_failed_test}.txt | tail -n 1 | awk '{print "'$BUILD_PATH'/bin/'${arr[0]}' --gtest_filter="$NF}' >> still_failed_tests
+  echo "arr"
+  echo $arr
+  ctest_failed_test_file=${TEST_LOGS_PATH}/${ctest_failed_test}.txt
+  echo "${ctest_failed_test_file}"
+  failed_tests=$(egrep "^\[  FAILED  \] .*[0-9a-zA-Z]$" ${ctest_failed_test_file})
+  echo $failed_tests
+  if [ -z "$failed_tests" ]; then
+    egrep "^\[ RUN      \] .*[0-9a-zA-Z]$" ${ctest_failed_test_file} | tail -n 1 | awk -F'[ |,]*' '{print "'$BUILD_PATH'/bin/'${arr[0]}' --gtest_filter="$4}' >> retry_tests
   else
-    echo ${failed_test} | awk '{print "'$BUILD_PATH'/bin/'${arr[0]}' --gtest_filter="$NF}' >> retry_tests
+    while read failed_test
+    do
+      echo ${failed_test} | awk -F'[ |,]*' '{print "'$BUILD_PATH'/bin/'${arr[0]}' --gtest_filter="$4}' >> retry_tests
+    done <<< "$failed_tests"
   fi
 done < ctest_failed_tests
 cat retry_tests
