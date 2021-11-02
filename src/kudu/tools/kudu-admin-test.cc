@@ -2906,8 +2906,6 @@ TEST_F(AdminCliTest, TestAddAndDropRangePartitionForMultipleRangeColumnsTable) {
 }
 
 namespace {
-constexpr const char* kPrincipal = "oryx";
-
 vector<string> RebuildMasterCmd(const ExternalMiniCluster& cluster,
                                 bool is_secure, bool log_to_stderr = false) {
   CHECK(!is_secure);
@@ -3136,7 +3134,7 @@ TEST_P(SecureClusterAdminCliParamTest, TestRebuildMaster) {
 }
 
 TEST_P(SecureClusterAdminCliParamTest, TestRebuildMasterAndAddColumns) {
-  bool is_secure = GetParam();
+  bool is_secure = false;
   constexpr const char* kTableName = "rebuild_and_add_columns";
   constexpr int kNumRows = 10000;
 
@@ -3184,7 +3182,6 @@ TEST_P(SecureClusterAdminCliParamTest, TestRebuildMasterAndAddColumns) {
   }
 
   // The cluster should still be considered healthy.
-  FLAGS_sasl_protocol_name = kPrincipal;
   ClusterVerifier cv(cluster_.get());
   NO_FATALS(cv.CheckCluster());
 }
