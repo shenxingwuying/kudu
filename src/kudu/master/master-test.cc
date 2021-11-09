@@ -647,6 +647,7 @@ TEST_F(MasterTest, TestCatalog) {
     DeleteTableResponsePB resp;
     RpcController controller;
     req.mutable_table()->set_table_name(kTableName);
+    req.set_reserve_seconds(0);
     ASSERT_OK(proxy_->DeleteTable(req, &resp, &controller));
     SCOPED_TRACE(SecureDebugString(resp));
     ASSERT_FALSE(resp.has_error());
@@ -1713,6 +1714,7 @@ TEST_F(MasterTest, TestMasterMetadataConsistentDespiteFailures) {
         RpcController controller;
 
         req.mutable_table()->set_table_name(table_names[table_idx]);
+        req.set_reserve_seconds(0);
         ASSERT_OK(proxy_->DeleteTable(req, &resp, &controller));
         if (resp.has_error()) {
           Status s = StatusFromPB(resp.error().status());
@@ -2250,6 +2252,7 @@ TEST_F(MasterTest, TestDuplicateRequest) {
     DeleteTableResponsePB resp;
     RpcController controller;
     req.mutable_table()->set_table_name(kTableName);
+    req.set_reserve_seconds(0);
     ASSERT_OK(proxy_->DeleteTable(req, &resp, &controller));
     SCOPED_TRACE(SecureDebugString(resp));
     ASSERT_FALSE(resp.has_error());

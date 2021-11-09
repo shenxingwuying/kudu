@@ -1391,6 +1391,7 @@ Status DeleteTable(const std::shared_ptr<master::MasterServiceProxy>& master_pro
   master::DeleteTableRequestPB req;
   req.mutable_table()->set_table_id(table_id);
   req.mutable_table()->set_table_name(table_name);
+  req.set_reserve_seconds(0);
   master::DeleteTableResponsePB resp;
   RpcController controller;
   controller.set_timeout(timeout);

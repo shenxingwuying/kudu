@@ -109,6 +109,9 @@ DEFINE_bool(master_support_ignore_operations, true,
 TAG_FLAG(master_support_ignore_operations, hidden);
 TAG_FLAG(master_support_ignore_operations, runtime);
 
+DEFINE_uint32(master_default_reserve_trashed_table_seconds, 604800,
+              "The default reserve seconds after a table being deleted, it will be used "
+              "when client not set this field.");
 
 using google::protobuf::Message;
 using kudu::consensus::ReplicaManagementInfoPB;
@@ -494,7 +497,8 @@ void MasterServiceImpl::DeleteTable(const DeleteTableRequestPB* req,
   bool is_trashed_table = false;
   Status s = server_->catalog_manager()
       ->IsOutdatedTable(req->table().table_name(), &is_trashed_table);
-  if (s.ok() && is_trashed_table && !req->force_on_trashed_table()) {
+  if (s.ok() && is_trashed_table &&
+      (!req->has_force_on_trashed_table() || !req->force_on_trashed_table())) {
     s = Status::InvalidArgument(Substitute("trashed table $0 should not be deleted",
                                            req->table().table_name()));
   }
@@ -505,7 +509,8 @@ void MasterServiceImpl::DeleteTable(const DeleteTableRequestPB* req,
     return;
   }
 
-  if ((is_trashed_table && req->force_on_trashed_table()) || req->reserve_seconds() == 0) {
+  if ((is_trashed_table && req->has_force_on_trashed_table() && req->force_on_trashed_table()) ||
+      (req->has_reserve_seconds() && req->reserve_seconds() == 0)) {
     Status s = server_->catalog_manager()->DeleteTableRpc(*req, resp, rpc);
     CheckRespErrorOrSetUnknown(s, resp);
     rpc->RespondSuccess();
@@ -520,7 +525,8 @@ void MasterServiceImpl::DeleteTable(const DeleteTableRequestPB* req,
     (*alter_req.mutable_new_extra_configs())[kTableMaintenancePriority]
         = std::to_string(-FLAGS_max_priority_range);
     (*alter_req.mutable_new_extra_configs())[kTableConfigReserveSeconds]
-        = std::to_string(req->reserve_seconds());
+        = std::to_string(req->has_reserve_seconds() ?
+          req->reserve_seconds() : FLAGS_master_default_reserve_trashed_table_seconds);
 
     AlterTableResponsePB alter_resp;
     Status s = server_->catalog_manager()->AlterTableRpc(alter_req, &alter_resp, rpc, false);
