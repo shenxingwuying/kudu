@@ -467,6 +467,6 @@ TEST_P(MasterDiskErrorITest, TestMasterDiskFailure) {
   ASSERT_OK(SetFlags(leader_master, flag_list));
 
   // Wait for the master to crash
-  ASSERT_OK(leader_master->WaitForFatal(MonoDelta::FromSeconds(20)));
+  ASSERT_OK(leader_master->WaitForFatal(MonoDelta::FromSeconds(40)));
 }
 }  // namespace kudu

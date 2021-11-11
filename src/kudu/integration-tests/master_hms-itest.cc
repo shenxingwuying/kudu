@@ -714,8 +714,9 @@ TEST_F(MasterHmsUpgradeTest, TestConflictingNormalizedNames) {
   if (s.ok()) {
     vector<string> tables;
     s = client_->ListTables(&tables);
+  } else {
+    ASSERT_TRUE(s.IsNetworkError() || s.IsTimedOut()) << s.ToString();
   }
-  ASSERT_TRUE(s.IsNetworkError()) << s.ToString();
 
   // Disable the metastore integration and rename one of the conflicting tables.
   cluster_->ShutdownNodes(cluster::ClusterNodes::MASTERS_ONLY);
