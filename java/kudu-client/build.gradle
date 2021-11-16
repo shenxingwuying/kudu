@@ -63,7 +63,6 @@ publishing {
         artifactId = "kudu-client"
         version = "1.14.0-SA"
         from components.java
-        artifact tasks.shadowJar
     }
   }
   repositories {
