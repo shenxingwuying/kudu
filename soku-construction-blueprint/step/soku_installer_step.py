@@ -12,6 +12,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../..', 'upgrader', 'to
 from mothership_upgrader_tool import MothershipUpgraderTool
 from cdh_upgrader_tool import CdhUpgraderTool
 
+
 class SokuInstallerStep(BaseInstallerStep):
     def __init__(self):
         super().__init__()

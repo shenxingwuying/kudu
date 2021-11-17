@@ -28,8 +28,14 @@ class SokuToolInstallerStep(BaseInstallerStep):
         check_call(cmd, self.logger.debug)
         cmd = '''echo "export PATH=%s:\$PATH" >> /home/sa_cluster/.bashrc''' % os_path
         check_call(cmd, self.logger.debug)
-        cmd = "sudo cp /home/sa_cluster/.bashrc /home/kudu/.bashrc"
-        check_call(cmd, self.logger.debug)
+        kudu_home_src = "/home/kudu"
+        kudu_lib_src = "/var/lib/kudu"
+        if os.path.exists(kudu_home_src):
+            cmd = "sudo cp -f /home/sa_cluster/.bashrc %s/.bashrc" % kudu_home_src
+            check_call(cmd, self.logger.debug)
+        elif os.path.exists(kudu_lib_src):
+            cmd = "sudo cp -f /home/sa_cluster/.bashrc %s/.bashrc" % kudu_lib_src
+            check_call(cmd, self.logger.debug)
 
     def check(self):
         # 适配 installer 通用流程，不需要校验

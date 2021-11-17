@@ -1,6 +1,11 @@
 collector:
     step_type: module
     agent_name: sa_cluster
+soku_tool:
+    step_type: module
+    agent_name: sa_cluster
+kudu_config_update:
+    step_type: step
 soku_installer:
     step_type: step
     agent_name: sa_cluster
