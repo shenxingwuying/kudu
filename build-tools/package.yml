@@ -1,32 +1,8 @@
 package_modules:
-  bootstrap:
-    version: "1.14.1"
-    source: local
-    pub:
-      - type: dragon
- 
-  # 模块名，与 build.yml 中的相同
-  construction_blueprint:
-    # 源代码在本地
-    source: local
-    # 填写四位版本号中的前三位
-    # 第四位由 dragon 系统自动生成
-    # 注意使用 "" 双引号，否则不符合 yaml 格式要求
-    version: "1.14.1"
-    pub:
-      # 作为 dragon 包来进行发布
-      - type: dragon
-
-  upgrader:
-    source: local
-    version: "1.14.1"
-    pub:
-      - type: dragon 
-
   kudu:
     source: local
     variants:
-      #- os_distro: el6
+      - os_distro: el6
       - os_distro: el7
     version: "1.14.1"
     pub:
@@ -35,7 +11,7 @@ package_modules:
   cdh_parcel:
     source: local
     variants:
-      #- os_distro: el6
+      - os_distro: el6
       - os_distro: el7
     version: "1.14.1"
     pub:
@@ -44,7 +20,16 @@ package_modules:
   collector:
     source: local
     variants:
-      #- os_distro: el6
+      - os_distro: el6
+      - os_distro: el7
+    version: "1.14.1"
+    pub:
+      - type: dragon
+
+  soku_tool:
+    source: local
+    variants:
+      - os_distro: el6
       - os_distro: el7
     version: "1.14.1"
     pub:

@@ -4,3 +4,6 @@ collector:
 soku_installer:
     step_type: step
     agent_name: sa_cluster
+soku_tool_installer:
+    step_type: step
+    agent_name: sa_cluster

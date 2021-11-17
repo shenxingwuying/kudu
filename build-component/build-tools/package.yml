@@ -1,0 +1,65 @@
+package_modules:
+  bootstrap:
+    version: "1.14.1"
+    source: local
+    pub:
+      - type: dragon
+ 
+  construction_blueprint:
+    source: local
+    version: "1.14.1"
+    pub:
+      - type: dragon
+
+  upgrader:
+    source: local
+    version: "1.14.1"
+    pub:
+      - type: dragon
+
+  admintools:
+    source: local
+    version: "1.14.1"
+    pub:
+      - type: dragon
+
+  kudu:
+    source: pre_pub
+    search_policy: aligned
+    variants:
+      - os_distro: el6
+      - os_distro: el7
+    version: "1.14.1"
+    pub:
+      - type: dragon
+
+  cdh_parcel:
+    source: pre_pub
+    search_policy: aligned
+    variants:
+      - os_distro: el6
+      - os_distro: el7
+    version: "1.14.1"
+    pub:
+      - type: dragon
+
+  collector:
+    source: pre_pub
+    search_policy: aligned
+    variants:
+      - os_distro: el6
+      - os_distro: el7
+    version: "1.14.1"
+    pub:
+      - type: dragon
+
+  soku_tool:
+    source: pre_pub
+    search_policy: aligned
+    variants:
+      - os_distro: el6
+      - os_distro: el7
+    version: "1.14.1"
+    pub:
+      - type: dragon
+

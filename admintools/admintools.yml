@@ -1,0 +1,12 @@
+# 工具名
+# name:
+#     # 类名，如果不写就默认使用工具名驼峰格式
+#     classname: DeployTool
+#     # 类文件的线上位置的相对路径，相对 $SENSORS_XXX_HOME
+#     classfile: admintools/tools/deploy/deploy_tool.py
+#     # 这个是每个工具的类属性 brief_desc 的一个副本，这里和代码中的都会保留，知道sp 1.16之后会删除
+#     brief_desc: show deploy infomation, add/delete host/roles etc.
+leader_balance:
+    classname: BalanceTool
+    classfile: admintools/tools/balance_tool.py
+    brief_desc: kudu cluster rebalance tablets leader

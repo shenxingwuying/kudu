@@ -15,6 +15,7 @@ from cdh_upgrader_tool import CdhUpgraderTool
 class SokuInstallerStep(BaseInstallerStep):
     def __init__(self):
         super().__init__()
+        os.environ['SENSORS_SOKU_HOME'] = self.product_home
         self.package_dir = os.path.join(os.path.dirname(__file__), '..', '..')
 
     def update(self):

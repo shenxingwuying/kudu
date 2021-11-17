@@ -17,7 +17,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
 from mothership_upgrader_tool import MothershipUpgraderTool
 from cdh_upgrader_tool import CdhUpgraderTool
 
-class SokuUpgraderStep(DirStep):
+class KuduUpgraderStep(DirStep):
     def __init__(self):
         super().__init__()
         self.package_dir = self.root_path

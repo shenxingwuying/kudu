@@ -1,4 +1,0 @@
-# 本文件定义小版本升级时各个模块的升级方式
-# 默认是internal_module_dir_step
-kudu:
-    class_name: soku_upgrader_step

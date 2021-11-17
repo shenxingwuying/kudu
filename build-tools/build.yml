@@ -5,7 +5,7 @@ build_modules:
     # 为了支持多变体，添加 variants 字段
     variants:
       # os_distro: The common name of the operating system distribution
-      #- os_distro: el6
+      - os_distro: el6
       - os_distro: el7
     types:
       # 制品类型是 dragon，既 "标准模块 tar 包"
@@ -17,7 +17,7 @@ build_modules:
 
   cdh_parcel:
     variants:
-      #- os_distro: el6
+      - os_distro: el6
       - os_distro: el7
     types:
       - type: dragon
@@ -25,33 +25,9 @@ build_modules:
           - ["RUN", "sh ./parcel-tools/soku_parcel.sh --version $MOD_FULL_VER"]
           - ["COPY", "/opt/kudu/cdh_parcel/*", "./"]
 
-  # bootstrap 模块是特殊的
-  # 这个名字代表了，它是产品组件的 “模块代表”
-  #
-  # 它的版本号，就是产品组件的版本号
-  # manifest.yml 文件会被自动生成在 bootstrap 包里，此文件包含了产品组件，对自身模块的版本引用.
-  #
-  # 此外，bootstrap 模块可以包含安装升级所需的 construction-blueprint 脚本和配置，这个部分请具体遵从 （TODO 这里等李宁给一个文档链接） 文档.
-  bootstrap:
-    - type: dragon
-
-  # 模块名
-  construction_blueprint:
-    # 制品类型是 dragon，既 "标准模块 tar 包"
-    - type: dragon
-      # 添加自定义 build 命令
-      add_cmds:
-        # 拷贝源代码到包中（支持通配符），COPY 命令使用：https://doc.sensorsdata.cn/pages/viewpage.action?pageId=110070664
-        - [ "COPY", "soku-construction-blueprint/", "./" ]
-
-  upgrader:
-    - type: dragon
-      add_cmds:
-        - [ "COPY", "soku-upgrader/", "./" ]
-
   collector:
     variants:
-      #- os_distro: el6
+      - os_distro: el6
       - os_distro: el7
     types:
       - type: dragon
@@ -61,3 +37,15 @@ build_modules:
           # Collector模块的构成和kudu一样，增加Collector模块的原因是为了使用默认的升级流程来升级Collector
           - ["COPY", "/opt/kudu/installed/*", "./"]
           - ["COPY", "soku-construction-blueprint/step/start_kudu.sh", "./"]
+
+  soku_tool:
+    variants:
+      - os_distro: el6
+      - os_distro: el7
+    types:
+      - type: dragon
+        add_cmds:
+          # 这里需要执行build的原因是整个编译不会按build.yml的顺序来保证执行顺序
+          - ["RUN", "sh build.sh"]
+          - ["COPY", "/opt/kudu/installed/bin/kudu", "./"]
+          - ["COPY", "/opt/kudu/installed/bin/kudu", "./sp_kudu"]

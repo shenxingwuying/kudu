@@ -23,6 +23,11 @@ if [ -d ${CODE_ROOT}/_dragon/build/collector-${os_tag} ]; then
     exit 0
 fi
 
+if [ -d ${CODE_ROOT}/_dragon/build/soku_tool-${os_tag} ]; then
+    # 打 soku_tool 包已经编译过了，正常退出
+    exit 0
+fi
+
 if [ ! -d build/release ]; then
   mkdir -p build/release
 fi

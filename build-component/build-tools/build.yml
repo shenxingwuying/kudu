@@ -1,0 +1,18 @@
+build_modules:
+  bootstrap:
+    - type: dragon
+
+  construction_blueprint:
+    - type: dragon
+      add_cmds:
+        - [ "COPY", "../soku-construction-blueprint/", "./" ]
+
+  upgrader:
+    - type: dragon
+      add_cmds:
+        - [ "COPY", "../soku-upgrader/", "./" ]
+
+  admintools:
+    - type: dragon
+      add_cmds:
+        - ["COPY", "../admintools/*", "./"]

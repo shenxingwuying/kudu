@@ -43,7 +43,7 @@ class MothershipUpgraderTool(BaseUpgraderTool):
         shell_utils.check_call('spadmin mothership upgrader -m kudu -p {}'.format(update_tar_full_path))
 
     def rollback(self):
-	    if self.my_host not in self.server_api_url:
-	        self.logger.info('{} is not mothership server host, skip rollback'.format(self.my_host))
-	        return
-	    shell_utils.check_call('spadmin mothership upgrader -m kudu -r')
+        if self.my_host not in self.server_api_url:
+            self.logger.info('{} is not mothership server host, skip rollback'.format(self.my_host))
+            return
+        shell_utils.check_call('spadmin mothership upgrader -m kudu -r')

@@ -118,6 +118,12 @@ class CollectorModuleInstaller(ExternalModuleInstaller):
         else:
             self.logger.error('Kudu-collector fail to start.')
 
+    def add_soku(self):
+        os.environ['SENSORS_SOKU_HOME'] = self.product_home
+        cmd = 'source ~/.bashrc'
+        check_call(cmd, self.logger.debug)
+        self.logger.info('soku_tool installer SENSORS_SOKU_HOME %s' % os.environ['SENSORS_PLATFORM_HOME'])
+
     def install_module_progress(self):
         """
         得到实际的各个步骤
@@ -125,6 +131,7 @@ class CollectorModuleInstaller(ExternalModuleInstaller):
         """
         return [
             ('Store module', self.store_module),
+            ('Add soku to os environ', self.add_soku),
             ('Stop service if needed', self.do_stop),
             ('Make kudu-collector dirs', self.make_dirs),
             ('Make links', self.make_links),
