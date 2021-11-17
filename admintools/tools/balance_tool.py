@@ -43,7 +43,7 @@ soku_tool banlance start # 开始balance
         if self._is_standalone():
             self.logger.info("This cluster is standalone, no need do leader rebalance. Exit!!!")
             sys.exit(0)
-        master_addresses = utils.config_manager.get_kudu_client_conf()['master_address']
+        master_addresses = ConfigManager().get_client_conf("sp", "kudu")['master_address']
         get_table_cmd = 'kudu table list {master_addresses}'.format(master_addresses=master_addresses)
         res = utils.shell_wrapper.run_cmd(get_table_cmd, self.logger.info)
         if res['ret'] != 0:
