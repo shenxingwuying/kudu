@@ -20,13 +20,16 @@ from mothership_config_tool import MothershipKuduConfigTool
 # unlock_experimental_flags=true
 
 UPDATE_CONFIG = {
-    'KUDU_MASTER': {
-        'rpc_authentication': 'disabled',
-        'rpc_encryption': 'disabled'
-    },
-    'KUDU_TSERVER': {
+    'KUDU_COMMON': {
         'rpc_authentication': 'disabled',
         'rpc_encryption': 'disabled',
+        'superuser_acl': 'sa_cluster,kudu,root',
+        'webserver_doc_root': '/sensorsmounts/hybriddata/binddirs/main/program/soku/kudu/lib/kudu/www' if DeployInfo().
+        get_simplified_cluster() else '/sensorsmounts/metadata/binddirs/main/program/soku/kudu/lib/kudu/www'
+    },
+    'KUDU_MASTER': {
+    },
+    'KUDU_TSERVER': {
         'unlock_experimental_flags': 'true',
         'maintenance_manager_num_flush_threads': '1' if DeployInfo().get_simplified_cluster() else '0'
     }

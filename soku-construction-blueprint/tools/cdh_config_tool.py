@@ -58,27 +58,46 @@ class KuduConfigTool:
 
     def check_and_change_cmd_args(self, role_type, config, common_configs_json, resetter):
         need_restart_service = False
-        path = '/clusters/cluster/services/kudu/roleConfigGroups'
-        for role_group in resetter.get_role_groups('kudu', role_type, path):
-            self.logger.info('role_group = %s' % role_group)
-            cmd_configs = resetter.get_value('%s/%s/config' % (path, role_group), ROLE_GROUPS[role_type]).split('\n')
-            cmd_configs_json = {}
-            for conf in cmd_configs:
-                item = conf.lstrip('-').split('=')
-                cmd_configs_json[item[0]] = item[1]
-            self.logger.info('old gflagfile_role_safety_valve = [%s]' % cmd_configs_json)
-
+        if 'KUDU_COMMON' == role_type:
+            path = '/clusters/cluster/services/kudu/config/'
             for (key, value) in config.items():
-                ret, cmd_configs_json = self.update_config(key, value, common_configs_json, cmd_configs_json)
-                need_restart_service = ret or need_restart_service
+                if key not in common_configs_json:
+                    need_restart_service = True
+                    common_configs_json[key] = value
+                elif key in common_configs_json and value != common_configs_json[key]:
+                    need_restart_service = True
+                    common_configs_json[key] = value
             if need_restart_service:
-                new_cmd_configs = ''
-                for (key, value) in cmd_configs_json.items():
-                    new_cmd_configs += '--' + key + '=' + value + '\n'
-                new_cmd_configs = new_cmd_configs.rstrip('\n')
-                self.logger.info('%s: new gflagfile_role_safety_valve = [%s]' % (role_type, new_cmd_configs))
-                resetter.put_if_needed('%s/%s/config' % (path, role_group), ROLE_GROUPS[role_type], new_cmd_configs, ('kudu:%s' %  role_group))
-            return need_restart_service
+                new_common_configs = ''
+                for (key, value) in common_configs_json.items():
+                    new_common_configs += '--' + key + '=' + value + '\n'
+                new_common_configs = new_common_configs.rstrip('\n')
+                self.logger.info('%s: new common gflagfile = %s' % (role_type, new_common_configs))
+                resetter.put_if_needed(path, 'gflagfile_service_safety_valve', new_common_configs, ('kudu:common gflagfile'))
+        else:
+            path = '/clusters/cluster/services/kudu/roleConfigGroups'
+            for role_group in resetter.get_role_groups('kudu', role_type, path):
+                self.logger.info('role_group = %s' % role_group)
+                cmd_configs = resetter.get_value('%s/%s/config' % (path, role_group), ROLE_GROUPS[role_type]).split('\n')
+                cmd_configs_json = {}
+                for conf in cmd_configs:
+                    item = conf.lstrip('-').split('=')
+                    cmd_configs_json[item[0]] = item[1]
+                self.logger.info('old gflagfile_role_safety_valve = [%s]' % cmd_configs_json)
+
+                # 判断配置本身是否存在冲突，有冲突直接报错,有相同的删除group中的
+                cmd_configs_json, need_restart_service = self.conf_pre_check(role_type, common_configs_json, cmd_configs_json)
+                for (key, value) in config.items():
+                    ret, cmd_configs_json = self.update_config(key, value, common_configs_json, cmd_configs_json)
+                    need_restart_service = ret or need_restart_service
+                if need_restart_service:
+                    new_cmd_configs = ''
+                    for (key, value) in cmd_configs_json.items():
+                        new_cmd_configs += '--' + key + '=' + value + '\n'
+                    new_cmd_configs = new_cmd_configs.rstrip('\n')
+                    self.logger.info('%s: new gflagfile_role_safety_valve = [%s]' % (role_type, new_cmd_configs))
+                    resetter.put_if_needed('%s/%s/config' % (path, role_group), ROLE_GROUPS[role_type], new_cmd_configs, ('kudu:%s' % role_group))
+        return need_restart_service, common_configs_json
 
     def wait_service_done(self, service, timeout=600):
         '''确认服务正常 注意这里的服务正常是语义检查'''
@@ -104,6 +123,18 @@ class KuduConfigTool:
             config_json[item[0]] = item[1]
         return config_json
 
+    def conf_pre_check(self, role_type, common_configs_json, cmd_configs_json):
+        need_restart = True
+        for (key, value) in common_configs_json.items():
+            if key in cmd_configs_json:
+                if value != cmd_configs_json[key]:
+                    raise Exception('[%s] update config error! [%s=%s] conflict with common gflagfile[%s=%s]' % (
+                        role_type, key, cmd_configs_json[key], key, common_configs_json[key]))
+                else:
+                    cmd_configs_json.pop(key, None)
+                    need_restart = True
+        return cmd_configs_json, need_restart
+
     def do_update(self, update_config):
         if 1 == len(self.hosts):
             self.api.waiting_service_ready(True)
@@ -112,7 +143,7 @@ class KuduConfigTool:
             resetter = self.get_cloudera_config_setter()
             common_configs_json = self.get_config(resetter, '/clusters/cluster/services/kudu/config/', 'gflagfile_service_safety_valve')
             for (role_type, config) in update_config.items():
-                ret = self.check_and_change_cmd_args(role_type, config, common_configs_json, resetter)
+                ret, common_configs_json = self.check_and_change_cmd_args(role_type, config, common_configs_json, resetter)
                 need_restart = need_restart or ret
             # 重启服务
             if need_restart:
