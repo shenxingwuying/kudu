@@ -450,6 +450,9 @@ message TableExtraConfigPB {
   // must start with 101
   // Reserve seconds after the table has been deleted.
   optional uint32 reserve_seconds = 101;
+
+  // If set true, the table's data on disk is not compacted.
+  optional bool disable_compaction = 3;
 }
 
 // The type of a given table. This is useful in determining whether a

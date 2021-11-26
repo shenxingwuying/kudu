@@ -41,6 +41,10 @@ class TabletOpBase : public MaintenanceOp {
                PerfImprovementOpType type, Tablet* tablet);
   std::string LogPrefix() const;
 
+  // Return false if the tablets need to compact,
+  // otherwise return true.
+  bool DisableCompaction() const;
+
  protected:
   int32_t priority() const override;
 

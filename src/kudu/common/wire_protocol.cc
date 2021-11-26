@@ -59,6 +59,7 @@
 #include "kudu/util/pb_util.h"
 #include "kudu/util/safe_math.h"
 #include "kudu/util/slice.h"
+#include "kudu/util/string_case.h"
 
 namespace kudu {
 class BlockBloomFilterPB;
@@ -676,14 +677,25 @@ Status ParseUint32Config(const string& name, const string& value, uint32_t* resu
   return Status::OK();
 }
 
+Status ParseBoolConfig(const string& name, const string& value, bool* result) {
+  CHECK(result);
+  bool true_flag = iequals(value, "TRUE");
+  bool false_flag = iequals(value, "FALSE");
+  if (!(true_flag || false_flag)) {
+    return Status::InvalidArgument(Substitute("unable to parse $0", name), value);
+  }
+  *result = true_flag;
+  return Status::OK();
+}
+
 Status ExtraConfigPBFromPBMap(const Map<string, string>& configs,
                               bool external_request,
                               TableExtraConfigPB* pb) {
   static const unordered_set<string> kSupportedConfigs({kTableHistoryMaxAgeSec,
                                                         kTableMaintenancePriority,
-                                                        kTableConfigReserveSeconds});
+                                                        kTableConfigReserveSeconds,
+                                                        kTableDisableCompaction});
   static const unordered_set<string> kInternalConfigs({kTableConfigReserveSeconds});
-  TableExtraConfigPB result;
   for (const auto& config : configs) {
     const string& name = config.first;
     const string& value = config.second;
@@ -720,6 +732,14 @@ Status ExtraConfigPBFromPBMap(const Map<string, string>& configs,
       } else {
         pb->clear_reserve_seconds();
       }
+    } else if (name == kTableDisableCompaction) {
+      if (!value.empty()) {
+        bool disable_compaction = false;
+        RETURN_NOT_OK(ParseBoolConfig(name, value, &disable_compaction));
+        pb->set_disable_compaction(disable_compaction);
+      } else {
+        pb->clear_disable_compaction();
+      }
     } else {
       LOG(FATAL) << "Unknown extra configuration property: " << name;
     }
@@ -738,7 +758,9 @@ Status ExtraConfigPBToPBMap(const TableExtraConfigPB& pb, Map<string, string>* c
   if (pb.has_reserve_seconds()) {
     result[kTableConfigReserveSeconds] = std::to_string(pb.reserve_seconds());
   }
-
+  if (pb.has_disable_compaction()) {
+    result[kTableDisableCompaction] = std::to_string(pb.disable_compaction());
+  }
   *configs = std::move(result);
   return Status::OK();
 }
