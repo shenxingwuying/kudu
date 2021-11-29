@@ -17,7 +17,6 @@ cache:
 stages:
   - style_check
   - test
-  - coverage
 
 job ilint:
   stage: style_check
@@ -100,17 +99,3 @@ job tsan:
   only:
     - merge_requests
 
-job base coverage:
-  stage: coverage
-  script:
-    - export KUDU_ALLOW_SLOW_TESTS=0
-    - mkdir -p build/coverage
-    - cd build/coverage
-    - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DKUDU_GENERATE_COVERAGE=1 ../..
-    - make -j32
-    - cd ../..
-    - bash check_test.sh
-  tags:
-    - kudu_docker_runner
-  only:
-    - merge_requests
