@@ -92,7 +92,6 @@
 #include "kudu/integration-tests/cluster_verifier.h"
 #include "kudu/integration-tests/mini_cluster_fs_inspector.h"
 #include "kudu/integration-tests/test_workload.h"
-#include "kudu/master/catalog_manager.h"
 #include "kudu/master/master.h"
 #include "kudu/master/master.pb.h"
 #include "kudu/master/mini_master.h"
@@ -3499,7 +3498,7 @@ void StartStandaloneTserver(std::shared_ptr<MiniTabletServer>& tablet_server, in
   CHECK_OK(tablet_server->WaitStarted());
 }
 
-void CheckReplicas(MiniTabletServer* internal_ts, int offset, int step) {
+void CheckReplicas(string master_rpc_addrs, MiniTabletServer* internal_ts, int offset, int step) {
   vector<string> remote_tablet_ids = internal_ts->ListTablets();
   sort(remote_tablet_ids.begin(), remote_tablet_ids.end());
 
@@ -3508,9 +3507,10 @@ void CheckReplicas(MiniTabletServer* internal_ts, int offset, int step) {
   external_ts->Shutdown();
 
   const string& cmd = Substitute(
-      "local_replica clone $0 --fs_wal_dir=$1 --fs_data_dirs=$2 --num_clone_processes=$3"
-      " --current_bucket=$4 --rewrite_config",
+      "local_replica clone $0 $1 --fs_wal_dir=$2 --fs_data_dirs=$3 --num_clone_processes=$4"
+      " --current_bucket=$5 --rewrite_config",
       internal_ts->bound_rpc_addr().ToString(),
+      master_rpc_addrs,
       external_ts->options()->fs_opts.wal_root,
       JoinStrings(external_ts->options()->fs_opts.data_roots, ","),
       step,
@@ -3566,11 +3566,18 @@ TEST_F(ToolTest, TestLocalReplicaCloneOps) {
   }
   workload.StopAndJoin();
 
+  vector<HostPort> master_addresses;
+  string master_addresses_str = JoinMapped(
+      mini_cluster_->master_rpc_addrs(),
+      [] (const HostPort& hostport) {
+        return hostport.ToString();
+      },
+      ",");
   MiniTabletServer* internal_ts = mini_cluster_->mini_tablet_server(0);
 
   int local_ts_count = 5;
   for (int i = 0; i < local_ts_count; ++i) {
-    CheckReplicas(internal_ts, i, local_ts_count);
+    CheckReplicas(master_addresses_str, internal_ts, i, local_ts_count);
   }
 }
 

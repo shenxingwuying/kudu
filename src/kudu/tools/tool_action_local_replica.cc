@@ -26,6 +26,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -78,6 +79,8 @@
 #include "kudu/tablet/tablet_mem_trackers.h"
 #include "kudu/tablet/tablet_metadata.h"
 #include "kudu/tablet/tablet_replica.h"
+#include "kudu/tools/ksck.h"
+#include "kudu/tools/ksck_remote.h"
 #include "kudu/tools/tool_action.h"
 #include "kudu/tools/tool_action_common.h"
 #include "kudu/tserver/tablet_copy_client.h"
@@ -494,14 +497,63 @@ Status CloneTserver(const RunnerContext& context) {
          return lhs.tablet_status().tablet_id() < rhs.tablet_status().tablet_id();
   });
 
-  // 3. Generate tablet list to download.
-  const vector<string> table_filters = Split(FLAGS_tables, ",", strings::SkipEmpty());
+  // 3. Check consistency
+  vector<string> master_addresses;
+  RETURN_NOT_OK(ParseMasterAddresses(context, &master_addresses));
+  shared_ptr<KsckCluster> cluster;
+  RETURN_NOT_OK_PREPEND(RemoteKsckCluster::Build(master_addresses, &cluster),
+                        "unable to build KsckCluster");
 
+  const vector<string> table_filters = Split(FLAGS_tables, ",", strings::SkipEmpty());
+  cluster->set_table_filters(table_filters);
+  auto ksck = std::make_shared<Ksck>(cluster);
+
+  RETURN_NOT_OK_PREPEND(ksck->CheckMasterHealth(), "error fetching info from masters");
+  RETURN_NOT_OK_PREPEND(ksck->CheckMasterConsensus(), "master consensus error");
+  RETURN_NOT_OK_PREPEND(ksck->CheckClusterRunning(), "leader master liveness check error");
+  RETURN_NOT_OK_PREPEND(ksck->FetchTableAndTabletInfo(),
+                        "error fetching the cluster metadata from the leader master");
+  RETURN_NOT_OK_PREPEND(ksck->FetchInfoFromTabletServers(),
+                        "error fetching info from tablet servers");
+  RETURN_NOT_OK_PREPEND(ksck->CheckTablesConsistency(), "table consistency check error");
+
+  string source_tserver_uuid;
+  const auto& tablet_servers = cluster->tablet_servers();
+  for (const auto& tablet_server : tablet_servers) {
+    if (tablet_server.second->address() == rpc_address) {
+      source_tserver_uuid = tablet_server.first;
+      break;
+    }
+  }
+
+  if (source_tserver_uuid.empty()) {
+    return Status::NotFound("There is no matched tserver");
+  }
+
+  // 4. Get leader replicas
+  std::unordered_set<string> leader_replica_uuids;
+  const auto& tables = cluster->tables();
+  for (const auto& table : tables) {
+    for (const auto& tablet : table->tablets()) {
+      for (const auto& replica : tablet->replicas()) {
+        if (replica->is_leader() && replica->ts_uuid() == source_tserver_uuid) {
+          leader_replica_uuids.insert(tablet->id());
+          break;
+        }
+      }
+    }
+  }
+
+  // 5. Generate tablet list to download.
   vector<string> tablets_to_download;
   std::unordered_map<string, int64_t> tablet_id_to_size;
   int64_t total_byte_size = 0;
   for (int i = 0; i < replicas.size(); ++i) {
     const TabletStatusPB& ts = replicas[i].tablet_status();
+    // Only copy replica from leader.
+    if (!ContainsKey(leader_replica_uuids, ts.tablet_id())) {
+      continue;
+    }
     // Skip if the tablet is not health, or local tserver contains it, or it's been filtered out.
     if (ts.state() != tablet::RUNNING ||
         ContainsKey(local_tablets, ts.tablet_id()) ||
@@ -525,7 +577,7 @@ Status CloneTserver(const RunnerContext& context) {
     }
   }
 
-  // 4. Start downloading tablets.
+  // 6. Start downloading tablets.
   // Protect finished_byte_size, failed_tablets and succeed_tablets.
   simple_spinlock lock;
   int64_t finished_byte_size = 0;
@@ -550,8 +602,8 @@ Status CloneTserver(const RunnerContext& context) {
       builder.Build(&messenger);
       TabletCopyClient client(tablet_id, &fs_manager, cmeta_manager,
                               messenger, nullptr /* no metrics */);
-      client.Start(hp, nullptr);
-      client.FetchAll(nullptr);
+      CHECK_OK(client.Start(hp, nullptr));
+      CHECK_OK(client.FetchAll(nullptr));
       Status s = client.Finish();
       {
         std::lock_guard<simple_spinlock> l(lock);
@@ -582,7 +634,7 @@ Status CloneTserver(const RunnerContext& context) {
   }
   CHECK_EQ(tablets_to_download.size(), succeed_tablets.size());
 
-  // 5. Rewrite config to 'uuid:HOSTF:port', indicate this replica need to be re-distributed.
+  // 7. Rewrite config to 'uuid:HOSTF:port', indicate this replica need to be re-distributed.
   if (FLAGS_rewrite_config) {
     LOG(INFO) << "Rewriting raft config";
     string fqdn;
@@ -1173,6 +1225,7 @@ unique_ptr<Mode> BuildLocalReplicaMode() {
       ActionBuilder("clone", &CloneTserver)
       .AddRequiredParameter({ "source", "Source RPC address of form hostname:port" })
       .Description("Clone all or partial tablet replicas from a remote server.")
+      .AddRequiredParameter({ kMasterAddressesArg, kMasterAddressesArgDesc })
       .AddOptionalParameter("current_bucket")
       .AddOptionalParameter("fs_data_dirs")
       .AddOptionalParameter("fs_metadata_dir")
