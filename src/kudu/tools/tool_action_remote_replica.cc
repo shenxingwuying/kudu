@@ -317,6 +317,10 @@ Status ListReplicas(const RunnerContext& context) {
     const string& state = tablet::TabletStatePB_Name(rs.state());
     cout << "Tablet id: " << rs.tablet_id() << endl;
     cout << "State: " << state << endl;
+    cout << "Last status: " << rs.last_status() << endl;
+    if (r.has_role()) {
+      cout << "Role: " << RaftPeerPB::Role_Name(r.role()) << endl;
+    }
     cout << "Table name: " << rs.table_name() << endl;
     cout << "Partition: "
          << partition_schema.PartitionDebugString(partition, schema) << endl;

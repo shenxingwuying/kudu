@@ -3088,12 +3088,14 @@ TEST_F(ToolTest, TestRemoteReplicaList) {
     NO_FATALS(RunActionStdoutString(
         Substitute("remote_replica list $0", ts_addr), &stdout));
 
-    // Some fields like state or estimated on disk size may vary. Just check a
+    // Some fields like estimated on disk size may vary. Just check a
     // few whose values we should know exactly.
-    ASSERT_STR_CONTAINS(stdout,
-                        Substitute("Tablet id: $0", tablet_status.tablet_id()));
-    ASSERT_STR_CONTAINS(stdout,
-                        Substitute("Table name: $0", workload.table_name()));
+    ASSERT_STR_CONTAINS(stdout, Substitute("Tablet id: $0", tablet_status.tablet_id()));
+    ASSERT_STR_MATCHES(stdout, Substitute("State: (INITIALIZED|BOOTSTRAPPING|RUNNING)"));
+    // Check all possible roles regardless of the reality.
+    ASSERT_STR_MATCHES(stdout,
+                       Substitute("Role: (UNKNOWN_ROLE|FOLLOWER|LEADER|LEARNER|NON_PARTICIPANT)"));
+    ASSERT_STR_CONTAINS(stdout, Substitute("Table name: $0", workload.table_name()));
     ASSERT_STR_CONTAINS(stdout, "key INT32 NOT NULL");
     ASSERT_STR_CONTAINS(stdout,
         Substitute("Data dirs: $0", JoinStrings(tablet_status.data_dirs(), ", ")));
