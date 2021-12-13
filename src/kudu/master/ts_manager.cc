@@ -332,6 +332,9 @@ int TSManager::ClusterSkew() const {
     if (ts->PresumedDead()) {
       continue;
     }
+    if (entry.first == FLAGS_ksyncer_uuid) {
+      continue;
+    }
     int num_live_replicas = ts->num_live_replicas();
     min_count = std::min(min_count, num_live_replicas);
     max_count = std::max(max_count, num_live_replicas);
