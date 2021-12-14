@@ -41,5 +41,5 @@ modules:
                         restart_all_role: False
                         restart_module: False
                     process_keyword: 'kudu_collector.gflagfile'
-                    start_cmd: 'cd ${SENSORS_SOKU_HOME}/collector && sh start_kudu.sh collector'
+                    start_cmd: 'cd ${SENSORS_SOKU_HOME}/collector && sh start_kudu_collector.sh'
                     stateful: FALSE

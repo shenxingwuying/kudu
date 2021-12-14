@@ -90,7 +90,7 @@ class CollectorModuleInstaller(ExternalModuleInstaller):
 
     def do_start(self):
         collector_home = os.path.join(self.get_product_home_dir(), 'collector')
-        cmd = 'cd %s && sh start_kudu.sh collector' % collector_home
+        cmd = 'cd %s && sh start_kudu_collector.sh' % collector_home
         shell_utils.check_call(cmd, self.logger.debug)
 
     def do_stop(self):

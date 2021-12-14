@@ -36,7 +36,7 @@ build_modules:
           - ["RUN", "sh build.sh"]
           # Collector模块的构成和kudu一样，增加Collector模块的原因是为了使用默认的升级流程来升级Collector
           - ["COPY", "/opt/kudu/installed/*", "./"]
-          - ["COPY", "soku-construction-blueprint/step/start_kudu.sh", "./"]
+          - ["COPY", "soku-construction-blueprint/step/start_kudu_collector.sh", "./"]
 
   soku_tool:
     variants:
