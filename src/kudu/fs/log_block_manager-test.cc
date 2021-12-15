@@ -1035,8 +1035,8 @@ class LogBlockManagerStartupBenchmarkTest:
     public LogBlockManagerTest,
     public ::testing::WithParamInterface<bool> {
 };
-INSTANTIATE_TEST_SUITE_P(StartupBenchmarkSuite, LogBlockManagerStartupBenchmarkTest,
-                         ::testing::Values(false, true));
+INSTANTIATE_TEST_CASE_P(StartupBenchmarkSuite, LogBlockManagerStartupBenchmarkTest,
+                        ::testing::Values(false, true));
 
 TEST_P(LogBlockManagerStartupBenchmarkTest, StartupBenchmark) {
   bool delete_blocks = GetParam();

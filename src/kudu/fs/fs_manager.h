@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
@@ -181,7 +182,14 @@ class FsManager {
   // If the filesystem has not been initialized, returns NotFound. In that
   // case, CreateInitialFileSystemLayout() may be used to initialize the
   // on-disk and in-memory structures.
-  Status Open(fs::FsReport* report = nullptr);
+  //
+  // If 'containers_processed' and 'containers_total' are not nullptr, they will
+  // be populated with total containers attempted to be opened/processed and
+  // total containers present respectively in the subsequent calls made to
+  // the block manager.
+  Status Open(fs::FsReport* report = nullptr,
+              std::atomic<int>* containers_processed = nullptr,
+              std::atomic<int>* containers_total = nullptr);
 
   // Create the initial filesystem layout. If 'uuid' is provided, uses it as
   // uuid of the filesystem. Otherwise generates one at random.

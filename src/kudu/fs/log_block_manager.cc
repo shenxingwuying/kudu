@@ -148,6 +148,11 @@ DEFINE_int32(log_container_metadata_rewrite_inject_latency_ms, 0,
              "Only for testing.");
 TAG_FLAG(log_container_metadata_rewrite_inject_latency_ms, hidden);
 
+DEFINE_int32(log_container_sample_count, -1,
+             "Total count of log containers to load for sampling purpose. Less than or equal to 0 "
+             "means no limit. Only for CLI tool.");
+TAG_FLAG(log_container_sample_count, hidden);
+
 METRIC_DEFINE_gauge_uint64(server, log_block_manager_bytes_under_management,
                            "Bytes Under Management",
                            kudu::MetricUnit::kBytes,
@@ -2145,7 +2150,8 @@ LogBlockManager::LogBlockManager(Env* env,
                                            opts_.parent_mem_tracker)),
     file_cache_(file_cache),
     buggy_el6_kernel_(IsBuggyEl6Kernel(env->GetKernelRelease())),
-    next_block_id_(1) {
+    next_block_id_(1),
+    sampled_enough_containers_(false) {
   managed_block_shards_.resize(kBlockMapChunk);
   for (auto& mb : managed_block_shards_) {
     mb.lock = std::unique_ptr<simple_spinlock>(new simple_spinlock());
@@ -2210,7 +2216,9 @@ LogBlockManager::~LogBlockManager() {
     }                                                           \
   } while (false)
 
-Status LogBlockManager::Open(FsReport* report) {
+Status LogBlockManager::Open(FsReport* report,
+                             std::atomic<int>* containers_processed,
+                             std::atomic<int>* containers_total) {
   // Establish (and log) block limits for each data directory using kernel,
   // filesystem, and gflags information.
   for (const auto& dd : dd_manager_->dirs()) {
@@ -2270,8 +2278,8 @@ Status LogBlockManager::Open(FsReport* report) {
     auto* dd_raw = dd.get();
     auto* results = &container_results[i];
     auto* s = &statuses[i];
-    dd->ExecClosure([this, dd_raw, results, s]() {
-      this->OpenDataDir(dd_raw, results, s);
+    dd->ExecClosure([this, dd_raw, results, s, containers_processed, containers_total]() {
+      this->OpenDataDir(dd_raw, results, s, containers_processed, containers_total);
       WARN_NOT_OK(*s, Substitute("failed to open dir $0", dd_raw->dir()));
     });
   }
@@ -2711,7 +2719,9 @@ Status LogBlockManager::RemoveLogBlock(const BlockId& block_id,
 void LogBlockManager::OpenDataDir(
     Dir* dir,
     vector<unique_ptr<internal::LogBlockContainerLoadResult>>* results,
-    Status* result_status) {
+    Status* result_status,
+    std::atomic<int>* containers_processed,
+    std::atomic<int>* containers_total) {
   vector<string> children;
   Status s = env_->GetChildren(dir->dir(), &children);
   if (!s.ok()) {
@@ -2733,15 +2743,21 @@ void LogBlockManager::OpenDataDir(
             child, LogBlockManager::kContainerMetadataFileSuffix, &container_name)) {
       continue;
     }
-    if (!InsertIfNotPresent(&containers_seen, container_name)) {
-      continue;
-    }
+    InsertIfNotPresent(&containers_seen, container_name);
+  }
+  if (containers_total) {
+    *containers_total += containers_seen.size();
+  }
 
+  for (const string& container_name : containers_seen) {
     // Add a new result for the container.
     results->emplace_back(new internal::LogBlockContainerLoadResult());
     LogBlockContainerRefPtr container;
     s = LogBlockContainer::Open(
         this, dir, &results->back()->report, container_name, &container);
+    if (containers_processed) {
+      ++*containers_processed;
+    }
     if (!s.ok()) {
       if (s.IsAborted()) {
         // Skip the container. Open() added a record of it to 'results->back()->report' for us.
@@ -2768,6 +2784,10 @@ void LogBlockManager::OpenDataDir(
 void LogBlockManager::LoadContainer(Dir* dir,
                                     LogBlockContainerRefPtr container,
                                     internal::LogBlockContainerLoadResult* result) {
+  // Skipping load any more container if sampled enough containers.
+  if (PREDICT_FALSE(sampled_enough_containers_)) {
+    return;
+  }
   // Process the records, building a container-local map for live blocks and
   // a list of dead blocks.
   //
@@ -2886,6 +2906,10 @@ void LogBlockManager::LoadContainer(Dir* dir,
   result->report.stats.live_block_bytes_aligned += container->live_bytes_aligned();
   result->report.stats.live_block_count += container->live_blocks();
   result->report.stats.lbm_container_count++;
+  result->report.stats.lbm_dead_container_count = result->dead_containers.size();
+  result->report.stats.lbm_low_live_block_container_count =
+      result->low_live_block_containers.size();
+  result->report.stats.lbm_need_repunching_block_count = result->need_repunching_blocks.size();
 
   next_block_id_.StoreMax(max_block_id + 1);
 
@@ -2909,6 +2933,11 @@ void LogBlockManager::LoadContainer(Dir* dir,
     AddNewContainerUnlocked(container);
     MakeContainerAvailableUnlocked(std::move(container));
     container_count = all_containers_by_name_.size();
+
+    if (FLAGS_log_container_sample_count > 0 &&
+        container_count > FLAGS_log_container_sample_count) {
+      sampled_enough_containers_ = true;
+    }
   }
 
   // Log every 200 number of log block containers

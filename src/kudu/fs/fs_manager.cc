@@ -58,6 +58,8 @@
 #include "kudu/util/slice.h"
 #include "kudu/util/stopwatch.h"
 
+DECLARE_int32(log_container_sample_count);
+
 DEFINE_bool(enable_data_block_fsync, true,
             "Whether to enable fsync() of data blocks, metadata, and their parent directories. "
             "Disabling this flag may cause data loss in the event of a system crash.");
@@ -347,7 +349,9 @@ Status FsManager::PartialOpen(CanonicalizedRootsList* missing_roots) {
   return Status::OK();
 }
 
-Status FsManager::Open(FsReport* report) {
+Status FsManager::Open(FsReport* report,
+                       std::atomic<int>* containers_processed,
+                       std::atomic<int>* containers_total) {
   // Load and verify the instance metadata files.
   //
   // Done first to minimize side effects in the case that the configured roots
@@ -428,9 +432,14 @@ Status FsManager::Open(FsReport* report) {
 
   // Finally, initialize and open the block manager if needed.
   if (!opts_.skip_block_manager) {
+    CHECK(opts_.read_only || FLAGS_log_container_sample_count <= 0);
     InitBlockManager();
     LOG_TIMING(INFO, "opening block manager") {
-      RETURN_NOT_OK(block_manager_->Open(report));
+      if (opts_.block_manager_type == "file") {
+        RETURN_NOT_OK(block_manager_->Open(report));
+      } else {
+        RETURN_NOT_OK(block_manager_->Open(report, containers_processed, containers_total));
+      }
     }
   }
 
