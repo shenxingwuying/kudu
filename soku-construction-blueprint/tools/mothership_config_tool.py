@@ -68,14 +68,10 @@ class MothershipKuduConfigTool:
                 self.my_host, self.server_api_url))
             return
         for (role_type, config) in update_config.items():
-            need_restart = False
+            is_config_change = False
             for (k, v) in config.items():
                 reset = self._check_and_change_cmd_args(role_type, k, v)
                 if reset:
-                    need_restart = True
-            if need_restart:
-                self.logger.warn('config change, need restart %s.' % (role_type))
-                shell_utils.check_call(
-                    'spadmin mothership restart -m kudu -r {}'.format(role_type))
-            else:
-                self.logger.info('config not change, do not need restart %s.' % (role_type))
+                    is_config_change = True
+            if is_config_change:
+                self.logger.warn('%s config has been updated.' % (role_type))

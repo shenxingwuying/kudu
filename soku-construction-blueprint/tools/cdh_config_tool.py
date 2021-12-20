@@ -139,18 +139,15 @@ class KuduConfigTool:
         if 1 == len(self.hosts):
             self.api.waiting_service_ready(True)
         if self.my_host == self.api.cm_host:
-            need_restart = False
+            is_config_change = False
             resetter = self.get_cloudera_config_setter()
             common_configs_json = self.get_config(resetter, '/clusters/cluster/services/kudu/config/', 'gflagfile_service_safety_valve')
             for (role_type, config) in update_config.items():
                 ret, common_configs_json = self.check_and_change_cmd_args(role_type, config, common_configs_json, resetter)
-                need_restart = need_restart or ret
-            # 重启服务
-            if need_restart:
-                self.logger.warn('need restart kudu server!')
-                self.api.post_service_command('kudu', 'restart', wait=True)
-                # 确认服务启动正常
-                self.wait_service_done('kudu', timeout=60*60)
+                is_config_change = is_config_change or ret
+            # 打印修改配置的日志信息
+            if is_config_change:
+                self.logger.warn('kudu config has been updated!')
         else:
             self.logger.info('host(%s) not cm_host(%s), skip' % (self.my_host, self.api.cm_host))
         if 1 == len(self.hosts):
