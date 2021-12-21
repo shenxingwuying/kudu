@@ -2167,6 +2167,7 @@ void TabletServiceImpl::ListTablets(const ListTabletsRequestPB* req,
       CHECK_OK(SchemaToPB(replica->tablet_metadata()->schema(),
                           status->mutable_schema()));
       replica->tablet_metadata()->partition_schema().ToPB(status->mutable_partition_schema());
+      status->set_schema_version(replica->tablet_metadata()->schema_version());
     }
   }
   context->RespondSuccess();
