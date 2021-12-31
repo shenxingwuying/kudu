@@ -23,6 +23,12 @@ package_modules:
     pub:
       - type: dragon
 
+  scheduler_job:
+    source: local
+    version: "1.14.1"
+    pub:
+      - type: dragon
+
   kudu:
     source: pre_pub
     search_policy: aligned

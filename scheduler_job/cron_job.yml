@@ -1,0 +1,25 @@
+- jobName: kudu_leader_rebalance
+  jobDesc: kudu 的日常主分片均衡任务
+  cronTime: 0 0 2 * * ? *
+  # 任务的执行模式 目前只支持SYNC
+  executeMode: SYNC
+  # 任务的命令，是一个json，必须包含runCmd对应执行的命令，可以包含preKillCmd/postKillCmd表示钩子命令
+  executeCmd: '{"runCmd":"cd ${SENSORS_SOKU_HOME}/admintools/maintenance_workers && python3 maintenance_main.py"}'
+  # 重试次数, 设为0表示不重试
+  retryTimes: 0
+  # 重试间隔，单位秒
+  retryInterval: 0
+  # 超时时间，单位分钟
+  timeout: 60
+  # 设为1表示超时后会主动杀死这个任务, 设为0不杀
+  killAfterTimeout: 0
+  # 设为1表示超时后会报警，设为0不报警
+  alarmAfterTimeout: 1
+  # 设为1表示保证顺序，即上一个调度周期完成后才会执行本调度周期的任务。设为0不保证时序，所有调度周期的任务只要可以触发则会并发执行。注意，如果scheduler长期停服务后启动（比如机器宕机，升级等操作长时间进行）会触发所有堆积任务，如果设置了不保证时序，则最多会启动20个并发任务，请注意资源占用。
+  sequence: 1
+   # 只有sequnce=1时这个选项才有效，如果设为1表示上一个周期的任务成功后才会调度下一个周期的任务，设为0则表示上一个周期不论成功失败，只要执行完就可以
+  sequenceForceSuccess: 0
+  # 设置为1表示可以调度，0表示不可以调度
+  inUse: 1
+  # 依赖的上游任务列表,可以为空.
+  upstreamTasks: ''

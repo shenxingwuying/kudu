@@ -16,3 +16,8 @@ build_modules:
     - type: dragon
       add_cmds:
         - ["COPY", "../admintools/*", "./"]
+
+  scheduler_job:
+    - type: dragon
+      add_cmds:
+        - ["COPY", "../scheduler_job/*", "./"]
