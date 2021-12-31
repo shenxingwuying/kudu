@@ -119,7 +119,7 @@ class MemRowSetCompactionInput : public CompactionInput {
  public:
   MemRowSetCompactionInput(const MemRowSet& memrowset,
                            const MvccSnapshot& snap,
-                           const Schema* projection)
+                           const SchemaPtr& projection)
     : mem_(32*1024),
       has_more_blocks_(false) {
     RowIteratorOptions opts;
@@ -145,7 +145,7 @@ class MemRowSetCompactionInput : public CompactionInput {
     // Realloc the internal block storage if we don't have enough space to
     // copy the whole leaf node's worth of data into it.
     if (PREDICT_FALSE(!row_block_ || num_in_block > row_block_->nrows())) {
-      row_block_.reset(new RowBlock(&iter_->schema(), num_in_block, &mem_));
+      row_block_.reset(new RowBlock(iter_->schema().get(), num_in_block, &mem_));
     }
 
     mem_.arena.Reset();
@@ -203,7 +203,7 @@ class MemRowSetCompactionInput : public CompactionInput {
     return Status::OK();
   }
 
-  const Schema &schema() const override {
+  const SchemaPtr schema() const override {
     return iter_->schema();
   }
 
@@ -233,7 +233,7 @@ class DiskRowSetCompactionInput : public CompactionInput {
         redo_delta_iter_(std::move(redo_delta_iter)),
         undo_delta_iter_(std::move(undo_delta_iter)),
         mem_(32 * 1024),
-        block_(&base_iter_->schema(), kRowsPerBlock, &mem_),
+        block_(base_iter_->schema().get(), kRowsPerBlock, &mem_),
         redo_mutation_block_(kRowsPerBlock, static_cast<Mutation *>(nullptr)),
         undo_mutation_block_(kRowsPerBlock, static_cast<Mutation *>(nullptr)) {}
 
@@ -284,7 +284,7 @@ class DiskRowSetCompactionInput : public CompactionInput {
     return Status::OK();
   }
 
-  const Schema &schema() const override {
+  const SchemaPtr schema() const override {
     return base_iter_->schema();
   }
 
@@ -574,7 +574,7 @@ class MergeCompactionInput : public CompactionInput {
 
  public:
   MergeCompactionInput(const vector<shared_ptr<CompactionInput> > &inputs,
-                       const Schema* schema)
+                       const SchemaPtr& schema)
     : schema_(schema),
       num_dup_rows_(0) {
     for (const shared_ptr<CompactionInput>& input : inputs) {
@@ -710,8 +710,8 @@ class MergeCompactionInput : public CompactionInput {
     return ProcessEmptyInputs();
   }
 
-  const Schema &schema() const override {
-    return *schema_;
+  const SchemaPtr schema() const override {
+    return schema_;
   }
 
  private:
@@ -877,12 +877,12 @@ class MergeCompactionInput : public CompactionInput {
     num_dup_rows_++;
     if (row_idx == 0) {
       duplicated_rows_.push_back(std::unique_ptr<RowBlock>(
-          new RowBlock(schema_, kDuplicatedRowsPerBlock, static_cast<RowBlockMemory*>(nullptr))));
+          new RowBlock(schema_.get(), kDuplicatedRowsPerBlock, static_cast<RowBlockMemory*>(nullptr))));
     }
     return duplicated_rows_.back()->row(row_idx);
   }
 
-  const Schema* schema_;
+  const SchemaPtr schema_;
   vector<MergeState *> states_;
   Arena* prepared_block_arena_;
 
@@ -1049,7 +1049,7 @@ string CompactionInputRowToString(const CompactionInputRow& input_row) {
 ////////////////////////////////////////////////////////////
 
 Status CompactionInput::Create(const DiskRowSet &rowset,
-                               const Schema* projection,
+                               const SchemaPtr& projection,
                                const MvccSnapshot &snap,
                                const IOContext* io_context,
                                unique_ptr<CompactionInput>* out) {
@@ -1083,21 +1083,21 @@ Status CompactionInput::Create(const DiskRowSet &rowset,
 }
 
 CompactionInput *CompactionInput::Create(const MemRowSet &memrowset,
-                                         const Schema* projection,
+                                         const SchemaPtr& projection,
                                          const MvccSnapshot &snap) {
   CHECK(projection->has_column_ids());
   return new MemRowSetCompactionInput(memrowset, snap, projection);
 }
 
 CompactionInput *CompactionInput::Merge(const vector<shared_ptr<CompactionInput> > &inputs,
-                                        const Schema* schema) {
+                                        const SchemaPtr& schema) {
   CHECK(schema->has_column_ids());
   return new MergeCompactionInput(inputs, schema);
 }
 
 
 Status RowSetsInCompaction::CreateCompactionInput(const MvccSnapshot &snap,
-                                                  const Schema* schema,
+                                                  const SchemaPtr& schema,
                                                   const IOContext* io_context,
                                                   shared_ptr<CompactionInput> *out) const {
   CHECK(schema->has_column_ids());
@@ -1456,7 +1456,8 @@ Status ReupdateMissedDeltas(const IOContext* io_context,
   // TODO: on this pass, we don't actually need the row data, just the
   // updates. So, this can be made much faster.
   vector<CompactionInputRow> rows;
-  const Schema* schema = &input->schema();
+  const SchemaPtr schemaPtr = input->schema();
+  const Schema* schema = schemaPtr.get();
 
   rowid_t output_row_offset = 0;
   while (input->HasMoreBlocks()) {

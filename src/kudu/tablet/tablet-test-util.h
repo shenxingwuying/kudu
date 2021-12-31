@@ -130,8 +130,16 @@ class KuduTabletTest : public KuduTest {
     return schema_;
   }
 
+  const SchemaPtr schema_ptr() const {
+    return std::make_shared<Schema>(schema_);
+  }
+
   const Schema &client_schema() const {
     return client_schema_;
+  }
+
+  const SchemaPtr client_schema_ptr() const {
+    return std::make_shared<Schema>(client_schema_);
   }
 
   clock::Clock* clock() {
@@ -199,7 +207,7 @@ class KuduRowSetTest : public KuduTabletTest {
 // This is strictly a measure of decoding and evaluating predicates
 static inline Status SilentIterateToStringList(RowwiseIterator* iter,
                                                int* fetched) {
-  const Schema& schema = iter->schema();
+  const Schema& schema = *iter->schema();
   RowBlockMemory memory(1024);
   RowBlock block(&schema, 100, &memory);
   *fetched = 0;
@@ -244,7 +252,7 @@ static inline void CollectRowsForSnapshots(
   for (const MvccSnapshot& snapshot : snaps) {
     DVLOG(1) << "Snapshot: " <<  snapshot.ToString();
     RowIteratorOptions opts;
-    opts.projection = &schema;
+    opts.projection = std::make_shared<Schema>(schema);
     opts.snap_to_include = snapshot;
     std::unique_ptr<RowwiseIterator> iter;
     ASSERT_OK(tablet->NewRowIterator(std::move(opts), &iter));
@@ -271,7 +279,7 @@ static inline void VerifySnapshotsHaveSameResult(
     DVLOG(1) << "Snapshot: " <<  snapshot.ToString();
 
     RowIteratorOptions opts;
-    opts.projection = &schema;
+    opts.projection = std::make_shared<Schema>(schema);
     opts.snap_to_include = snapshot;
     std::unique_ptr<RowwiseIterator> iter;
     ASSERT_OK(tablet->NewRowIterator(std::move(opts), &iter));
@@ -317,7 +325,8 @@ static inline Status DumpTablet(const Tablet& tablet,
                                 const Schema& projection,
                                 std::vector<std::string>* out) {
   std::unique_ptr<RowwiseIterator> iter;
-  RETURN_NOT_OK(tablet.NewRowIterator(projection, &iter));
+  SchemaPtr schema_ptr = std::make_shared<Schema>(projection);
+  RETURN_NOT_OK(tablet.NewRowIterator(schema_ptr, &iter));
   RETURN_NOT_OK(iter->Init(nullptr));
   std::vector<std::string> rows;
   RETURN_NOT_OK(IterateToStringList(iter.get(), &rows));

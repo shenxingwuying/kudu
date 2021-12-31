@@ -95,7 +95,7 @@ class VectorIterator : public ColumnwiseIterator {
   VectorIterator(vector<int64_t> ints, vector<uint8_t> is_deleted, Schema schema)
       : ints_(std::move(ints)),
         is_deleted_(std::move(is_deleted)),
-        schema_(std::move(schema)),
+        schema_(new Schema(std::move(schema))),
         cur_idx_(0),
         block_size_(ints_.size()),
         sel_vec_(nullptr) {
@@ -182,12 +182,12 @@ class VectorIterator : public ColumnwiseIterator {
     return Substitute("VectorIterator [$0,$1]", ints_[0], ints_[ints_.size() - 1]);
   }
 
-  const Schema& schema() const override {
+  const SchemaPtr schema() const override {
     return schema_;
   }
 
   void GetIteratorStats(vector<IteratorStats>* stats) const override {
-    stats->resize(schema().num_columns());
+    stats->resize(schema()->num_columns());
   }
 
  private:
@@ -196,7 +196,7 @@ class VectorIterator : public ColumnwiseIterator {
   // column so we can call ColumnBlock::SetCellValue() in MaterializeColumn(),
   // whose API requires taking an address to a non-temporary for the value.
   vector<uint8_t> is_deleted_;
-  const Schema schema_;
+  const SchemaPtr schema_;
   int cur_idx_;
   int block_size_;
   size_t prepared_;
@@ -608,7 +608,7 @@ class DummyIterator : public RowwiseIterator {
  public:
 
   explicit DummyIterator(const Schema& schema)
-      : schema_(schema) {
+      : schema_(new Schema(schema)) {
   }
 
   Status Init(ScanSpec* /*spec*/) override {
@@ -629,16 +629,16 @@ class DummyIterator : public RowwiseIterator {
     return "DummyIterator";
   }
 
-  const Schema& schema() const override {
+  const SchemaPtr schema() const override {
     return schema_;
   }
 
   void GetIteratorStats(vector<IteratorStats>* stats) const override {
-    stats->resize(schema().num_columns());
+    stats->resize(schema()->num_columns());
   }
 
  private:
-  Schema schema_;
+  SchemaPtr schema_;
 };
 
 // Verify the vectors of ColumnPredicate are the same.

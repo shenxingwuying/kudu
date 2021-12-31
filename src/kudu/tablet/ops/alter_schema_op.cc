@@ -96,7 +96,7 @@ Status AlterSchemaOp::Prepare() {
   TRACE("PREPARE ALTER-SCHEMA: Starting");
 
   // Decode schema
-  unique_ptr<Schema> schema(new Schema);
+  SchemaPtr schema = std::make_shared<Schema>();
   Status s = SchemaFromPB(state_->request()->schema(), schema.get());
   if (!s.ok()) {
     state_->completion_callback()->set_error(s, TabletServerErrorPB::INVALID_SCHEMA);
@@ -105,8 +105,6 @@ Status AlterSchemaOp::Prepare() {
 
   Tablet* tablet = state_->tablet_replica()->tablet();
   RETURN_NOT_OK(tablet->CreatePreparedAlterSchema(state(), schema.get()));
-
-  state_->AddToAutoReleasePool(std::move(schema));
 
   TRACE("PREPARE ALTER-SCHEMA: finished");
   return s;
@@ -138,7 +136,7 @@ Status AlterSchemaOp::Apply(CommitMsg** commit_msg) {
   }
 
   state_->tablet_replica()->log()
-    ->SetSchemaForNextLogSegment(*DCHECK_NOTNULL(state_->schema()),
+    ->SetSchemaForNextLogSegment(*DCHECK_NOTNULL(state_->schema().get()),
                                  state_->schema_version());
 
   // Altered tablets should be included in the next tserver heartbeat so that

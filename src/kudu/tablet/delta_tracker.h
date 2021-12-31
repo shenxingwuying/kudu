@@ -333,7 +333,7 @@ class DeltaTracker {
   // hold a lock on 'compact_flush_lock_'in order to guard against a
   // race on 'redo_delta_stores_'.
   Status MakeDeltaIteratorMergerUnlocked(const fs::IOContext* io_context,
-                                         size_t start_idx, size_t end_idx, const Schema* projection,
+                                         size_t start_idx, size_t end_idx, const SchemaPtr& projection,
                                          std::vector<std::shared_ptr<DeltaStore>>* target_stores,
                                          std::vector<BlockId>* target_blocks,
                                          std::unique_ptr<DeltaIterator>* out);

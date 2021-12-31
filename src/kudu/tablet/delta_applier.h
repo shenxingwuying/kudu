@@ -61,7 +61,7 @@ class DeltaApplier : public ColumnwiseIterator {
 
   std::string ToString() const OVERRIDE;
 
-  const Schema &schema() const OVERRIDE;
+  const SchemaPtr schema() const OVERRIDE;
 
   virtual void GetIteratorStats(std::vector<IteratorStats>* stats) const OVERRIDE;
 

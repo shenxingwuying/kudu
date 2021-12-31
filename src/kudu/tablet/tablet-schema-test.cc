@@ -118,10 +118,10 @@ class TestTabletSchema : public KuduTabletTest {
 // the original schema. Verify that the server reject the request.
 TEST_F(TestTabletSchema, TestRead) {
   const size_t kNumRows = 10;
-  Schema projection({ ColumnSchema("key", INT32),
+  SchemaPtr projection(std::make_shared<Schema>({ ColumnSchema("key", INT32),
                       ColumnSchema("c2", INT64),
                       ColumnSchema("c3", STRING) },
-                    1);
+                    1));
 
   InsertRows(client_schema_, 0, kNumRows);
 

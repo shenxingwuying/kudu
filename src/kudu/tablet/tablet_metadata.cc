@@ -167,9 +167,9 @@ Status TabletMetadata::LoadOrCreate(FsManager* fs_manager,
                                     scoped_refptr<TabletMetadata>* metadata) {
   Status s = Load(fs_manager, tablet_id, metadata);
   if (s.ok()) {
-    if (!(*metadata)->schema().Equals(schema)) {
+    if (!(*metadata)->schema()->Equals(schema)) {
       return Status::Corruption(Substitute("Schema on disk ($0) does not "
-        "match expected schema ($1)", (*metadata)->schema().ToString(),
+        "match expected schema ($1)", (*metadata)->schema()->ToString(),
         schema.ToString()));
     }
     return Status::OK();
@@ -313,7 +313,6 @@ TabletMetadata::TabletMetadata(FsManager* fs_manager, string tablet_id,
       next_rowset_idx_(0),
       last_durable_mrs_id_(kNoDurableMemStore),
       schema_(new Schema(schema)),
-      schema_ptr_(schema_.get()),
       schema_version_(0),
       table_name_(std::move(table_name)),
       partition_schema_(std::move(partition_schema)),
@@ -339,7 +338,6 @@ TabletMetadata::TabletMetadata(FsManager* fs_manager, string tablet_id)
       tablet_id_(std::move(tablet_id)),
       fs_manager_(fs_manager),
       next_rowset_idx_(0),
-      schema_ptr_(nullptr),
       num_flush_pins_(0),
       needs_flush_(false),
       flush_count_for_tests_(0),
@@ -390,11 +388,11 @@ Status TabletMetadata::LoadFromSuperBlock(const TabletSuperBlockPB& superblock) 
     table_name_ = superblock.table_name();
 
     uint32_t schema_version = superblock.schema_version();
-    unique_ptr<Schema> schema(new Schema());
+    SchemaPtr schema(new Schema());
     RETURN_NOT_OK_PREPEND(SchemaFromPB(superblock.schema(), schema.get()),
                           "Failed to parse Schema from superblock " +
                           SecureShortDebugString(superblock));
-    SetSchemaUnlocked(std::move(schema), schema_version);
+    SetSchemaUnlocked(schema, schema_version);
 
     if (!superblock.has_partition()) {
       // KUDU-818: Possible backward compatibility issue with tables created
@@ -418,7 +416,7 @@ Status TabletMetadata::LoadFromSuperBlock(const TabletSuperBlockPB& superblock) 
       CHECK_EQ(table_id_, superblock.table_id());
       PartitionSchema partition_schema;
       RETURN_NOT_OK(PartitionSchema::FromPB(superblock.partition_schema(),
-                                            *schema_ptr_, &partition_schema));
+                                            *schema_, &partition_schema));
       CHECK(partition_schema_ == partition_schema);
 
       Partition partition;
@@ -742,7 +740,7 @@ Status TabletMetadata::ToSuperBlockUnlocked(TabletSuperBlockPB* super_block,
   partition_.ToPB(pb.mutable_partition());
   pb.set_last_durable_mrs_id(last_durable_mrs_id_);
   pb.set_schema_version(schema_version_);
-  RETURN_NOT_OK(partition_schema_.ToPB(*schema_ptr_, pb.mutable_partition_schema()));
+  RETURN_NOT_OK(partition_schema_.ToPB(*schema_, pb.mutable_partition_schema()));
   pb.set_table_name(table_name_);
 
   for (const shared_ptr<RowSetMetadata>& meta : rowsets) {
@@ -755,8 +753,8 @@ Status TabletMetadata::ToSuperBlockUnlocked(TabletSuperBlockPB* super_block,
     InsertOrDie(pb.mutable_txn_metadata(), txn_id_and_metadata.first, meta_pb);
   }
 
-  DCHECK(schema_ptr_->has_column_ids());
-  RETURN_NOT_OK_PREPEND(SchemaToPB(*schema_ptr_, pb.mutable_schema()),
+  DCHECK(schema_->has_column_ids());
+  RETURN_NOT_OK_PREPEND(SchemaToPB(*schema_, pb.mutable_schema()),
                         "Couldn't serialize schema into superblock");
 
   pb.set_tablet_data_state(tablet_data_state_);
@@ -937,21 +935,16 @@ RowSetMetadata *TabletMetadata::GetRowSetForTests(int64_t id) {
 }
 
 void TabletMetadata::SetSchema(const Schema& schema, uint32_t version) {
-  unique_ptr<Schema> new_schema(new Schema(schema));
+  SchemaPtr new_schema(new Schema(schema));
   std::lock_guard<LockType> l(data_lock_);
-  SetSchemaUnlocked(std::move(new_schema), version);
+  SetSchemaUnlocked(new_schema, version);
 }
 
 void TabletMetadata::SetSchemaUnlocked(
-    unique_ptr<Schema> new_schema, uint32_t version) {
+    SchemaPtr& new_schema, uint32_t version) {
   DCHECK(new_schema->has_column_ids());
 
-  // "Release" barrier ensures that, when we publish the new Schema object,
-  // all of its initialization is also visible.
-  base::subtle::Release_Store(reinterpret_cast<AtomicWord*>(&schema_ptr_),
-                              reinterpret_cast<AtomicWord>(new_schema.get()));
-  std::swap(schema_, new_schema);
-  old_schemas_.emplace_back(std::move(new_schema));
+  schema_ = new_schema;
   schema_version_ = version;
 }
 

@@ -105,7 +105,7 @@ class CompactionInput {
   //
   // TODO: can we make the above less messy?
   static Status Create(const DiskRowSet &rowset,
-                       const Schema* projection,
+                       const SchemaPtr& projection,
                        const MvccSnapshot &snap,
                        const fs::IOContext* io_context,
                        std::unique_ptr<CompactionInput>* out);
@@ -113,13 +113,13 @@ class CompactionInput {
   // Create an input which reads from the given memrowset, yielding base rows and updates
   // prior to the given snapshot.
   static CompactionInput *Create(const MemRowSet &memrowset,
-                                 const Schema* projection,
+                                 const SchemaPtr &projection,
                                  const MvccSnapshot &snap);
 
   // Create an input which merges several other compaction inputs. The inputs are merged
   // in key-order according to the given schema. All inputs must have matching schemas.
   static CompactionInput *Merge(const std::vector<std::shared_ptr<CompactionInput> > &inputs,
-                                const Schema *schema);
+                                const SchemaPtr& schema);
 
   virtual Status Init() = 0;
   virtual Status PrepareBlock(std::vector<CompactionInputRow> *block) = 0;
@@ -132,7 +132,7 @@ class CompactionInput {
   virtual Status FinishBlock() = 0;
 
   virtual bool HasMoreBlocks() = 0;
-  virtual const Schema &schema() const = 0;
+  virtual const SchemaPtr schema() const = 0;
 
   virtual ~CompactionInput() {}
 };
@@ -154,7 +154,7 @@ class RowSetsInCompaction {
   // 'schema' is the schema for the output of the compaction, and must remain valid
   // for the lifetime of the returned CompactionInput.
   Status CreateCompactionInput(const MvccSnapshot &snap,
-                               const Schema* schema,
+                               const SchemaPtr& schema,
                                const fs::IOContext* io_context,
                                std::shared_ptr<CompactionInput> *out) const;
 

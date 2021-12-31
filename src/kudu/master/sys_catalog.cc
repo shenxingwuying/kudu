@@ -781,7 +781,8 @@ Status SysCatalogTable::ProcessRows(
   spec.AddPredicate(pred);
 
   unique_ptr<RowwiseIterator> iter;
-  RETURN_NOT_OK(tablet_replica_->tablet()->NewRowIterator(schema_, &iter));
+  SchemaPtr schema_ptr(new Schema(schema_));
+  RETURN_NOT_OK(tablet_replica_->tablet()->NewRowIterator(schema__ptr, &iter));
   RETURN_NOT_OK(iter->Init(&spec));
 
   RowBlockMemory mem(32 * 1024);

@@ -135,7 +135,7 @@ Status DuplicatingRowSet::NewRowIterator(const RowIteratorOptions& opts,
   return Status::OK();
 }
 
-Status DuplicatingRowSet::NewCompactionInput(const Schema* /*projection*/,
+Status DuplicatingRowSet::NewCompactionInput(const SchemaPtr& /*projection*/,
                                              const MvccSnapshot& /*snap*/,
                                              const IOContext* /*io_context*/,
                                              unique_ptr<CompactionInput>* /*out*/) const  {

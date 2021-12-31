@@ -72,7 +72,7 @@ struct RowIteratorOptions {
   // The projection to use in the iteration.
   //
   // Defaults to nullptr.
-  const Schema* projection;
+  SchemaPtr projection;
 
   // Ops not committed in this snapshot will be ignored in the iteration.
   //
@@ -153,7 +153,7 @@ class RowSet {
   //
   // The provided 'projection' is for the compaction output. Each row
   // will be projected into this Schema.
-  virtual Status NewCompactionInput(const Schema* projection,
+  virtual Status NewCompactionInput(const SchemaPtr& projection,
                                     const MvccSnapshot &snap,
                                     const fs::IOContext* io_context,
                                     std::unique_ptr<CompactionInput>* out) const = 0;
@@ -400,7 +400,7 @@ class DuplicatingRowSet : public RowSet {
   virtual Status NewRowIterator(const RowIteratorOptions& opts,
                                 std::unique_ptr<RowwiseIterator>* out) const override;
 
-  virtual Status NewCompactionInput(const Schema* projection,
+  virtual Status NewCompactionInput(const SchemaPtr& projection,
                                     const MvccSnapshot &snap,
                                     const fs::IOContext* io_context,
                                     std::unique_ptr<CompactionInput>* out) const override;

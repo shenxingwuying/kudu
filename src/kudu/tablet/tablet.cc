@@ -262,7 +262,7 @@ Tablet::Tablet(scoped_refptr<TabletMetadata> metadata,
                shared_ptr<MemTracker> parent_mem_tracker,
                MetricRegistry* metric_registry,
                scoped_refptr<LogAnchorRegistry> log_anchor_registry)
-  : key_schema_(metadata->schema().CreateKeyProjection()),
+  : key_schema_(metadata->schema()->CreateKeyProjection()),
     metadata_(std::move(metadata)),
     log_anchor_registry_(std::move(log_anchor_registry)),
     mem_trackers_(tablet_id(), std::move(parent_mem_tracker)),
@@ -371,7 +371,7 @@ Status Tablet::Open(const unordered_set<int64_t>& in_flight_txn_ids,
 
     // Now that the current state is loaded, create the new MemRowSet with the next id.
     shared_ptr<MemRowSet> new_mrs;
-    RETURN_NOT_OK(MemRowSet::Create(next_mrs_id_++, *schema(),
+    RETURN_NOT_OK(MemRowSet::Create(next_mrs_id_++, schema(),
                                     log_anchor_registry_.get(),
                                     mem_trackers_.tablet_tracker,
                                     &new_mrs));
@@ -386,7 +386,7 @@ Status Tablet::Open(const unordered_set<int64_t>& in_flight_txn_ids,
       // NOTE: we are able to FindOrDie() on these IDs because
       // 'txn_ids_with_mrs' is a subset of the transaction IDs known by the
       // metadata.
-      RETURN_NOT_OK(MemRowSet::Create(0, *schema(), txn_id, FindOrDie(txn_meta_by_id, txn_id),
+      RETURN_NOT_OK(MemRowSet::Create(0, schema(), txn_id, FindOrDie(txn_meta_by_id, txn_id),
                                       log_anchor_registry_.get(),
                                       mem_trackers_.tablet_tracker,
                                       &txn_mrs));
@@ -462,7 +462,7 @@ void Tablet::Shutdown() {
 
 Status Tablet::GetMappedReadProjection(const Schema& projection,
                                        Schema *mapped_projection) const {
-  const Schema* cur_schema = schema();
+  const SchemaPtr cur_schema = schema();
   return cur_schema->GetMappedReadProjection(projection, mapped_projection);
 }
 
@@ -493,21 +493,21 @@ void Tablet::SplitKeyRange(const EncodedKey* start_key,
                             column_ids, target_chunk_size, key_range_info);
 }
 
-Status Tablet::NewRowIterator(const Schema& projection,
+Status Tablet::NewRowIterator(const SchemaPtr& projection,
                               unique_ptr<RowwiseIterator>* iter) const {
   RowIteratorOptions opts;
   // Yield current rows.
   opts.snap_to_include = MvccSnapshot(mvcc_);
-  opts.projection = &projection;
+  opts.projection = projection;
   return NewRowIterator(std::move(opts), iter);
 }
 
-Status Tablet::NewOrderedRowIterator(const Schema& projection,
+Status Tablet::NewOrderedRowIterator(const SchemaPtr& projection,
                                      unique_ptr<RowwiseIterator>* iter) const {
   RowIteratorOptions opts;
   // Yield current rows.
   opts.snap_to_include = MvccSnapshot(mvcc_);
-  opts.projection = &projection;
+  opts.projection = projection;
   opts.order = ORDERED;
   return NewRowIterator(std::move(opts), iter);
 }
@@ -544,14 +544,14 @@ Status Tablet::DecodeWriteOperations(const Schema* client_schema,
   // Decode the ops
   RowOperationsPBDecoder dec(&op_state->request()->row_operations(),
                              client_schema,
-                             schema(),
+                             schema().get(),
                              op_state->arena());
   RETURN_NOT_OK(dec.DecodeOperations<DecoderMode::WRITE_OPS>(&ops));
   TRACE_COUNTER_INCREMENT("num_ops", ops.size());
 
   // Important to set the schema before the ops -- we need the
   // schema in order to stringify the ops.
-  op_state->set_schema_at_decode_time(schema());
+  op_state->set_schema_at_decode_time(schema().get());
   op_state->SetRowOps(std::move(ops));
 
   return Status::OK();
@@ -744,7 +744,7 @@ Status Tablet::InsertOrUpsertUnlocked(const IOContext* io_context,
   }
 
   Timestamp ts = op_state->timestamp();
-  ConstContiguousRow row(schema(), op->decoded_op.row_data);
+  ConstContiguousRow row(schema().get(), op->decoded_op.row_data);
 
   // TODO(todd): the Insert() call below will re-encode the key, which is a
   // waste. Should pass through the KeyProbe structure perhaps.
@@ -819,7 +819,7 @@ Status Tablet::ApplyUpsertAsUpdate(const IOContext* io_context,
                                    RowOp* upsert,
                                    RowSet* rowset,
                                    ProbeStats* stats) {
-  const auto* schema = this->schema();
+  const auto* schema = this->schema().get();
   ConstContiguousRow row(schema, upsert->decoded_op.row_data);
   faststring buf;
   RowChangeListEncoder enc(&buf);
@@ -991,7 +991,7 @@ void Tablet::StartApplying(ParticipantOpState* op_state) {
 
 void Tablet::CreateTxnRowSets(int64_t txn_id, scoped_refptr<TxnMetadata> txn_meta) {
   shared_ptr<MemRowSet> new_mrs;
-  CHECK_OK(MemRowSet::Create(0, *schema(), txn_id, std::move(txn_meta),
+  CHECK_OK(MemRowSet::Create(0, schema(), txn_id, std::move(txn_meta),
                              log_anchor_registry_.get(),
                              mem_trackers_.tablet_tracker,
                              &new_mrs));
@@ -1266,7 +1266,7 @@ Status Tablet::ApplyRowOperation(const IOContext* io_context,
   }
   DCHECK(op_state != nullptr) << "must have a WriteOpState";
   DCHECK(op_state->op_id().IsInitialized()) << "OpState OpId needed for anchoring";
-  DCHECK_EQ(op_state->schema_at_decode_time(), schema());
+  DCHECK_EQ(op_state->schema_at_decode_time(), schema().get());
 
   // If we were unable to check rowset presence in batch (e.g. because we are processing
   // a batch which contains some duplicate keys) we need to do so now.
@@ -1524,7 +1524,7 @@ Status Tablet::ReplaceMemRowSetsUnlocked(RowSetsInCompaction* compaction,
   }
 
   shared_ptr<MemRowSet> new_mrs;
-  RETURN_NOT_OK(MemRowSet::Create(next_mrs_id_++, *schema(),
+  RETURN_NOT_OK(MemRowSet::Create(next_mrs_id_++, schema(),
                                   log_anchor_registry_.get(),
                                   mem_trackers_.tablet_tracker,
                                   &new_mrs));
@@ -1551,7 +1551,8 @@ Status Tablet::CreatePreparedAlterSchema(AlterSchemaOpState* op_state,
   // with the schema change,
   op_state->AcquireSchemaLock(&schema_lock_);
 
-  op_state->set_schema(schema);
+  SchemaPtr new_schema = std::make_shared<Schema>(*schema);
+  op_state->set_schema(new_schema);
   return Status::OK();
 }
 
@@ -1617,7 +1618,7 @@ Status Tablet::RewindSchemaForBootstrap(const Schema& new_schema,
     shared_ptr<RowSetTree> old_rowsets = components_->rowsets;
     CHECK(old_mrs->empty());
     shared_ptr<MemRowSet> new_mrs;
-    RETURN_NOT_OK(MemRowSet::Create(old_mrs->mrs_id(), new_schema,
+    RETURN_NOT_OK(MemRowSet::Create(old_mrs->mrs_id(), metadata_->schema(),
                                     log_anchor_registry_.get(),
                                     mem_trackers_.tablet_tracker,
                                     &new_mrs));
@@ -1867,7 +1868,7 @@ Status Tablet::DoMergeCompactionOrFlush(const RowSetsInCompaction &input,
   shared_ptr<CompactionInput> merge;
   RETURN_NOT_OK(input.CreateCompactionInput(flush_snap, schema(), &io_context, &merge));
 
-  RollingDiskRowSetWriter drsw(metadata_.get(), merge->schema(), DefaultBloomSizing(),
+  RollingDiskRowSetWriter drsw(metadata_.get(), *merge->schema(), DefaultBloomSizing(),
                                compaction_policy_->target_rowset_size());
   RETURN_NOT_OK_PREPEND(drsw.Open(), "Failed to open DiskRowSet for flush");
 
@@ -3010,10 +3011,10 @@ Tablet::Iterator::Iterator(const Tablet* tablet,
                            RowIteratorOptions opts)
     : tablet_(tablet),
       io_context_({ tablet->tablet_id() }),
-      projection_(*CHECK_NOTNULL(opts.projection)),
+      projection_(std::make_shared<Schema>(*opts.projection)),
       opts_(std::move(opts)) {
   opts_.io_context = &io_context_;
-  opts_.projection = &projection_;
+  opts_.projection = projection_;
 }
 
 Tablet::Iterator::~Iterator() {}
@@ -3022,7 +3023,7 @@ Status Tablet::Iterator::Init(ScanSpec *spec) {
   RETURN_NOT_OK(tablet_->CheckHasNotBeenStopped());
   DCHECK(iter_.get() == nullptr);
 
-  RETURN_NOT_OK(tablet_->GetMappedReadProjection(projection_, &projection_));
+  RETURN_NOT_OK(tablet_->GetMappedReadProjection(*projection_, projection_.get()));
 
   vector<IterWithBounds> iters;
   RETURN_NOT_OK(tablet_->CaptureConsistentIterators(opts_, spec, &iters));
@@ -3063,8 +3064,8 @@ string Tablet::Iterator::ToString() const {
   return s;
 }
 
-const Schema& Tablet::Iterator::schema() const {
-  return *opts_.projection;
+const SchemaPtr Tablet::Iterator::schema() const {
+  return opts_.projection;
 }
 
 void Tablet::Iterator::GetIteratorStats(vector<IteratorStats>* stats) const {

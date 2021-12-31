@@ -362,7 +362,7 @@ class DiskRowSet :
   virtual Status NewRowIterator(const RowIteratorOptions& opts,
                                 std::unique_ptr<RowwiseIterator>* out) const override;
 
-  virtual Status NewCompactionInput(const Schema* projection,
+  virtual Status NewCompactionInput(const SchemaPtr& projection,
                                     const MvccSnapshot &snap,
                                     const fs::IOContext* io_context,
                                     std::unique_ptr<CompactionInput>* out) const override;
