@@ -1299,7 +1299,6 @@ void CatalogManager::PrepareForLeadershipTask() {
         // Not an error at all.
         return s;
       }
-
       {
         std::lock_guard<simple_spinlock> l(state_lock_);
         if (state_ == kClosing) {
@@ -1890,7 +1889,6 @@ Status CatalogManager::CreateTable(const CreateTableRequestPB* orig_req,
   vector<Partition> partitions;
   RETURN_NOT_OK(partition_schema.CreatePartitions(
       split_rows, range_bounds, range_hash_schemas, schema, &partitions));
-
   // Check the restriction on the same number of hash dimensions across all the
   // ranges.
   //
@@ -2464,11 +2462,12 @@ Status CatalogManager::DeleteTable(const DeleteTableRequestPB& req,
 }
 
 Status CatalogManager::ApplyAlterSchemaSteps(const SysTablesEntryPB& current_pb,
-                                             vector<AlterTableRequestPB::Step> steps,
+                                             const vector<AlterTableRequestPB::Step>& steps,
                                              Schema* new_schema,
                                              ColumnId* next_col_id) {
   const SchemaPB& current_schema_pb = current_pb.schema();
-  Schema cur_schema;
+  SchemaPtr cur_schema_ptr = std::make_shared<Schema>();
+  Schema& cur_schema = *cur_schema_ptr.get();
   RETURN_NOT_OK(SchemaFromPB(current_schema_pb, &cur_schema));
 
   SchemaBuilder builder(cur_schema);
@@ -2826,7 +2825,8 @@ Status CatalogManager::AlterTableRpc(const AlterTableRequestPB& req,
           resp, MasterErrorPB::TABLE_ALREADY_PRESENT);
     }
 
-    Schema schema;
+    SchemaPtr schema_ptr(new Schema);
+    Schema& schema = *schema_ptr.get();
     RETURN_NOT_OK(SchemaFromPB(l.data().pb.schema(), &schema));
 
     // Rename the table in the HMS.

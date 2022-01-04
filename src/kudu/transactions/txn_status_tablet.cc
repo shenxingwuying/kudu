@@ -215,6 +215,7 @@ const Schema& TxnStatusTablet::GetSchemaWithoutIds() {
 
 Status TxnStatusTablet::VisitTransactions(TransactionsVisitor* visitor) {
   const auto& schema = GetSchemaWithoutIds();
+  const SchemaPtr schema_ptr = std::make_shared<Schema>(schema);
   // There are only TRANSACTION and PARTICIPANT entries today, but this filter
   // is conservative in case we add more entry types in the future.
   faststring record_types;
@@ -226,7 +227,7 @@ Status TxnStatusTablet::VisitTransactions(TransactionsVisitor* visitor) {
   ScanSpec spec;
   spec.AddPredicate(pred);
   unique_ptr<RowwiseIterator> iter;
-  RETURN_NOT_OK(tablet_replica_->tablet()->NewOrderedRowIterator(schema, &iter));
+  RETURN_NOT_OK(tablet_replica_->tablet()->NewOrderedRowIterator(schema_ptr, &iter));
   RETURN_NOT_OK(iter->Init(&spec));
 
   // Keep track of the current transaction ID so we know when to start a new
