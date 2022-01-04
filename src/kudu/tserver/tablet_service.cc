@@ -1162,7 +1162,8 @@ void TabletServiceAdminImpl::AlterSchema(const AlterSchemaRequestPB* req,
   if (schema_version == req->schema_version()) {
     // Sanity check, to verify that the tablet should have the same schema
     // specified in the request.
-    Schema req_schema;
+    SchemaPtr req_schema_ptr(new Schema);
+    Schema& req_schema = *req_schema_ptr.get();
     Status s = SchemaFromPB(req->schema(), &req_schema);
     if (!s.ok()) {
       SetupErrorAndRespond(resp->mutable_error(), s,
@@ -1170,7 +1171,8 @@ void TabletServiceAdminImpl::AlterSchema(const AlterSchemaRequestPB* req,
       return;
     }
 
-    Schema tablet_schema = replica->tablet_metadata()->schema();
+    SchemaPtr tablet_schema_ptr = replica->tablet_metadata()->schema();
+    Schema& tablet_schema = *tablet_schema_ptr.get();
     if (req_schema.Equals(tablet_schema)) {
       context->RespondSuccess();
       return;
@@ -1436,9 +1438,9 @@ void TabletServiceAdminImpl::CreateTablet(const CreateTabletRequestPB* req,
   TRACE_EVENT1("tserver", "CreateTablet",
                "tablet_id", req->tablet_id());
 
-  Schema schema;
-  Status s = SchemaFromPB(req->schema(), &schema);
-  DCHECK(schema.has_column_ids());
+  SchemaPtr schema_ptr(new Schema);
+  Status s = SchemaFromPB(req->schema(), schema_ptr.get());
+  DCHECK(schema_ptr->has_column_ids());
   if (!s.ok()) {
     SetupErrorAndRespond(resp->mutable_error(),
                          Status::InvalidArgument("Invalid Schema."),
@@ -1447,7 +1449,7 @@ void TabletServiceAdminImpl::CreateTablet(const CreateTabletRequestPB* req,
   }
 
   PartitionSchema partition_schema;
-  s = PartitionSchema::FromPB(req->partition_schema(), schema, &partition_schema);
+  s = PartitionSchema::FromPB(req->partition_schema(), *schema_ptr.get(), &partition_schema);
   if (!s.ok()) {
     SetupErrorAndRespond(resp->mutable_error(),
                          Status::InvalidArgument("Invalid PartitionSchema."),
@@ -1462,7 +1464,7 @@ void TabletServiceAdminImpl::CreateTablet(const CreateTabletRequestPB* req,
                           "partition=$4", req->tablet_id(),
                           req->has_table_type() ? TableTypePB_Name(req->table_type()) + " ": "",
                           req->table_name(), req->table_id(),
-                          partition_schema.PartitionDebugString(partition, schema));
+                          partition_schema.PartitionDebugString(partition, *schema_ptr.get()));
   VLOG(1) << "Full request: " << SecureDebugString(*req);
 
   s = server_->tablet_manager()->CreateNewTablet(
@@ -1470,7 +1472,7 @@ void TabletServiceAdminImpl::CreateTablet(const CreateTabletRequestPB* req,
       req->tablet_id(),
       partition,
       req->table_name(),
-      schema,
+      schema_ptr,
       partition_schema,
       req->config(),
       req->has_extra_config() ? boost::make_optional(req->extra_config()) : boost::none,
@@ -2178,7 +2180,7 @@ void TabletServiceImpl::Scan(const ScanRequestPB* req,
     // If the token doesn't have full scan privileges for the table, check
     // for required privileges based on the scan request.
     if (!privilege.scan_privilege()) {
-      const auto& schema = replica->tablet_metadata()->schema();
+      const auto& schema = *replica->tablet_metadata()->schema().get();
       if (!CheckScanPrivilegesOrRespond(scan_pb, schema, authorized_column_ids,
                                         "Scan", context)) {
         return;
@@ -2254,10 +2256,10 @@ void TabletServiceImpl::ListTablets(const ListTabletsRequestPB* req,
     }
 
     if (req->need_schema_info()) {
-      CHECK_OK(SchemaToPB(replica->tablet_metadata()->schema(),
+      CHECK_OK(SchemaToPB(*replica->tablet_metadata()->schema().get(),
                           status->mutable_schema()));
       CHECK_OK(replica->tablet_metadata()->partition_schema().ToPB(
-          replica->tablet_metadata()->schema(), status->mutable_partition_schema()));
+          *replica->tablet_metadata()->schema(), status->mutable_partition_schema()));
       status->set_schema_version(replica->tablet_metadata()->schema_version());
     }
   }
@@ -2300,7 +2302,7 @@ void TabletServiceImpl::SplitKeyRange(const SplitKeyRangeRequestPB* req,
       return;
     }
     if (!privilege.scan_privilege()) {
-      const auto& schema = replica->tablet_metadata()->schema();
+      const auto& schema = *replica->tablet_metadata()->schema().get();
       unordered_set<ColumnId> required_column_privileges;
       if (req->has_start_primary_key() || req->has_stop_primary_key()) {
         const auto& key_cols = schema.get_key_column_ids();
@@ -2345,7 +2347,8 @@ void TabletServiceImpl::SplitKeyRange(const SplitKeyRangeRequestPB* req,
 
   // Decode encoded key
   Arena arena(256);
-  Schema tablet_schema = replica->tablet_metadata()->schema();
+  SchemaPtr tablet_schema_ptr = replica->tablet_metadata()->schema();
+  Schema& tablet_schema = *tablet_schema_ptr.get();
   EncodedKey* start = nullptr;
   EncodedKey* stop = nullptr;
   if (req->has_start_primary_key()) {
@@ -2380,7 +2383,8 @@ void TabletServiceImpl::SplitKeyRange(const SplitKeyRangeRequestPB* req,
   }
 
   // Validate the column are valid
-  Schema schema;
+  SchemaPtr schema_ptr(new Schema);
+  Schema& schema = *schema_ptr.get();
   s = ColumnPBsToSchema(req->columns(), &schema);
   if (PREDICT_FALSE(!s.ok())) {
     SetupErrorAndRespond(resp->mutable_error(),
@@ -2482,7 +2486,7 @@ void TabletServiceImpl::Checksum(const ChecksumRequestPB* req,
     // If the token doesn't have full scan privileges for the table, check
     // for required privileges based on the checksum request.
     if (!privilege.scan_privilege()) {
-      const auto& schema = replica->tablet_metadata()->schema();
+      const auto& schema = *replica->tablet_metadata()->schema().get();
       if (!CheckScanPrivilegesOrRespond(new_req, schema, authorized_column_ids,
                                         "Checksum", context)) {
         return;
@@ -2762,14 +2766,15 @@ Status TabletServiceImpl::HandleNewScanRequest(TabletReplica* replica,
 
   // Create the user's requested projection.
   // TODO(todd): Add test cases for bad projections including 0 columns.
-  Schema projection;
+  SchemaPtr projection_ptr = std::make_shared<Schema>();
+  Schema& projection = *projection_ptr.get();
   Status s = ColumnPBsToSchema(scan_pb.projected_columns(), &projection);
   if (PREDICT_FALSE(!s.ok())) {
     *error_code = TabletServerErrorPB::INVALID_SCHEMA;
     return s;
   }
 
-  if (projection.has_column_ids()) {
+  if (projection_ptr->has_column_ids()) {
     *error_code = TabletServerErrorPB::INVALID_SCHEMA;
     return Status::InvalidArgument("User requests should not have Column IDs");
   }
@@ -2788,7 +2793,8 @@ Status TabletServiceImpl::HandleNewScanRequest(TabletReplica* replica,
     }
   }
 
-  const Schema& tablet_schema = replica->tablet_metadata()->schema();
+  const SchemaPtr tablet_schema_ptr = replica->tablet_metadata()->schema();
+  const Schema& tablet_schema = *tablet_schema_ptr.get();
 
   ScanSpec spec;
   s = SetupScanSpec(scan_pb, tablet_schema, scanner, &spec);
@@ -2810,7 +2816,7 @@ Status TabletServiceImpl::HandleNewScanRequest(TabletReplica* replica,
   //
   // NOTE: We should build the missing column after optimizing scan which will
   // remove unnecessary predicates.
-  vector<ColumnSchema> missing_cols = spec.GetMissingColumns(projection);
+  vector<ColumnSchema> missing_cols = spec.GetMissingColumns(*projection_ptr.get());
 
   // Build a new projection with the projection columns and the missing columns,
   // annotating each column as a key column appropriately.
@@ -2831,8 +2837,8 @@ Status TabletServiceImpl::HandleNewScanRequest(TabletReplica* replica,
       // CHECK_OK is safe because the tablet schema has no duplicate columns.
       CHECK_OK(projection_builder.AddColumn(col, /* is_key= */ true));
     }
-    for (int i = 0; i < projection.num_columns(); i++) {
-      const auto& col = projection.column(i);
+    for (int i = 0; i < projection_ptr->num_columns(); i++) {
+      const auto& col = projection_ptr->column(i);
       // Any key columns in the projection will be ignored.
       ignore_result(projection_builder.AddColumn(col, /* is_key= */ false));
     }
@@ -2841,7 +2847,7 @@ Status TabletServiceImpl::HandleNewScanRequest(TabletReplica* replica,
       ignore_result(projection_builder.AddColumn(col, /* is_key= */ false));
     }
   } else {
-    projection_builder.Reset(projection);
+    projection_builder.Reset(*projection_ptr.get());
     for (const ColumnSchema& col : missing_cols) {
       // CHECK_OK is safe because the builder's columns (from the projection)
       // and the missing columns are disjoint sets.
@@ -2853,13 +2859,13 @@ Status TabletServiceImpl::HandleNewScanRequest(TabletReplica* replica,
 
   // Store the client's specified projection, prior to adding any missing
   // columns for predicates, etc.
-  unique_ptr<Schema> client_projection(new Schema(std::move(projection)));
+  SchemaPtr client_projection(new Schema(std::move(projection)));
   projection = projection_builder.BuildWithoutIds();
-  VLOG(3) << "Scan projection: " << projection.ToString(Schema::BASE_INFO);
+  VLOG(3) << "Scan projection: " << projection_ptr->ToString(Schema::BASE_INFO);
 
   s = result_collector->InitSerializer(scan_pb.row_format_flags(),
-                                       projection,
-                                       *client_projection);
+                                       *projection_ptr.get(),
+                                       *client_projection.get());
   if (!s.ok()) {
     *error_code = TabletServerErrorPB::INVALID_SCAN_SPEC;
     return s;
@@ -2905,13 +2911,13 @@ Status TabletServiceImpl::HandleNewScanRequest(TabletReplica* replica,
           return Status::InvalidArgument("scan start timestamp is only supported "
                                          "in READ_AT_SNAPSHOT read mode");
         }
-        s = tablet->NewRowIterator(projection, &iter);
+        s = tablet->NewRowIterator(projection_ptr, &iter);
         break;
       }
       case READ_YOUR_WRITES: // Fallthrough intended
       case READ_AT_SNAPSHOT: {
         s = HandleScanAtSnapshot(
-            scan_pb, rpc_context, projection, tablet.get(), replica->time_manager(),
+            scan_pb, rpc_context, *projection_ptr.get(), tablet.get(), replica->time_manager(),
             &iter, &snap_start_timestamp, snap_timestamp, error_code);
         break;
       }
@@ -2987,7 +2993,7 @@ Status TabletServiceImpl::HandleNewScanRequest(TabletReplica* replica,
     return Status::OK();
   }
 
-  scanner->Init(std::move(iter), std::move(orig_spec), std::move(client_projection));
+  scanner->Init(std::move(iter), std::move(orig_spec), client_projection);
 
   // Stop the scanner timer because ContinueScanRequest starts its own timer.
   scanner_timer.Stop();
@@ -3293,7 +3299,7 @@ Status TabletServiceImpl::HandleScanAtSnapshot(const NewScanRequestPB& scan_pb,
   TRACE("All operations in snapshot committed. Waited for $0 microseconds", duration_usec);
 
   tablet::RowIteratorOptions opts;
-  opts.projection = &projection;
+  opts.projection = std::make_shared<Schema>(projection);
   opts.snap_to_include = snap;
   opts.order = scan_pb.order_mode();
 

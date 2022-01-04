@@ -229,11 +229,11 @@ class Tablet {
   // Create a new row iterator which yields the rows as of the current MVCC
   // state of this tablet.
   // The returned iterator is not initialized.
-  Status NewRowIterator(const Schema& projection,
+  Status NewRowIterator(const SchemaPtr& projection,
                         std::unique_ptr<RowwiseIterator>* iter) const;
 
   // Like above, but returns an ordered iterator.
-  Status NewOrderedRowIterator(const Schema& projection,
+  Status NewOrderedRowIterator(const SchemaPtr& projection,
                                std::unique_ptr<RowwiseIterator>* iter) const;
 
   // Create a new row iterator using specific iterator options.
@@ -411,8 +411,8 @@ class Tablet {
   // has a very small number of rows.
   Status DebugDump(std::vector<std::string> *lines = NULL);
 
-  const Schema* schema() const {
-    return &metadata_->schema();
+  const SchemaPtr schema() const {
+    return metadata_->schema();
   }
 
   // Returns a reference to the key projection of the tablet schema.
@@ -925,7 +925,7 @@ class Tablet::Iterator : public RowwiseIterator {
 
   const Tablet* tablet_;
   fs::IOContext io_context_;
-  Schema projection_;
+  SchemaPtr projection_;
   RowIteratorOptions opts_;
   std::unique_ptr<RowwiseIterator> iter_;
 };
