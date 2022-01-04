@@ -34,6 +34,7 @@
 #include "kudu/common/common.pb.h"
 #include "kudu/common/iterator_stats.h"
 #include "kudu/common/partition.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/log_anchor_registry.h"
@@ -89,8 +90,6 @@ using std::vector;
 using strings::Substitute;
 
 namespace kudu {
-
-class Schema;
 
 namespace tserver {
 
@@ -353,6 +352,7 @@ void TabletServerPathHandlers::HandleTabletsPage(const Webserver::WebRequest& /*
     for (const scoped_refptr<TabletReplica>& replica : replicas) {
       EasyJson replica_json = details_json.PushBack(EasyJson::kObject);
       const auto& tmeta = replica->tablet_metadata();
+      const SchemaPtr schema_ptr = tmeta->schema();
       TabletStatusPB status;
       replica->GetTabletStatusPB(&status);
       replica_json["table_name"] = status.table_name();
@@ -363,7 +363,7 @@ void TabletServerPathHandlers::HandleTabletsPage(const Webserver::WebRequest& /*
       }
       replica_json["partition"] =
           tmeta->partition_schema().PartitionDebugString(tmeta->partition(),
-                                                         tmeta->schema());
+                                                         *schema_ptr);
       replica_json["state"] = replica->HumanReadableState();
       if (status.has_estimated_on_disk_size()) {
         replica_json["n_bytes"] =
@@ -422,9 +422,9 @@ void TabletServerPathHandlers::HandleTabletPage(const Webserver::WebRequest& req
   output->Set("table_name", table_name);
 
   const auto& tmeta = replica->tablet_metadata();
-  const Schema& schema = tmeta->schema();
+  const SchemaPtr schema_ptr = tmeta->schema();
   output->Set("partition",
-              tmeta->partition_schema().PartitionDebugString(tmeta->partition(), schema));
+              tmeta->partition_schema().PartitionDebugString(tmeta->partition(), *schema_ptr));
   output->Set("on_disk_size", HumanReadableNumBytes::ToString(replica->OnDiskSize()));
   uint64_t live_row_count;
   Status s = replica->CountLiveRows(&live_row_count);
@@ -434,7 +434,7 @@ void TabletServerPathHandlers::HandleTabletPage(const Webserver::WebRequest& req
     output->Set("tablet_live_row_count", "N/A");
   }
 
-  SchemaToJson(schema, output);
+  SchemaToJson(*schema_ptr, output);
 }
 
 void TabletServerPathHandlers::HandleTabletSVGPage(const Webserver::WebRequest& req,

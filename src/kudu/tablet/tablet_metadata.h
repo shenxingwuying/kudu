@@ -19,6 +19,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -29,6 +30,7 @@
 
 #include "kudu/common/common.pb.h"
 #include "kudu/common/partition.h"
+#include "kudu/common/schema.h"
 #include "kudu/fs/block_id.h"
 #include "kudu/gutil/atomicops.h"
 #include "kudu/gutil/macros.h"
@@ -43,7 +45,6 @@ namespace kudu {
 
 class BlockIdPB;
 class FsManager;
-class Schema;
 class Timestamp;
 
 namespace consensus {
@@ -58,6 +59,7 @@ namespace tablet {
 
 class RowSetMetadata;
 class TxnMetadata;
+
 enum TxnState : int8_t;
 
 typedef std::vector<std::shared_ptr<RowSetMetadata> > RowSetMetadataVector;
@@ -150,19 +152,18 @@ class TabletMetadata : public RefCountedThreadSafe<TabletMetadata> {
 
   uint32_t schema_version() const;
 
-  void SetSchema(const Schema& schema, uint32_t version);
+  void SetSchema(const SchemaPtr& schema, uint32_t version);
 
   void SetTableName(const std::string& table_name);
 
   void SetExtraConfig(TableExtraConfigPB extra_config);
 
-  // Return a reference to the current schema.
+  // Return a scoped_refptr to the current schema.
   // This pointer will be valid until the TabletMetadata is destructed,
   // even if the schema is changed.
-  const Schema& schema() const {
-    const Schema* s = reinterpret_cast<const Schema*>(
-        base::subtle::Acquire_Load(reinterpret_cast<const AtomicWord*>(&schema_)));
-    return *s;
+  const SchemaPtr schema() const {
+    std::lock_guard<LockType> l(data_lock_);
+    return schema_;
   }
 
   // Returns the partition schema of the tablet's table.
@@ -367,7 +368,7 @@ class TabletMetadata : public RefCountedThreadSafe<TabletMetadata> {
   // Constructor for loading an existing tablet.
   TabletMetadata(FsManager* fs_manager, std::string tablet_id);
 
-  void SetSchemaUnlocked(std::unique_ptr<Schema> schema, uint32_t version);
+  void SwapSchemaUnlocked(SchemaPtr schema, uint32_t version, SchemaPtr* old_schema);
 
   Status LoadFromDisk();
 
@@ -433,19 +434,11 @@ class TabletMetadata : public RefCountedThreadSafe<TabletMetadata> {
   // merged with main state.
   std::unordered_map<int64_t, scoped_refptr<TxnMetadata>> txn_metadata_by_txn_id_;;
 
-  // The current schema version. This is owned by this class.
-  // We don't use unique_ptr so that we can do an atomic swap.
-  Schema* schema_;
+  // The current schema version.
+  SchemaPtr schema_;
   uint32_t schema_version_;
   std::string table_name_;
   PartitionSchema partition_schema_;
-
-  // Previous values of 'schema_'.
-  // These are currently kept alive forever, under the assumption that
-  // a given tablet won't have thousands of "alter table" calls.
-  // They are kept alive so that callers of schema() don't need to
-  // worry about reference counting or locking.
-  std::vector<Schema*> old_schemas_;
 
   // Protected by 'data_lock_'.
   BlockIdSet orphaned_blocks_;

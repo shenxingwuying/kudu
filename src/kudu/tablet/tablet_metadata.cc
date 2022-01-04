@@ -45,7 +45,6 @@
 #include "kudu/gutil/atomicops.h"
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/port.h"
-#include "kudu/gutil/stl_util.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/tablet/rowset_metadata.h"
 #include "kudu/tablet/txn_metadata.h"
@@ -163,9 +162,10 @@ Status TabletMetadata::LoadOrCreate(FsManager* fs_manager,
                                     scoped_refptr<TabletMetadata>* metadata) {
   Status s = Load(fs_manager, tablet_id, metadata);
   if (s.ok()) {
-    if (!(*metadata)->schema().Equals(schema)) {
+    const SchemaPtr schema_ptr = (*metadata)->schema();
+    if (*schema_ptr != schema) {
       return Status::Corruption(Substitute("Schema on disk ($0) does not "
-        "match expected schema ($1)", (*metadata)->schema().ToString(),
+        "match expected schema ($1)", schema_ptr->ToString(),
         schema.ToString()));
     }
     return Status::OK();
@@ -307,7 +307,7 @@ TabletMetadata::TabletMetadata(FsManager* fs_manager, string tablet_id,
       fs_manager_(fs_manager),
       next_rowset_idx_(0),
       last_durable_mrs_id_(kNoDurableMemStore),
-      schema_(new Schema(schema)),
+      schema_(std::make_shared<Schema>(schema)),
       schema_version_(0),
       table_name_(std::move(table_name)),
       partition_schema_(std::move(partition_schema)),
@@ -326,8 +326,6 @@ TabletMetadata::TabletMetadata(FsManager* fs_manager, string tablet_id,
 }
 
 TabletMetadata::~TabletMetadata() {
-  STLDeleteElements(&old_schemas_);
-  delete schema_;
 }
 
 TabletMetadata::TabletMetadata(FsManager* fs_manager, string tablet_id)
@@ -335,7 +333,6 @@ TabletMetadata::TabletMetadata(FsManager* fs_manager, string tablet_id)
       tablet_id_(std::move(tablet_id)),
       fs_manager_(fs_manager),
       next_rowset_idx_(0),
-      schema_(nullptr),
       num_flush_pins_(0),
       needs_flush_(false),
       flush_count_for_tests_(0),
@@ -386,11 +383,14 @@ Status TabletMetadata::LoadFromSuperBlock(const TabletSuperBlockPB& superblock) 
     table_name_ = superblock.table_name();
 
     uint32_t schema_version = superblock.schema_version();
-    unique_ptr<Schema> schema(new Schema());
+    SchemaPtr schema = std::make_shared<Schema>();
     RETURN_NOT_OK_PREPEND(SchemaFromPB(superblock.schema(), schema.get()),
                           "Failed to parse Schema from superblock " +
                           SecureShortDebugString(superblock));
-    SetSchemaUnlocked(std::move(schema), schema_version);
+    {
+      SchemaPtr old_schema;
+      SwapSchemaUnlocked(schema, schema_version, &old_schema);
+    }
 
     if (!superblock.has_partition()) {
       // KUDU-818: Possible backward compatibility issue with tables created
@@ -927,23 +927,21 @@ RowSetMetadata *TabletMetadata::GetRowSetForTests(int64_t id) {
   return nullptr;
 }
 
-void TabletMetadata::SetSchema(const Schema& schema, uint32_t version) {
-  unique_ptr<Schema> new_schema(new Schema(schema));
-  std::lock_guard<LockType> l(data_lock_);
-  SetSchemaUnlocked(std::move(new_schema), version);
+void TabletMetadata::SetSchema(const SchemaPtr& schema, uint32_t version) {
+  // In case this is the last reference to the schema, destruct the pointer
+  // outside the lock.
+  SchemaPtr old_schema;
+  {
+    std::lock_guard<LockType> l(data_lock_);
+    SwapSchemaUnlocked(schema, version, &old_schema);
+  }
 }
 
-void TabletMetadata::SetSchemaUnlocked(unique_ptr<Schema> new_schema, uint32_t version) {
-  DCHECK(new_schema->has_column_ids());
-
-  Schema* old_schema = schema_;
-  // "Release" barrier ensures that, when we publish the new Schema object,
-  // all of its initialization is also visible.
-  base::subtle::Release_Store(reinterpret_cast<AtomicWord*>(&schema_),
-                              reinterpret_cast<AtomicWord>(new_schema.release()));
-  if (PREDICT_TRUE(old_schema)) {
-    old_schemas_.push_back(old_schema);
-  }
+void TabletMetadata::SwapSchemaUnlocked(SchemaPtr schema, uint32_t version,
+                                        SchemaPtr* old_schema) {
+  DCHECK(schema->has_column_ids());
+  *old_schema = std::move(schema_);
+  schema_ = std::move(schema);
   schema_version_ = version;
 }
 

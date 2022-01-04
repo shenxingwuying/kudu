@@ -822,6 +822,7 @@ Status SummarizeDataSize(const RunnerContext& context) {
     RETURN_NOT_OK_PREPEND(TabletMetadata::Load(fs.get(), tablet_id, &meta),
                           Substitute("could not load tablet metadata for $0", tablet_id));
     const string& table_id = meta->table_id();
+    const SchemaPtr schema_ptr = meta->schema();
     for (const shared_ptr<RowSetMetadata>& rs_meta : meta->rowsets()) {
       TabletSizeStats rowset_stats;
       RETURN_NOT_OK(SummarizeSize(fs.get(), rs_meta->redo_delta_blocks(),
@@ -838,11 +839,11 @@ Status SummarizeDataSize(const RunnerContext& context) {
       for (const auto& e : column_blocks_by_id) {
         const auto& col_id = e.first;
         const auto& block = e.second;
-        const auto& col_idx = meta->schema().find_column_by_id(col_id);
+        const auto& col_idx = schema_ptr->find_column_by_id(col_id);
         string col_key = Substitute(
             "c$0 ($1)", col_id,
             (col_idx != Schema::kColumnNotFound) ?
-                meta->schema().column(col_idx).name() : "?");
+                schema_ptr->column(col_idx).name() : "?");
         RETURN_NOT_OK(SummarizeSize(
             fs.get(), { block }, col_key, &rowset_stats.column_bytes[col_key]));
       }
@@ -929,12 +930,12 @@ Status DumpBlockIdsForLocalReplica(const RunnerContext& context) {
   cout << "Listing all data blocks in tablet "
        << tablet_id << ":" << endl;
 
-  Schema schema = meta->schema();
+  SchemaPtr schema = meta->schema();
 
   size_t idx = 0;
   for (const shared_ptr<RowSetMetadata>& rs_meta : meta->rowsets())  {
     cout << "Rowset " << idx++ << endl;
-    RETURN_NOT_OK(ListBlocksInRowSet(schema, *rs_meta));
+    RETURN_NOT_OK(ListBlocksInRowSet(*schema.get(), *rs_meta));
   }
 
   return Status::OK();
@@ -945,11 +946,11 @@ Status DumpTabletMeta(FsManager* fs_manager,
   scoped_refptr<TabletMetadata> meta;
   RETURN_NOT_OK(TabletMetadata::Load(fs_manager, tablet_id, &meta));
 
-  const Schema& schema = meta->schema();
+  const Schema& schema = *meta->schema().get();
 
   cout << Indent(indent) << "Partition: "
        << meta->partition_schema().PartitionDebugString(meta->partition(),
-                                                        meta->schema())
+                                                        schema)
        << endl;
   cout << Indent(indent) << "Table name: " << meta->table_name()
        << " Table id: " << meta->table_id() << endl;
@@ -1004,7 +1005,7 @@ Status DumpRowSetInternal(const IOContext& ctx,
   if (FLAGS_dump_all_columns) {
     RETURN_NOT_OK(rs->DebugDump(&lines));
   } else {
-    Schema key_proj = rs_meta->tablet_schema().CreateKeyProjection();
+    Schema key_proj = rs_meta->tablet_schema()->CreateKeyProjection();
     RowIteratorOptions opts;
     opts.projection = &key_proj;
     opts.io_context = &ctx;

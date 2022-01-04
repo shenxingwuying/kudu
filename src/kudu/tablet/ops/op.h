@@ -207,15 +207,8 @@ class OpState {
   }
 
   // Sets a heap object to be managed by this op's AutoReleasePool.
-  template<class T>
-  T* AddToAutoReleasePool(T* t) {
-    return pool_.Add(t);
-  }
-
-  // Sets an array heap object to be managed by this op's AutoReleasePool.
-  template<class T>
-  T* AddArrayToAutoReleasePool(T* t) {
-    return pool_.AddArray(t);
+  void AddToAutoReleasePool(SchemaPtr t) {
+    schemas_pool_.emplace_back(std::move(t));
   }
 
   // Return the arena associated with this op.
@@ -288,7 +281,7 @@ class OpState {
   // Optional callback to be called once the op completes.
   std::unique_ptr<OpCompletionCallback> completion_clbk_;
 
-  AutoReleasePool pool_;
+  std::deque<SchemaPtr> schemas_pool_;
 
   // This operation's timestamp.
   // This is only set once during the operation lifecycle, using external synchronization.
