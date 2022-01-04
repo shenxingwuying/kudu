@@ -1056,7 +1056,7 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   Status DeleteTskEntries(const std::set<std::string>& entry_ids);
 
   Status ApplyAlterSchemaSteps(const SysTablesEntryPB& current_pb,
-                               std::vector<AlterTableRequestPB::Step> steps,
+                               const std::vector<AlterTableRequestPB::Step>& steps,
                                Schema* new_schema,
                                ColumnId* next_col_id);
 

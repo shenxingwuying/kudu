@@ -192,7 +192,7 @@ class MergeIterState : public boost::intrusive::list_base_hook<> {
 
   // Returns the schema from the underlying iterator.
   const Schema& schema() const {
-    return DCHECK_NOTNULL(iwb_.iter)->schema();
+    return iwb_.iter->schema();
   }
 
   // Pulls the next block from the underlying iterator.
@@ -516,7 +516,7 @@ class MergeIterator : public RowwiseIterator {
   const MergeIteratorOptions opts_;
 
   // Initialized during Init.
-  unique_ptr<Schema> schema_;
+  SchemaPtr schema_;
 
   bool initted_;
 
@@ -616,7 +616,7 @@ Status MergeIterator::Init(ScanSpec *spec) {
   finished_iter_stats_by_col_.resize(schema_->num_columns());
 #ifndef NDEBUG
   for (const auto& s : states_) {
-    if (!s.schema().Equals(*schema_)) {
+    if (!s.schema().Equals(*schema_.get())) {
       return Status::InvalidArgument(
           Substitute("Schemas do not match: $0 vs. $1",
                      schema_->ToString(), s.schema().ToString()));
@@ -960,7 +960,7 @@ class UnionIterator : public RowwiseIterator {
   void PopFront();
 
   // Schema: initialized during Init()
-  unique_ptr<Schema> schema_;
+  SchemaPtr schema_;
 
   bool initted_;
 

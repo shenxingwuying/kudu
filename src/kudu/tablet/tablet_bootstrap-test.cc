@@ -35,11 +35,11 @@
 #include "kudu/common/partial_row.h"
 #include "kudu/common/partition.h"
 #include "kudu/common/row_operations.h"
+#include "kudu/common/row_operations.pb.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/timestamp.h"
 #include "kudu/common/wire_protocol-test-util.h"
 #include "kudu/common/wire_protocol.h"
-#include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/consensus-test-util.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/consensus_meta.h"
@@ -105,14 +105,15 @@ class BootstrapTest : public LogTestBase {
   }
 
   Status LoadTestTabletMetadata(int mrs_id, int delta_id, scoped_refptr<TabletMetadata>* meta) {
-    Schema schema = SchemaBuilder(schema_).Build();
+    SchemaPtr schema_ptr = std::make_shared<Schema>(SchemaBuilder(schema_).Build());
+    Schema& schema = *schema_ptr;
     std::pair<PartitionSchema, Partition> partition = CreateDefaultPartition(schema);
 
     RETURN_NOT_OK(TabletMetadata::LoadOrCreate(fs_manager_.get(),
                                                log::kTestTablet,
                                                log::kTestTable,
                                                log::kTestTableId,
-                                               schema,
+                                               schema_ptr,
                                                partition.first,
                                                partition.second,
                                                TABLET_DATA_READY,
@@ -196,9 +197,10 @@ class BootstrapTest : public LogTestBase {
 
   void IterateTabletRows(const Tablet* tablet,
                          vector<string>* results) {
+    SchemaPtr schema_ptr = std::make_shared<Schema>(schema_);
     unique_ptr<RowwiseIterator> iter;
     RowIteratorOptions opts;
-    opts.projection = &schema_;
+    opts.projection = schema_ptr;
     ASSERT_OK(tablet->NewRowIterator(std::move(opts), &iter));
     ASSERT_OK(iter->Init(nullptr));
     ASSERT_OK(IterateToStringList(iter.get(), results));

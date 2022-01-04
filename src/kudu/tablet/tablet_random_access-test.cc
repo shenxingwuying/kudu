@@ -33,11 +33,11 @@
 #include "kudu/common/common.pb.h"
 #include "kudu/common/iterator.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/row_operations.pb.h"
 #include "kudu/common/rowblock.h"
 #include "kudu/common/rowblock_memory.h"
 #include "kudu/common/scan_spec.h"
 #include "kudu/common/schema.h"
-#include "kudu/common/wire_protocol.pb.h"
 #include "kudu/gutil/port.h"
 #include "kudu/tablet/key_value_test_schema.h"
 #include "kudu/tablet/local_tablet_writer.h"
@@ -318,8 +318,9 @@ class TestRandomAccess : public KuduTabletTest {
   optional<ExpectedKeyValueRow> GetRow(int key) {
     ScanSpec spec;
     const Schema& schema = this->client_schema_;
+    SchemaPtr client_schema_ptr = std::make_shared<Schema>(schema);
     unique_ptr<RowwiseIterator> iter;
-    CHECK_OK(this->tablet()->NewRowIterator(schema, &iter));
+    CHECK_OK(this->tablet()->NewRowIterator(client_schema_ptr, &iter));
     auto pred_one = ColumnPredicate::Equality(schema.column(0), &key);
     spec.AddPredicate(pred_one);
     CHECK_OK(iter->Init(&spec));

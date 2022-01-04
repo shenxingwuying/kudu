@@ -135,7 +135,7 @@ Status DuplicatingRowSet::NewRowIterator(const RowIteratorOptions& opts,
   return Status::OK();
 }
 
-Status DuplicatingRowSet::NewCompactionInput(const Schema* /*projection*/,
+Status DuplicatingRowSet::NewCompactionInput(const SchemaPtr& /*projection*/,
                                              const MvccSnapshot& /*snap*/,
                                              const IOContext* /*io_context*/,
                                              unique_ptr<CompactionInput>* /*out*/) const  {
@@ -193,7 +193,8 @@ Status DuplicatingRowSet::MutateRow(Timestamp timestamp,
       #endif
     } else if (!s.IsNotFound()) {
       RETURN_NOT_OK_PREPEND(s, Substitute("Unable to mirror update to rowset $0 for key: $1",
-          new_rowset->ToString(), probe.schema()->CreateKeyProjection().DebugRow(probe.row_key())));
+          new_rowset->ToString(),
+          probe.schema()->CreateKeyProjection().DebugRow(probe.row_key())));
     }
     // IsNotFound is OK - it might be in a different one.
   }
