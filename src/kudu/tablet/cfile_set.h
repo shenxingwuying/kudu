@@ -207,8 +207,8 @@ class CFileSet::Iterator : public ColumnwiseIterator {
     return std::string("rowset iterator for ") + base_data_->ToString();
   }
 
-  const SchemaPtr schema() const OVERRIDE {
-    return projection_;
+  const Schema &schema() const OVERRIDE {
+    return *projection_;
   }
 
   // Return the ordinal index of the next row to be returned from

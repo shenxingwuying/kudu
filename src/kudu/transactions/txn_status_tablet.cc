@@ -236,7 +236,7 @@ Status TxnStatusTablet::VisitTransactions(TransactionsVisitor* visitor) {
   TxnStatusEntryPB prev_status_entry_pb;
   vector<ParticipantIdAndPB> prev_participants;
   RowBlockMemory mem;
-  RowBlock block(iter->schema().get(), 512, &mem);
+  RowBlock block(&iter->schema(), 512, &mem);
   // Iterate over the transaction and participant entries, notifying the
   // visitor once a transaction and all its participants have been found.
   while (iter->HasNext()) {

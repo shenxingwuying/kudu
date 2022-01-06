@@ -194,10 +194,10 @@ struct MSBTreeTraits : public btree::BTreeTraits {
 // points into that stack storage.
 #define DEFINE_MRSROW_ON_STACK(memrowset, varname, slice_name) \
   size_t varname##_size = sizeof(MRSRow::Header) + \
-                           ContiguousRowHelper::row_size(*(memrowset)->schema_nonvirtual().get()); \
+                           ContiguousRowHelper::row_size((memrowset)->schema_nonvirtual()); \
   uint8_t varname##_storage[varname##_size]; \
   Slice slice_name(varname##_storage, varname##_size); \
-  ContiguousRowHelper::InitNullsBitmap(*(memrowset)->schema_nonvirtual().get(), slice_name); \
+  ContiguousRowHelper::InitNullsBitmap((memrowset)->schema_nonvirtual(), slice_name); \
   MRSRow varname(memrowset, slice_name);
 
 
@@ -346,13 +346,13 @@ class MemRowSet : public RowSet,
                                     std::unique_ptr<CompactionInput>* out) const override;
 
   // Return the Schema for the rows in this memrowset.
-   const SchemaPtr schema() const {
-    return schema_;
+   const Schema &schema() const {
+    return *schema_;
   }
 
   // Same as schema(), but non-virtual method
-  const SchemaPtr schema_nonvirtual() const {
-    return schema_;
+  const Schema &schema_nonvirtual() const {
+    return *schema_;
   }
 
   int64_t mrs_id() const {
@@ -474,7 +474,7 @@ class MemRowSet : public RowSet,
   typedef btree::CBTree<MSBTreeTraits> MSBTree;
 
   int64_t id_;
-  SchemaPtr schema_;
+  const SchemaPtr schema_;
 
   // The transaction ID that inserted into this MemRowSet, and its corresponding metadata.
   boost::optional<int64_t> txn_id_;
@@ -573,8 +573,8 @@ class MemRowSet::Iterator : public RowwiseIterator {
     return "memrowset iterator";
   }
 
-  const SchemaPtr schema() const override {
-    return opts_.projection;
+  const Schema& schema() const override {
+    return *opts_.projection;
   }
 
   virtual void GetIteratorStats(std::vector<IteratorStats>* stats) const override {
@@ -583,7 +583,7 @@ class MemRowSet::Iterator : public RowwiseIterator {
     // an IteratorStats object for every column; vector::resize() is
     // used as it will also fill the 'stats' with new instances of
     // IteratorStats.
-    stats->resize(schema()->num_columns());
+    stats->resize(schema().num_columns());
   }
 
  private:
@@ -668,7 +668,7 @@ class MemRowSet::Iterator : public RowwiseIterator {
 };
 
 inline const Schema* MRSRow::schema() const {
-  return memrowset_->schema_nonvirtual().get();
+  return &memrowset_->schema_nonvirtual();
 }
 
 } // namespace tablet

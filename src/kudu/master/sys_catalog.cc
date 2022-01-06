@@ -787,7 +787,7 @@ Status SysCatalogTable::ProcessRows(
   RETURN_NOT_OK(iter->Init(&spec));
 
   RowBlockMemory mem(32 * 1024);
-  RowBlock block(iter->schema().get(), 512, &mem);
+  RowBlock block(&iter->schema(), 512, &mem);
   while (iter->HasNext()) {
     RETURN_NOT_OK(iter->NextBlock(&block));
     const size_t nrows = block.nrows();

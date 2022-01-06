@@ -31,6 +31,10 @@
 #include "kudu/tablet/rowset.h"
 #include "kudu/util/status.h"
 
+namespace kudu {
+class Schema;
+}  // namespace kudu
+
 using std::shared_ptr;
 using std::string;
 using std::unique_ptr;
@@ -71,7 +75,7 @@ string DeltaApplier::ToString() const {
   return s;
 }
 
-const SchemaPtr DeltaApplier::schema() const {
+const Schema &DeltaApplier::schema() const {
   return base_iter_->schema();
 }
 

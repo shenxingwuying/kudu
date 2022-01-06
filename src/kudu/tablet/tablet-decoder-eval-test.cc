@@ -260,8 +260,7 @@ public:
 
     RowBlockMemory mem(1024);
     size_t expected_count = ExpectedCount(nrows, cardinality, lower, upper);
-    SchemaPtr schema_ptr = iter->schema();
-    Schema& schema = *schema_ptr;
+    Schema schema = iter->schema();
     RowBlock block(&schema, 100, &mem);
     int fetched = 0;
     string column_str_a;

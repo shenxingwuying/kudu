@@ -423,9 +423,9 @@ ScanDescriptor Scanner::Descriptor() const {
   vector<IteratorStats> iterator_stats;
   iter_->GetIteratorStats(&iterator_stats);
 
-  DCHECK_EQ(iterator_stats.size(), iter_->schema()->num_columns());
+  DCHECK_EQ(iterator_stats.size(), iter_->schema().num_columns());
   for (int col_idx = 0; col_idx < iterator_stats.size(); col_idx++) {
-    descriptor.iterator_stats.emplace_back(iter_->schema()->column(col_idx).name(),
+    descriptor.iterator_stats.emplace_back(iter_->schema().column(col_idx).name(),
                                            iterator_stats[col_idx]);
   }
 

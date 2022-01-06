@@ -145,7 +145,7 @@ class MemRowSetCompactionInput : public CompactionInput {
     // Realloc the internal block storage if we don't have enough space to
     // copy the whole leaf node's worth of data into it.
     if (PREDICT_FALSE(!row_block_ || num_in_block > row_block_->nrows())) {
-      row_block_.reset(new RowBlock(iter_->schema().get(), num_in_block, &mem_));
+      row_block_.reset(new RowBlock(&iter_->schema(), num_in_block, &mem_));
     }
 
     mem_.arena.Reset();
@@ -203,7 +203,7 @@ class MemRowSetCompactionInput : public CompactionInput {
     return Status::OK();
   }
 
-  const SchemaPtr schema() const override {
+  const Schema& schema() const override {
     return iter_->schema();
   }
 
@@ -233,7 +233,7 @@ class DiskRowSetCompactionInput : public CompactionInput {
         redo_delta_iter_(std::move(redo_delta_iter)),
         undo_delta_iter_(std::move(undo_delta_iter)),
         mem_(32 * 1024),
-        block_(base_iter_->schema().get(), kRowsPerBlock, &mem_),
+        block_(&base_iter_->schema(), kRowsPerBlock, &mem_),
         redo_mutation_block_(kRowsPerBlock, static_cast<Mutation *>(nullptr)),
         undo_mutation_block_(kRowsPerBlock, static_cast<Mutation *>(nullptr)) {}
 
@@ -284,7 +284,7 @@ class DiskRowSetCompactionInput : public CompactionInput {
     return Status::OK();
   }
 
-  const SchemaPtr schema() const override {
+  const Schema& schema() const override {
     return base_iter_->schema();
   }
 
@@ -710,8 +710,8 @@ class MergeCompactionInput : public CompactionInput {
     return ProcessEmptyInputs();
   }
 
-  const SchemaPtr schema() const override {
-    return schema_;
+  const Schema& schema() const override {
+    return *schema_;
   }
 
  private:
@@ -1457,7 +1457,7 @@ Status ReupdateMissedDeltas(const IOContext* io_context,
   // TODO: on this pass, we don't actually need the row data, just the
   // updates. So, this can be made much faster.
   vector<CompactionInputRow> rows;
-  const Schema* schema = input->schema().get();
+  const Schema* schema = &input->schema();
 
   rowid_t output_row_offset = 0;
   while (input->HasMoreBlocks()) {

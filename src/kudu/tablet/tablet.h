@@ -898,7 +898,7 @@ class Tablet::Iterator : public RowwiseIterator {
 
   std::string ToString() const OVERRIDE;
 
-  const SchemaPtr schema() const OVERRIDE;
+  const Schema &schema() const OVERRIDE;
 
   virtual void GetIteratorStats(std::vector<IteratorStats>* stats) const OVERRIDE;
 

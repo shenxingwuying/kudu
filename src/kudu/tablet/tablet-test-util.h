@@ -203,8 +203,7 @@ class KuduRowSetTest : public KuduTabletTest {
 // This is strictly a measure of decoding and evaluating predicates
 static inline Status SilentIterateToStringList(RowwiseIterator* iter,
                                                int* fetched) {
-  const SchemaPtr schema_ptr = iter->schema();
-  const Schema& schema = *schema_ptr;
+  const Schema schema = iter->schema();
   RowBlockMemory memory(1024);
   RowBlock block(&schema, 100, &memory);
   *fetched = 0;
@@ -223,8 +222,7 @@ static inline Status IterateToStringList(RowwiseIterator* iter,
                                          std::vector<std::string>* out,
                                          int limit = INT_MAX) {
   out->clear();
-  SchemaPtr schema_ptr = iter->schema();
-  Schema& schema = *schema_ptr;
+  Schema schema = iter->schema();
   RowBlockMemory memory(1024);
   RowBlock block(&schema, 100, &memory);
   int fetched = 0;

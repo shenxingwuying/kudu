@@ -132,7 +132,7 @@ class CompactionInput {
   virtual Status FinishBlock() = 0;
 
   virtual bool HasMoreBlocks() = 0;
-  virtual const SchemaPtr schema() const = 0;
+  virtual const Schema &schema() const = 0;
 
   virtual ~CompactionInput() {}
 };

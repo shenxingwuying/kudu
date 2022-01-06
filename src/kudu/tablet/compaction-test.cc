@@ -185,11 +185,11 @@ class TestCompaction : public KuduRowSetTest {
                      int row_key,
                      int32_t val) {
     BuildRow(row_key, val);
-    if (!mrs->schema()->Equals(*row_builder_.schema())) {
+    if (!mrs->schema().Equals(*row_builder_.schema())) {
       // The MemRowSet is not projecting the row, so must be done by the caller
-      RowProjector projector(row_builder_.schema(), mrs->schema().get());
-      uint8_t rowbuf[ContiguousRowHelper::row_size(*mrs->schema())];
-      ContiguousRow dst_row(mrs->schema().get(), rowbuf);
+      RowProjector projector(row_builder_.schema(), &mrs->schema());
+      uint8_t rowbuf[ContiguousRowHelper::row_size(mrs->schema())];
+      ContiguousRow dst_row(&mrs->schema(), rowbuf);
       ASSERT_OK_FAST(projector.Init());
       ASSERT_OK_FAST(projector.ProjectRowForWrite(row_builder_.row(),
                                                   &dst_row, static_cast<Arena*>(nullptr)));

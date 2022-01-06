@@ -184,12 +184,12 @@ class VectorIterator : public ColumnwiseIterator {
     return Substitute("VectorIterator [$0,$1]", ints_[0], ints_[ints_.size() - 1]);
   }
 
-  const SchemaPtr schema() const override {
-    return schema_;
+  const Schema& schema() const override {
+    return *schema_;
   }
 
   void GetIteratorStats(vector<IteratorStats>* stats) const override {
-    stats->resize(schema()->num_columns());
+    stats->resize(schema().num_columns());
   }
 
  private:
@@ -631,12 +631,12 @@ class DummyIterator : public RowwiseIterator {
     return "DummyIterator";
   }
 
-  const SchemaPtr schema() const override {
-    return schema_;
+  const Schema& schema() const override {
+    return *schema_;
   }
 
   void GetIteratorStats(vector<IteratorStats>* stats) const override {
-    stats->resize(schema()->num_columns());
+    stats->resize(schema().num_columns());
   }
 
  private:

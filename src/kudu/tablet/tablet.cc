@@ -1870,7 +1870,7 @@ Status Tablet::DoMergeCompactionOrFlush(const RowSetsInCompaction &input,
   shared_ptr<CompactionInput> merge;
   RETURN_NOT_OK(input.CreateCompactionInput(flush_snap, schema(), &io_context, &merge));
 
-  RollingDiskRowSetWriter drsw(metadata_.get(), *merge->schema().get(), DefaultBloomSizing(),
+  RollingDiskRowSetWriter drsw(metadata_.get(), merge->schema(), DefaultBloomSizing(),
                                compaction_policy_->target_rowset_size());
   RETURN_NOT_OK_PREPEND(drsw.Open(), "Failed to open DiskRowSet for flush");
 
@@ -3066,8 +3066,8 @@ string Tablet::Iterator::ToString() const {
   return s;
 }
 
-const SchemaPtr Tablet::Iterator::schema() const {
-  return opts_.projection;
+const Schema& Tablet::Iterator::schema() const {
+  return *opts_.projection;
 }
 
 void Tablet::Iterator::GetIteratorStats(vector<IteratorStats>* stats) const {

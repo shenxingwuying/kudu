@@ -326,7 +326,7 @@ MemRowSet::Iterator *MemRowSet::NewIterator(const RowIteratorOptions& opts) cons
 MemRowSet::Iterator *MemRowSet::NewIterator() const {
   // TODO(todd): can we kill this function? should be only used by tests?
   RowIteratorOptions opts;
-  opts.projection = schema();
+  opts.projection = schema_;
   return NewIterator(opts);
 }
 
@@ -423,8 +423,8 @@ MemRowSet::Iterator::Iterator(const std::shared_ptr<const MemRowSet>& mrs,
       iter_(iter),
       opts_(std::move(opts)),
       projector_(
-          GenerateAppropriateProjector(mrs->schema_nonvirtual().get(), opts_.projection.get())),
-      delta_projector_(mrs->schema_nonvirtual().get(), opts_.projection.get()),
+          GenerateAppropriateProjector(&mrs->schema_nonvirtual(), opts_.projection.get())),
+      delta_projector_(&mrs->schema_nonvirtual(), opts_.projection.get()),
       projection_vc_is_deleted_idx_(opts_.projection->first_is_deleted_virtual_column_idx()),
       state_(kUninitialized) {
   // TODO(todd): various code assumes that a newly constructed iterator
@@ -466,8 +466,8 @@ Status MemRowSet::Iterator::SeekAtOrAfter(const Slice &key, bool *exact) {
   DCHECK_NE(state_, kUninitialized) << "not initted";
 
   if (key.size() > 0) {
-    ConstContiguousRow row_slice(memrowset_->schema().get(), key);
-    memrowset_->schema()->EncodeComparableKey(row_slice, &tmp_buf);
+    ConstContiguousRow row_slice(&memrowset_->schema(), key);
+    memrowset_->schema().EncodeComparableKey(row_slice, &tmp_buf);
   } else {
     // Seeking to empty key shouldn't try to run any encoding.
     tmp_buf.resize(0);
@@ -673,7 +673,7 @@ Status MemRowSet::Iterator::ApplyMutationsToProjectedRow(
         RETURN_NOT_OK(decoder.Init());
         ColumnBlock dst_col = dst_row->column_block(mapping.first);
         RETURN_NOT_OK(decoder.ApplyToOneColumn(dst_row->row_index(), &dst_col,
-                                               *memrowset_->schema_nonvirtual().get(),
+                                               memrowset_->schema_nonvirtual(),
                                                mapping.second, dst_arena));
       }
     }

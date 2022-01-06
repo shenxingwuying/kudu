@@ -3078,7 +3078,7 @@ Status TabletServiceImpl::HandleContinueScanRequest(const ScanRequestPB* req,
 
   // Set the row format flags on the ScanResultCollector.
   s = result_collector->InitSerializer(scanner->row_format_flags(),
-                                       *iter->schema().get(),
+                                       iter->schema(),
                                        *scanner->client_projection_schema());
   if (!s.ok()) {
     *error_code = TabletServerErrorPB::INVALID_SCAN_SPEC;
@@ -3089,7 +3089,7 @@ Status TabletServiceImpl::HandleContinueScanRequest(const ScanRequestPB* req,
   // If people had really large indirect objects, we would currently overshoot
   // their requested batch size by a lot.
   RowBlockMemory mem(32 * 1024);
-  RowBlock block(iter->schema().get(), FLAGS_scanner_batch_size_rows, &mem);
+  RowBlock block(&iter->schema(), FLAGS_scanner_batch_size_rows, &mem);
 
   // TODO(todd): in the future, use the client timeout to set a budget. For now,
   // just use a half second, which should be plenty to amortize call overhead.
