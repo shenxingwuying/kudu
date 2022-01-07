@@ -456,7 +456,7 @@ class MemRowSet : public RowSet,
 
  protected:
   MemRowSet(int64_t id,
-            const SchemaPtr schema,
+            const SchemaPtr& schema,
             boost::optional<int64_t> txn_id,
             scoped_refptr<TxnMetadata> txn_metadata,
             log::LogAnchorRegistry* log_anchor_registry,

@@ -444,7 +444,7 @@ TYPED_TEST(DeltaTypeTestDeltaFile, TestFuzz) {
       ASSERT_OK(sb.AddColumn(Substitute("col$0", i), UINT32));
     }
   }
-  Schema schema = sb.Build();
+  Schema schema(sb.Build());
 
   MirroredDeltas<TypeParam> deltas(&schema);
 
@@ -478,7 +478,7 @@ TYPED_TEST(DeltaTypeTestDeltaFile, BenchmarkPrepareAndApply) {
   for (int i = 0; i < kNumColumns; i++) {
     ASSERT_OK(sb.AddColumn(Substitute("col$0", i), UINT32));
   }
-  Schema schema = sb.Build();
+  Schema schema(sb.Build());
 
   Random prng(SeedRandom());
   MirroredDeltas<TypeParam> deltas(&schema);

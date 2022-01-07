@@ -227,7 +227,7 @@ class CFileSet::Iterator : public ColumnwiseIterator {
   friend class CFileSet;
 
   // 'projection' must remain valid for the lifetime of this object.
-  Iterator(std::shared_ptr<CFileSet const> base_data, SchemaPtr& projection,
+  Iterator(std::shared_ptr<CFileSet const> base_data, const SchemaPtr& projection,
            const fs::IOContext* io_context)
       : base_data_(std::move(base_data)),
         projection_(projection),
@@ -250,7 +250,7 @@ class CFileSet::Iterator : public ColumnwiseIterator {
   Status PrepareColumn(ColumnMaterializationContext *ctx);
 
   const std::shared_ptr<CFileSet const> base_data_;
-  SchemaPtr projection_;
+  const SchemaPtr projection_;
 
   // Iterator for the key column in the underlying data.
   std::unique_ptr<cfile::CFileIterator> key_iter_;

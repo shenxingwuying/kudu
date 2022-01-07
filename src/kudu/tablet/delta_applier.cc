@@ -31,10 +31,6 @@
 #include "kudu/tablet/rowset.h"
 #include "kudu/util/status.h"
 
-namespace kudu {
-class Schema;
-}  // namespace kudu
-
 using std::shared_ptr;
 using std::string;
 using std::unique_ptr;
@@ -42,6 +38,7 @@ using std::unique_ptr;
 namespace kudu {
 
 class ScanSpec;
+class Schema;
 struct IteratorStats;
 
 namespace tablet {

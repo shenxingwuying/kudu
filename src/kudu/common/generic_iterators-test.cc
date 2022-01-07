@@ -198,7 +198,7 @@ class VectorIterator : public ColumnwiseIterator {
   // column so we can call ColumnBlock::SetCellValue() in MaterializeColumn(),
   // whose API requires taking an address to a non-temporary for the value.
   vector<uint8_t> is_deleted_;
-  SchemaPtr schema_;
+  const SchemaPtr schema_;
   int cur_idx_;
   int block_size_;
   size_t prepared_;

@@ -1266,7 +1266,6 @@ Status Tablet::ApplyRowOperation(const IOContext* io_context,
   }
   DCHECK(op_state != nullptr) << "must have a WriteOpState";
   DCHECK(op_state->op_id().IsInitialized()) << "OpState OpId needed for anchoring";
-  // MARK for DUYUQI
   DCHECK_EQ(op_state->schema_at_decode_time(), schema().get());
 
   // If we were unable to check rowset presence in batch (e.g. because we are processing

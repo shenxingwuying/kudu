@@ -939,7 +939,7 @@ class UnionIterator : public RowwiseIterator {
 
   string ToString() const OVERRIDE;
 
-  const Schema& schema() const OVERRIDE {
+  const Schema &schema() const OVERRIDE {
     CHECK(initted_);
     CHECK(schema_.get() != NULL) << "Bad schema in " << ToString();
     return *CHECK_NOTNULL(schema_.get());
@@ -1125,7 +1125,7 @@ class MaterializingIterator : public RowwiseIterator {
 
   string ToString() const OVERRIDE;
 
-  const Schema& schema() const OVERRIDE {
+  const Schema &schema() const OVERRIDE {
     return iter_->schema();
   }
 
@@ -1366,7 +1366,7 @@ class PredicateEvaluatingIterator : public RowwiseIterator {
 
   string ToString() const OVERRIDE;
 
-  const Schema& schema() const OVERRIDE {
+  const Schema &schema() const OVERRIDE {
     return base_iter_->schema();
   }
 

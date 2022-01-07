@@ -59,15 +59,15 @@ class RowProjectorFunctions : public JITWrapper {
                        scoped_refptr<RowProjectorFunctions>* out,
                        llvm::TargetMachine** tm = NULL);
 
-  SchemaPtr base_schema() { return base_schema_; }
-  SchemaPtr projection() { return projection_; }
+  const Schema& base_schema() { return base_schema_; }
+  const Schema& projection() { return projection_; }
 
   typedef bool(*ProjectionFunction)(const uint8_t*, RowBlockRow*, Arena*);
   ProjectionFunction read() const { return read_f_; }
   ProjectionFunction write() const { return write_f_; }
 
   virtual Status EncodeOwnKey(faststring* out) OVERRIDE {
-    return EncodeKey(*base_schema_.get(), *projection_.get(), out);
+    return EncodeKey(base_schema_, projection_, out);
   }
 
   static Status EncodeKey(const Schema& base, const Schema& proj,
@@ -78,7 +78,7 @@ class RowProjectorFunctions : public JITWrapper {
                         ProjectionFunction read_f, ProjectionFunction write_f,
                         std::unique_ptr<JITCodeOwner> owner);
 
-  SchemaPtr base_schema_, projection_;
+  const Schema base_schema_, projection_;
   const ProjectionFunction read_f_, write_f_;
 };
 

@@ -119,7 +119,7 @@ Status MemRowSet::Create(int64_t id,
 
 
 MemRowSet::MemRowSet(int64_t id,
-                     SchemaPtr schema,
+                     const SchemaPtr& schema,
                      boost::optional<int64_t> txn_id,
                      scoped_refptr<TxnMetadata> txn_metadata,
                      LogAnchorRegistry* log_anchor_registry,

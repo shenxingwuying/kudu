@@ -59,7 +59,7 @@ class AlterSchemaOpState : public OpState {
   const tserver::AlterSchemaRequestPB* request() const override { return request_; }
   tserver::AlterSchemaResponsePB* response() const override { return response_; }
 
-  void set_schema(SchemaPtr schema) { schema_ = schema; }
+  void set_schema(const SchemaPtr& schema) { schema_ = schema; }
   const SchemaPtr schema() const { return schema_; }
 
   std::string new_table_name() const {

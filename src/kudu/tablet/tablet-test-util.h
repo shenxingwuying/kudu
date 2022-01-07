@@ -203,7 +203,7 @@ class KuduRowSetTest : public KuduTabletTest {
 // This is strictly a measure of decoding and evaluating predicates
 static inline Status SilentIterateToStringList(RowwiseIterator* iter,
                                                int* fetched) {
-  const Schema schema = iter->schema();
+  const Schema& schema = iter->schema();
   RowBlockMemory memory(1024);
   RowBlock block(&schema, 100, &memory);
   *fetched = 0;

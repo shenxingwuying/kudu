@@ -203,7 +203,7 @@ class MemRowSetCompactionInput : public CompactionInput {
     return Status::OK();
   }
 
-  const Schema& schema() const override {
+  const Schema &schema() const override {
     return iter_->schema();
   }
 
@@ -284,7 +284,7 @@ class DiskRowSetCompactionInput : public CompactionInput {
     return Status::OK();
   }
 
-  const Schema& schema() const override {
+  const Schema &schema() const override {
     return base_iter_->schema();
   }
 
@@ -574,7 +574,7 @@ class MergeCompactionInput : public CompactionInput {
 
  public:
   MergeCompactionInput(const vector<shared_ptr<CompactionInput> > &inputs,
-                       SchemaPtr schema)
+                       const SchemaPtr& schema)
     : schema_(schema),
       num_dup_rows_(0) {
     for (const shared_ptr<CompactionInput>& input : inputs) {
@@ -883,7 +883,7 @@ class MergeCompactionInput : public CompactionInput {
     return duplicated_rows_.back()->row(row_idx);
   }
 
-  SchemaPtr schema_;
+  const SchemaPtr schema_;
   vector<MergeState *> states_;
   Arena* prepared_block_arena_;
 
@@ -1050,7 +1050,7 @@ string CompactionInputRowToString(const CompactionInputRow& input_row) {
 ////////////////////////////////////////////////////////////
 
 Status CompactionInput::Create(const DiskRowSet &rowset,
-                               SchemaPtr projection,
+                               const SchemaPtr& projection,
                                const MvccSnapshot &snap,
                                const IOContext* io_context,
                                unique_ptr<CompactionInput>* out) {
@@ -1084,21 +1084,21 @@ Status CompactionInput::Create(const DiskRowSet &rowset,
 }
 
 CompactionInput *CompactionInput::Create(const MemRowSet &memrowset,
-                                         SchemaPtr projection,
+                                         const SchemaPtr& projection,
                                          const MvccSnapshot &snap) {
   CHECK(projection->has_column_ids());
   return new MemRowSetCompactionInput(memrowset, snap, projection);
 }
 
 CompactionInput *CompactionInput::Merge(const vector<shared_ptr<CompactionInput> > &inputs,
-                                        SchemaPtr schema) {
+                                        const SchemaPtr& schema) {
   CHECK(schema->has_column_ids());
   return new MergeCompactionInput(inputs, schema);
 }
 
 
 Status RowSetsInCompaction::CreateCompactionInput(const MvccSnapshot &snap,
-                                                  SchemaPtr schema,
+                                                  const SchemaPtr& schema,
                                                   const IOContext* io_context,
                                                   shared_ptr<CompactionInput> *out) const {
   CHECK(schema->has_column_ids());
