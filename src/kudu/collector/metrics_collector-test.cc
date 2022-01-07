@@ -35,6 +35,8 @@ DECLARE_string(collector_attributes_filter);
 DECLARE_string(collector_cluster_level_metrics);
 DECLARE_string(collector_metrics);
 DECLARE_string(collector_metrics_types_for_testing);
+DECLARE_string(collector_metrics_of_min_merge_type);
+DECLARE_string(collector_metrics_of_max_merge_type);
 
 using std::set;
 using std::string;
@@ -84,13 +86,17 @@ TEST(TestMetricsCollector, TestGetHistValue) {
 }
 
 TEST(TestMetricsCollector, TestMergeToTableLevelMetrics) {
+  FLAGS_collector_metrics_of_min_merge_type = "metric_min";
+  FLAGS_collector_metrics_of_max_merge_type = "metric_max";
+  auto collector = BuildCollector();
+  collector->InitMetricsType();
   // Merge empty metrics.
   {
     vector<MetricsCollector::TablesMetrics> hosts_tables_metrics;
     vector<MetricsCollector::TablesHistMetrics> hosts_tables_hist_metrics;
     MetricsCollector::TablesMetrics tables_metrics;
     MetricsCollector::TablesHistMetrics tables_hist_metrics;
-    ASSERT_OK(MetricsCollector::MergeToTableLevelMetrics(
+    ASSERT_OK(collector->MergeToTableLevelMetrics(
       hosts_tables_metrics, hosts_tables_hist_metrics,
       &tables_metrics, &tables_hist_metrics));
     ASSERT_TRUE(tables_metrics.empty());
@@ -102,20 +108,30 @@ TEST(TestMetricsCollector, TestMergeToTableLevelMetrics) {
         {  // host-1
           {"table1",
            {{"metric1", 1},
-            {"metric2", 2}}},
+            {"metric2", 2},
+            {"metric_min", 1},
+            {"metric_max", 1}}},
           {"table2",
            {{"metric1", 100},
-            {"metric3", 200}}}},
+            {"metric3", 200},
+            {"metric_min", 2},
+            {"metric_max", 2}}}},
         {  // host-2
           {"table1",
            {{"metric1", 100},
-            {"metric2", 200}}},
+            {"metric2", 200},
+            {"metric_min", 2},
+            {"metric_max", 2}}},
           {"table2",
            {{"metric1", 1},
-            {"metric2", 2}}},
+            {"metric2", 2},
+            {"metric_min", 1},
+            {"metric_max", 1}}},
           {"table3",
            {{"metric1", 1},
-            {"metric2", 2}}}}
+            {"metric2", 2},
+            {"metric_min", 3},
+            {"metric_max", 3}}}}
     });
     vector<MetricsCollector::TablesHistMetrics> hosts_tables_hist_metrics({
         {  // host-1
@@ -158,20 +174,26 @@ TEST(TestMetricsCollector, TestMergeToTableLevelMetrics) {
     });
     MetricsCollector::TablesMetrics tables_metrics;
     MetricsCollector::TablesHistMetrics tables_hist_metrics;
-    ASSERT_OK(MetricsCollector::MergeToTableLevelMetrics(
+    ASSERT_OK(collector->MergeToTableLevelMetrics(
         hosts_tables_metrics, hosts_tables_hist_metrics,
         &tables_metrics, &tables_hist_metrics));
     ASSERT_EQ(tables_metrics, MetricsCollector::TablesMetrics({
         {"table1",
          {{"metric1", 101},
-          {"metric2", 202}}},
+          {"metric2", 202},
+          {"metric_min", 1},
+          {"metric_max", 2}}},
         {"table2",
          {{"metric1", 101},
           {"metric2", 2},
-          {"metric3", 200}}},
+          {"metric3", 200},
+          {"metric_min", 1},
+          {"metric_max", 2}}},
         {"table3",
          {{"metric1", 1},
-          {"metric2", 2}}}
+          {"metric2", 2},
+          {"metric_min", 3},
+          {"metric_max", 3}}}
     }));
     ASSERT_EQ(tables_hist_metrics, MetricsCollector::TablesHistMetrics({
         {"table1",
@@ -208,33 +230,47 @@ TEST(TestMetricsCollector, TestMergeToTableLevelMetrics) {
 }
 
 TEST(TestMetricsCollector, TestMergeToClusterLevelMetrics) {
+  FLAGS_collector_metrics_of_min_merge_type = "metric_min";
+  FLAGS_collector_metrics_of_max_merge_type = "metric_max";
+  auto collector = BuildCollector();
+  collector->InitMetricsType();
   // Merge empty metrics.
   {
     MetricsCollector::TablesMetrics tables_metrics;
     MetricsCollector::TablesHistMetrics tables_hist_metrics;
     MetricsCollector::Metrics cluster_metrics;
-    ASSERT_OK(MetricsCollector::MergeToClusterLevelMetrics(tables_metrics, tables_hist_metrics,
-                                                           &cluster_metrics));
+    ASSERT_OK(collector->MergeToClusterLevelMetrics(tables_metrics, tables_hist_metrics,
+                                                    &cluster_metrics));
     ASSERT_TRUE(cluster_metrics.empty());
   }
   // Merge multi metrics.
   {
     MetricsCollector::TablesMetrics tables_metrics({
         {"table1",
-         {{"metric1", 100}}},
+         {{"metric1", 100},
+          {"metric_min", 1},
+          {"metric_max", 3}}},
         {"table2",
          {{"metric1", 10},
-          {"metric2", 20}}},
+          {"metric2", 20},
+          {"metric_min", 2},
+          {"metric_max", 2}}},
         {"table3",
          {{"metric1", 1},
           {"metric2", 2},
-          {"metric3", 3}}}
+          {"metric3", 3},
+          {"metric_min", 1},
+          {"metric_max", 3}}}
     });
     MetricsCollector::TablesHistMetrics tables_hist_metrics;  // TODO(yingchun) not used now.
-    MetricsCollector::Metrics cluster_metrics({{"metric2", 0}});
-    ASSERT_OK(MetricsCollector::MergeToClusterLevelMetrics(tables_metrics, tables_hist_metrics,
-                                                           &cluster_metrics));
-    ASSERT_EQ(cluster_metrics, MetricsCollector::Metrics({{"metric2", 22}}));
+    MetricsCollector::Metrics cluster_metrics({{"metric2", 0},
+                                               {"metric_min", 0},
+                                               {"metric_max", 0}});
+    ASSERT_OK(collector->MergeToClusterLevelMetrics(tables_metrics, tables_hist_metrics,
+                                                    &cluster_metrics));
+    ASSERT_EQ(cluster_metrics, MetricsCollector::Metrics({{"metric2", 22},
+                                                          {"metric_min", 0},
+                                                          {"metric_max", 3}}));
   }
 }
 

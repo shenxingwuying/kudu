@@ -16,6 +16,7 @@
 // under the License.
 
 #include "kudu/collector/metrics_collector.h"
+#include <assert.h>
 
 #include <algorithm>
 #include <cmath>
@@ -28,8 +29,11 @@
 #include <vector>
 
 #include <gflags/gflags.h>
-#include <gflags/gflags_declare.h>
 #include <glog/logging.h>
+#include <prometheus/counter.h>
+#include <prometheus/family.h>
+#include <prometheus/gauge.h>
+#include <prometheus/manual_summary.h>
 #include <rapidjson/rapidjson.h>
 
 #include "kudu/collector/collector_util.h"
@@ -40,9 +44,7 @@
 #include "kudu/gutil/strings/split.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/gutil/strings/util.h"
-#include "kudu/gutil/walltime.h"
 #include "kudu/util/curl_util.h"
-#include "kudu/util/debug/trace_event.h"
 #include "kudu/util/faststring.h"
 #include "kudu/util/flag_validators.h"
 #include "kudu/util/jsonreader.h"
@@ -70,6 +72,10 @@ DEFINE_string(collector_metrics, "",
               "Metrics to collect (comma-separated list of metric names)");
 DEFINE_string(collector_metrics_types_for_testing, "",
               "Only for test, used to initialize 'metric_types_'");
+DEFINE_string(collector_metrics_of_min_merge_type, "last_read_elapsed_time,last_write_elapsed_time",
+              "Comma-separated list of metric names in merge type of MergeType::kMin");
+DEFINE_string(collector_metrics_of_max_merge_type, "raft_term,time_since_last_leader_heartbeat",
+              "Comma-separated list of metric names in merge type of MergeType::kMax");
 
 DECLARE_string(collector_cluster_name);
 DECLARE_uint32(collector_metrics_collect_interval_sec);
@@ -178,6 +184,7 @@ Status MetricsCollector::Init() {
   InitMetricsUrlParameters();
   InitHostTableLevelMetrics();
   InitClusterLevelMetrics();
+  InitMetricsType();
 
   initialized_ = true;
   return Status::OK();
@@ -451,6 +458,16 @@ void MetricsCollector::InitClusterLevelMetrics() {
   cluster_metrics_filter_.swap(cluster_metrics);
 }
 
+void MetricsCollector::InitMetricsType() {
+  unordered_set<string> min_merge_type_metrics(
+      Split(FLAGS_collector_metrics_of_min_merge_type, ",", strings::SkipEmpty()));
+  min_merge_type_metrics_.swap(min_merge_type_metrics);
+
+  unordered_set<string> max_merge_type_metrics(
+      Split(FLAGS_collector_metrics_of_max_merge_type, ",", strings::SkipEmpty()));
+  max_merge_type_metrics_.swap(max_merge_type_metrics);
+}
+
 Status MetricsCollector::CollectAndReportMasterMetrics() {
   LOG(INFO) << "Start to CollectAndReportMasterMetrics";
   MonoTime start(MonoTime::Now());
@@ -575,7 +592,13 @@ Status MetricsCollector::MergeToTableLevelMetrics(
         }
         // This metric has been fetched by some other tserver.
         auto& old_value = FindOrDie(table_metrics, metric);
-        old_value += value;
+        if (ContainsKey(min_merge_type_metrics_, metric)) {
+          old_value = std::min(old_value, value);
+        } else if (ContainsKey(max_merge_type_metrics_, metric)) {
+          old_value = std::max(old_value, value);
+        } else {
+          old_value += value;
+        }
       }
     }
   }
@@ -622,7 +645,13 @@ Status MetricsCollector::MergeToClusterLevelMetrics(
       for (auto& cluster_metric : *cluster_metrics) {
         auto *find = FindOrNull(table_metrics.second, cluster_metric.first);
         if (find) {
-          cluster_metric.second += *find;
+          if (ContainsKey(min_merge_type_metrics_, cluster_metric.first)) {
+            cluster_metric.second = std::min(cluster_metric.second, *find);
+          } else if (ContainsKey(max_merge_type_metrics_, cluster_metric.first)) {
+            cluster_metric.second = std::max(cluster_metric.second, *find);
+          } else {
+            cluster_metric.second += *find;
+          }
         }
       }
     }

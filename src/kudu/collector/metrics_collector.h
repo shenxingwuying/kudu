@@ -18,26 +18,30 @@
 #pragma once
 
 #include <cstdint>
-#include <list>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest_prod.h>
-#include <prometheus/family.h>
-#include <prometheus/counter.h>
-#include <prometheus/gauge.h>
-#include <prometheus/manual_summary.h>
 #include <rapidjson/document.h>
 
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/util/countdown_latch.h"
 #include "kudu/util/status.h"
+
+
+namespace prometheus {
+class Counter;
+class Gauge;
+class ManualSummary;
+template <typename T> class Family;
+}  // namespace prometheus
 
 namespace kudu {
 class JsonReader;
@@ -64,6 +68,7 @@ class MetricsCollector : public RefCounted<MetricsCollector> {
 
  private:
   struct MetricsDictionary;
+
   friend class RefCounted<MetricsCollector>;
 
   FRIEND_TEST(TestMetricsCollector, TestConvertStateToInt);
@@ -124,6 +129,7 @@ class MetricsCollector : public RefCounted<MetricsCollector> {
   void InitMetricsUrlParameters();
   void InitHostTableLevelMetrics();
   void InitClusterLevelMetrics();
+  void InitMetricsType();
 
   Status StartMetricCollectorThread();
   void MetricCollectorThread();
@@ -137,14 +143,14 @@ class MetricsCollector : public RefCounted<MetricsCollector> {
                                         TablesMetrics* metrics_by_table_name,
                                         TablesHistMetrics* hist_metrics_by_table_name);
 
-  static Status MergeToTableLevelMetrics(
+  Status MergeToTableLevelMetrics(
       const std::vector<TablesMetrics>& hosts_metrics_by_table_name,
       const std::vector<TablesHistMetrics>& hosts_hist_metrics_by_table_name,
       TablesMetrics* metrics_by_table_name,
       TablesHistMetrics* hist_metrics_by_table_name);
-  static Status MergeToClusterLevelMetrics(const TablesMetrics& metrics_by_table_name,
-                                           const TablesHistMetrics& hist_metrics_by_table_name,
-                                           Metrics* cluster_metrics);
+  Status MergeToClusterLevelMetrics(const TablesMetrics& metrics_by_table_name,
+                                    const TablesHistMetrics& hist_metrics_by_table_name,
+                                    Metrics* cluster_metrics);
 
   // Report metrics to third-party monitor system.
   void CollectMetrics(const std::string& endpoint,
@@ -230,6 +236,8 @@ class MetricsCollector : public RefCounted<MetricsCollector> {
   std::unordered_map<std::string, std::set<std::string>> attributes_filter_;
   std::string metric_url_parameters_;
   std::unordered_set<std::string> hosttable_metrics_filter_;
+  std::unordered_set<std::string> min_merge_type_metrics_;
+  std::unordered_set<std::string> max_merge_type_metrics_;
   Metrics cluster_metrics_filter_;
 
   CountDownLatch stop_background_threads_latch_;
