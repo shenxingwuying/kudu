@@ -21,7 +21,9 @@
 
 #include <krb5/krb5.h>
 
+#include "kudu/gutil/strings/substitute.h"
 #include "kudu/util/status.h"
+#include "kudu/util/thread.h"
 
 namespace kudu {
 namespace security {
@@ -39,6 +41,9 @@ class KinitContext {
   // If the log-in is successful, then the default ticket cache is overwritten
   // with the credentials of the newly logged-in principal.
   Status Kinit(const std::string& keytab_path, const std::string& principal);
+
+  // Safe stop the RenewThrea before delete KinitContext
+  Status Kdestroy();
 
   // Acquires a new Ticket Granting Ticket (TGT).
   //
@@ -60,6 +65,9 @@ class KinitContext {
   const std::string& principal_str() const { return principal_str_; }
   const std::string& username_str() const { return username_str_; }
 
+  // Periodically calls DoRenewal().
+  void RenewThread();
+
  private:
   Status KinitInternal();
 
@@ -79,6 +87,8 @@ class KinitContext {
 
   // This is the time that the current TGT in use expires.
   int32_t ticket_end_timestamp_;
+  CountDownLatch stop_latch_;
+  scoped_refptr<Thread> reacquire_thread_;
 };
 
 } // namespace security

@@ -576,6 +576,7 @@ TEST_F(SecurityITest, TestCorruptKerberosCC) {
     ASSERT_OK(kinit_ctx.DoRenewal());
     ASSERT_OK(TrySetFlagOnTS());
   }
+  ASSERT_OK(kinit_ctx.Kdestroy());
 }
 
 TEST_F(SecurityITest, TestNonDefaultPrincipal) {

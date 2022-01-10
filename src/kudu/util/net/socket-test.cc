@@ -83,7 +83,7 @@ class SocketTest : public KuduTest {
         CHECK_OK(listener_.Accept(&sock, &new_addr, 0));
         CHECK_OK(sock.Close());
       } else {
-        SleepFor(MonoDelta::FromMilliseconds(200));
+        SleepFor(MonoDelta::FromMilliseconds(500));
         CHECK_OK(listener_.Close());
       }
     });

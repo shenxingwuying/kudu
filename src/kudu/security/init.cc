@@ -41,6 +41,7 @@
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/gutil/strings/util.h"
 #include "kudu/security/kinit_context.h"
+#include "kudu/util/countdown_latch.h"
 #include "kudu/util/flag_tags.h"
 #include "kudu/util/monotime.h"
 #include "kudu/util/net/net_util.h"
@@ -95,7 +96,7 @@ namespace kudu {
 namespace security {
 
 // Global instance of the context used by the kinit/reacquire thread.
-KinitContext* g_kinit_ctx;
+KinitContext* g_kinit_ctx = nullptr;
 
 namespace {
 
@@ -161,34 +162,13 @@ Status Krb5UnparseName(krb5_principal princ, string* name) {
   return Status::OK();
 }
 
-// Periodically calls DoRenewal().
-void RenewThread() {
-  uint32_t failure_retries = 0;
-  while (true) {
-    // This thread is run immediately after the first Kinit, so sleep first.
-    int64_t renew_interval_s = g_kinit_ctx->GetNextRenewInterval(failure_retries);
-    if (failure_retries > 0) {
-      // Log in the abnormal case where something failed.
-      LOG(INFO) << Substitute("Renew thread sleeping after $0 failures for $1s",
-          failure_retries, renew_interval_s);
-    }
-    SleepFor(MonoDelta::FromSeconds(renew_interval_s));
-
-    Status s = g_kinit_ctx->DoRenewal();
-    WARN_NOT_OK(s, "Kerberos reacquire error: ");
-    if (!s.ok()) {
-      ++failure_retries;
-    } else {
-      failure_retries = 0;
-    }
-  }
-}
 } // anonymous namespace
 
-KinitContext::KinitContext() {}
+KinitContext::KinitContext() : stop_latch_(1) {}
 
 KinitContext::~KinitContext() {
   // Free memory associated with these objects.
+  if (stop_latch_.count() > 0) stop_latch_.CountDown();
   if (principal_ != nullptr) krb5_free_principal(g_krb5_ctx, principal_);
   if (keytab_ != nullptr) krb5_kt_close(g_krb5_ctx, keytab_);
   if (ccache_ != nullptr) krb5_cc_close(g_krb5_ctx, ccache_);
@@ -330,7 +310,21 @@ Status KinitContext::Kinit(const string& keytab_path, const string& principal) {
 
   KRB5_RETURN_NOT_OK_PREPEND(krb5_get_init_creds_opt_alloc(g_krb5_ctx, &opts_),
                              "unable to allocate get_init_creds_opt struct");
-  return KinitInternal();
+  RETURN_NOT_OK(KinitInternal());
+
+  // Start the reacquire thread.
+  RETURN_NOT_OK(Thread::Create("kerberos", "reacquire thread",
+                               [this]() { this->RenewThread(); }, &reacquire_thread_));
+  return Status::OK();
+}
+
+Status KinitContext::Kdestroy() {
+  stop_latch_.CountDown();
+  scoped_refptr<Thread> t = reacquire_thread_;
+  if (t.get() != nullptr) {
+    t->Join();
+  }
+  return Status::OK();
 }
 
 Status KinitContext::KinitInternal() {
@@ -371,6 +365,30 @@ Status KinitContext::KinitInternal() {
             << " (short username " << username_str_ << ")";
 
   return Status::OK();
+}
+
+// Periodically calls DoRenewal().
+void KinitContext::RenewThread() {
+  uint32_t failure_retries = 0;
+  int64_t renew_interval_s = GetNextRenewInterval(failure_retries);
+  while (!stop_latch_.WaitFor(MonoDelta::FromSeconds(renew_interval_s))) {
+    Status s = DoRenewal();
+    WARN_NOT_OK(s, "Kerberos reacquire error: ");
+    if (!s.ok()) {
+      ++failure_retries;
+    } else {
+      failure_retries = 0;
+    }
+
+    if (failure_retries > 0) {
+      // Log in the abnormal case where something failed.
+      LOG(INFO) << Substitute("Renew thread sleeping after $0 failures for $1s",
+          failure_retries, renew_interval_s);
+    }
+
+    // This thread is run immediately after the first Kinit, so sleep first.
+    renew_interval_s = GetNextRenewInterval(failure_retries);
+  }
 }
 
 RWMutex* KerberosReinitLock() {
@@ -496,10 +514,15 @@ Status InitKerberosForServer(const std::string& raw_principal, const std::string
   RETURN_NOT_OK_PREPEND(g_kinit_ctx->Kinit(
       keytab_file, configured_principal), "unable to kinit");
 
-  scoped_refptr<Thread> reacquire_thread;
-  // Start the reacquire thread.
-  RETURN_NOT_OK(Thread::Create("kerberos", "reacquire thread", &RenewThread, &reacquire_thread));
+  return Status::OK();
+}
 
+Status DestroyKerberosForServer() {
+  if (g_kinit_ctx == nullptr) return Status::OK();
+
+  RETURN_NOT_OK(g_kinit_ctx->Kdestroy());
+  delete g_kinit_ctx;
+  g_kinit_ctx = nullptr;
   return Status::OK();
 }
 
