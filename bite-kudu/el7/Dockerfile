@@ -10,7 +10,7 @@ RUN yum install -y centos-release-scl-rh
 RUN yum install -y devtoolset-8
 
 WORKDIR /opt/code
-RUN git clone http://cd-token:iznQUqBe4hu5kNrdgQK5@gitlab.internal.sensorsdata.cn/sensors-analytics/kudu.git
+RUN git clone http://cd-token:iznQUqBe4hu5kNrdgQK5@gitlab.sensorsdata.cn/sensors-analytics/kudu.git
 WORKDIR /opt/code/kudu
 RUN git checkout infinity/branch-1.14.x
 

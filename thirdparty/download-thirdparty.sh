@@ -477,7 +477,7 @@ fetch_with_url_and_patch \
  archive.tar.gz \
  $PROMETHEUS_SOURCE \
  $PROMETHEUS_PATCHLEVEL \
- "--header PRIVATE-TOKEN:YS4i1t8kt-87_2JaGmYV http://gitlab.internal.sensorsdata.cn/api/v4/projects/2781/repository"
+ "--header PRIVATE-TOKEN:YS4i1t8kt-87_2JaGmYV http://gitlab.sensorsdata.cn/api/v4/projects/2781/repository"
 
 echo "---------------"
 echo "Thirdparty dependencies downloaded successfully"
