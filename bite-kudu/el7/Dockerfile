@@ -1,4 +1,4 @@
-FROM jfrog-internal.sensorsdata.cn/docker/com.sensorsdata.dragon/bite:0.3.0.204
+FROM jfrog-internal.sensorsdata.cn/docker/com.sensorsdata.dragon/bite:0.3.0.205
 
 RUN yum install -y autoconf automake cyrus-sasl-devel cyrus-sasl-gssapi \
       cyrus-sasl-plain flex gcc gcc-c++ gdb git java-1.8.0-openjdk-devel \
