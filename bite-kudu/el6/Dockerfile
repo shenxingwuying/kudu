@@ -13,6 +13,6 @@ RUN yum install -y devtoolset-8
 WORKDIR /opt/code
 RUN git clone http://cd-token:iznQUqBe4hu5kNrdgQK5@gitlab.sensorsdata.cn/sensors-analytics/kudu.git
 WORKDIR /opt/code/kudu
-RUN git checkout infinity/branch-1.14.x
+RUN git checkout develop/1.14.2
 
 RUN build-support/enable_devtoolset.sh thirdparty/build-if-necessary.sh all
