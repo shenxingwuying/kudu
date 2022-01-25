@@ -268,7 +268,7 @@ Status DumpReplica(const RunnerContext& context) {
   vector<ListTabletsResponsePB::StatusAndSchemaPB> replicas;
   RETURN_NOT_OK(GetReplicas(proxy.get(), &replicas));
 
-  SchemaPtr schema_ptr(new Schema);
+  SchemaPtr schema_ptr = std::make_shared<Schema>();
   Schema& schema = *schema_ptr.get();
   for (const auto& r : replicas) {
     if (r.tablet_status().tablet_id() == tablet_id) {
@@ -301,7 +301,7 @@ Status ListReplicas(const RunnerContext& context) {
         !ContainsKey(tablet_ids, r.tablet_status().tablet_id())) {
       continue;
     }
-    SchemaPtr schema_ptr(new Schema);
+    SchemaPtr schema_ptr = std::make_shared<Schema>();
     Schema& schema = *schema_ptr.get();
     RETURN_NOT_OK_PREPEND(
         SchemaFromPB(r.schema(), &schema),

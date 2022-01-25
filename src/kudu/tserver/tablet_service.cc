@@ -1159,7 +1159,7 @@ void TabletServiceAdminImpl::AlterSchema(const AlterSchemaRequestPB* req,
   if (schema_version == req->schema_version()) {
     // Sanity check, to verify that the tablet should have the same schema
     // specified in the request.
-    SchemaPtr req_schema_ptr(new Schema);
+    SchemaPtr req_schema_ptr = std::make_shared<Schema>();
     Schema& req_schema = *req_schema_ptr.get();
     Status s = SchemaFromPB(req->schema(), &req_schema);
     if (!s.ok()) {
@@ -1435,7 +1435,7 @@ void TabletServiceAdminImpl::CreateTablet(const CreateTabletRequestPB* req,
   TRACE_EVENT1("tserver", "CreateTablet",
                "tablet_id", req->tablet_id());
 
-  SchemaPtr schema_ptr(new Schema);
+  SchemaPtr schema_ptr = std::make_shared<Schema>();
   Status s = SchemaFromPB(req->schema(), schema_ptr.get());
   DCHECK(schema_ptr->has_column_ids());
   if (!s.ok()) {
@@ -2374,7 +2374,7 @@ void TabletServiceImpl::SplitKeyRange(const SplitKeyRangeRequestPB* req,
   }
 
   // Validate the column are valid
-  SchemaPtr schema_ptr(new Schema);
+  SchemaPtr schema_ptr = std::make_shared<Schema>();
   Schema& schema = *schema_ptr.get();
   s = ColumnPBsToSchema(req->columns(), &schema);
   if (PREDICT_FALSE(!s.ok())) {
@@ -2850,7 +2850,7 @@ Status TabletServiceImpl::HandleNewScanRequest(TabletReplica* replica,
 
   // Store the client's specified projection, prior to adding any missing
   // columns for predicates, etc.
-  SchemaPtr client_projection(new Schema(std::move(projection)));
+  SchemaPtr client_projection = std::make_shared<Schema>(std::move(projection));
   projection = projection_builder.BuildWithoutIds();
   VLOG(3) << "Scan projection: " << projection_ptr->ToString(Schema::BASE_INFO);
 

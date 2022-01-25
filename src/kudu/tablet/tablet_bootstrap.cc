@@ -1227,7 +1227,7 @@ Status TabletBootstrap::PlaySegments(const IOContext* io_context,
   if (!segments.empty()) {
     const scoped_refptr<ReadableLogSegment>& segment = segments[0];
     // Set the point-in-time schema for the tablet based on the log header.
-    SchemaPtr pit_schema_ptr(new Schema);
+    SchemaPtr pit_schema_ptr = std::make_shared<Schema>();
     Schema& pit_schema = *pit_schema_ptr.get();
     RETURN_NOT_OK_PREPEND(SchemaFromPB(segment->header().schema(), &pit_schema),
                           "Couldn't decode log segment schema");
@@ -1536,7 +1536,7 @@ Status TabletBootstrap::PlayAlterSchemaRequest(const IOContext* /*io_context*/,
   AlterSchemaRequestPB* alter_schema = replicate_msg->mutable_alter_schema_request();
 
   // Decode schema
-  SchemaPtr schema_ptr(new Schema);
+  SchemaPtr schema_ptr = std::make_shared<Schema>();
   Schema& schema = *schema_ptr.get();
   RETURN_NOT_OK(SchemaFromPB(alter_schema->schema(), &schema));
 
@@ -1640,7 +1640,7 @@ Status TabletBootstrap::PlayRowOperations(const IOContext* io_context,
                                           WriteOpState* op_state,
                                           const TxResultPB& orig_result,
                                           TxResultPB* new_result) {
-  SchemaPtr inserts_schema_ptr(new Schema);
+  SchemaPtr inserts_schema_ptr = std::make_shared<Schema>();
   Schema& inserts_schema = *inserts_schema_ptr.get();
   RETURN_NOT_OK_PREPEND(SchemaFromPB(op_state->request()->schema(), &inserts_schema),
                         "Couldn't decode client schema");

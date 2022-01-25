@@ -343,7 +343,7 @@ Status TabletCopyClient::Start(const HostPort& copy_source_addr,
   wal_seqnos_.assign(resp.wal_segment_seqnos().begin(), resp.wal_segment_seqnos().end());
   remote_cstate_.reset(resp.release_initial_cstate());
 
-  SchemaPtr schema_ptr(new Schema);
+  SchemaPtr schema_ptr = std::make_shared<Schema>();
   Schema* schema = schema_ptr.get();
   RETURN_NOT_OK_PREPEND(SchemaFromPB(superblock_->schema(), schema_ptr.get()),
                         "Cannot deserialize schema from remote superblock");

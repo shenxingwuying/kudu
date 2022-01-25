@@ -1551,7 +1551,7 @@ Status Tablet::CreatePreparedAlterSchema(AlterSchemaOpState* op_state,
   // with the schema change,
   op_state->AcquireSchemaLock(&schema_lock_);
 
-  SchemaPtr new_schema(new Schema(*schema));
+  SchemaPtr new_schema = std::make_shared<Schema>();
   op_state->set_schema(new_schema);
   return Status::OK();
 }
@@ -1610,7 +1610,7 @@ Status Tablet::RewindSchemaForBootstrap(const Schema& new_schema,
   // to flush.
   VLOG_WITH_PREFIX(1) << "Rewinding schema during bootstrap to " << new_schema.ToString();
 
-  SchemaPtr schema(new Schema(new_schema));
+  SchemaPtr schema = std::make_shared<Schema>(new_schema);
   metadata_->SetSchema(schema, schema_version);
   {
     std::lock_guard<rw_spinlock> lock(component_lock_);

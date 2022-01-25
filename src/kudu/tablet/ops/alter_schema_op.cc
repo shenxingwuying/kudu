@@ -96,7 +96,7 @@ Status AlterSchemaOp::Prepare() {
   TRACE("PREPARE ALTER-SCHEMA: Starting");
 
   // Decode schema
-  SchemaPtr schema(new Schema);
+  SchemaPtr schema = std::make_shared<Schema>();
   Status s = SchemaFromPB(state_->request()->schema(), schema.get());
   if (!s.ok()) {
     state_->completion_callback()->set_error(s, TabletServerErrorPB::INVALID_SCHEMA);

@@ -644,7 +644,7 @@ Status TSTabletManager::CreateNewTablet(const string& table_id,
   // Create the metadata.
   TRACE("Creating new metadata...");
   scoped_refptr<TabletMetadata> meta;
-  SchemaPtr schema_ptr(new Schema(*schema.get()));
+  SchemaPtr schema_ptr = std::make_shared<Schema>(*schema.get());
   RETURN_NOT_OK_PREPEND(
     TabletMetadata::CreateNew(fs_manager_,
                               tablet_id,

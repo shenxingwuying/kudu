@@ -325,7 +325,7 @@ Status SysCatalogTable::Load(FsManager *fs_manager) {
 Status SysCatalogTable::CreateNew(FsManager *fs_manager) {
   // Create the new Metadata
   scoped_refptr<tablet::TabletMetadata> metadata;
-  SchemaPtr schema_ptr(new Schema(BuildTableSchema()));
+  SchemaPtr schema_ptr = std::make_shared<Schema>(BuildTableSchema());
   Schema& schema = *schema_ptr;
   PartitionSchema partition_schema;
   RETURN_NOT_OK(PartitionSchema::FromPB(PartitionSchemaPB(), schema, &partition_schema));

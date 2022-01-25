@@ -2825,7 +2825,7 @@ Status CatalogManager::AlterTableRpc(const AlterTableRequestPB& req,
           resp, MasterErrorPB::TABLE_ALREADY_PRESENT);
     }
 
-    SchemaPtr schema_ptr(new Schema);
+    SchemaPtr schema_ptr = std::make_shared<Schema>();
     Schema& schema = *schema_ptr.get();
     RETURN_NOT_OK(SchemaFromPB(l.data().pb.schema(), &schema));
 

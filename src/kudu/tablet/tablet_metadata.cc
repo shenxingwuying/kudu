@@ -388,7 +388,7 @@ Status TabletMetadata::LoadFromSuperBlock(const TabletSuperBlockPB& superblock) 
     table_name_ = superblock.table_name();
 
     uint32_t schema_version = superblock.schema_version();
-    SchemaPtr schema(new Schema());
+    SchemaPtr schema = std::make_shared<Schema>();
     RETURN_NOT_OK_PREPEND(SchemaFromPB(superblock.schema(), schema.get()),
                           "Failed to parse Schema from superblock " +
                           SecureShortDebugString(superblock));

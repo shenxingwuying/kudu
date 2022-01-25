@@ -766,7 +766,7 @@ Status Log::Open(LogOptions options,
   ctx.metrics.reset(metric_entity ? new LogMetrics(metric_entity) : nullptr);
   ctx.fs_manager = fs_manager;
   ctx.file_cache = file_cache;
-  SchemaPtr schema_clone(new Schema(*schema.get()));
+  SchemaPtr schema_clone = std::make_shared<Schema>(*schema.get());
   scoped_refptr<Log> new_log(new Log(std::move(options), std::move(ctx), schema_clone,
                                      schema_version));
   RETURN_NOT_OK(new_log->Init());
@@ -1144,7 +1144,7 @@ int64_t Log::OnDiskSize() {
 
 void Log::SetSchemaForNextLogSegment(const Schema& schema,
                                      uint32_t version) {
-  SchemaPtr new_schema(new Schema(schema));
+  SchemaPtr new_schema = std::make_shared<Schema>(schema);
   segment_allocator_.SetSchemaForNextSegment(new_schema, version);
 }
 

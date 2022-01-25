@@ -311,7 +311,7 @@ Status PrintDecodedWriteRequestPB(const string& indent,
                                   const Schema& tablet_schema,
                                   const WriteRequestPB& write,
                                   const RequestIdPB* request_id) {
-  SchemaPtr schema_ptr(new Schema);
+  SchemaPtr schema_ptr = std::make_shared<Schema>();
   Schema& request_schema = *schema_ptr.get();
   RETURN_NOT_OK(SchemaFromPB(write.schema(), &request_schema));
 
@@ -529,7 +529,7 @@ Status PrintSegment(const scoped_refptr<ReadableLogSegment>& segment) {
     cout << "Header:\n" << SecureDebugString(segment->header());
   }
   if (print_type != DONT_PRINT) {
-    SchemaPtr schema_ptr(new Schema);
+    SchemaPtr schema_ptr = std::make_shared<Schema>();
     Schema& tablet_schema = *schema_ptr.get();
     RETURN_NOT_OK(SchemaFromPB(segment->header().schema(), &tablet_schema));
 

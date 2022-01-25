@@ -604,7 +604,7 @@ Status DeltaTracker::DoCompactStores(const IOContext* io_context,
   // FilterColumnIdsAndCollectDeltas(). So, we just pass an empty schema here.
   // If this changes in the future, we'll have to pass in the current tablet
   // schema here.
-  SchemaPtr empty_schema(new Schema);
+  SchemaPtr empty_schema = std::make_shared<Schema>();
   RETURN_NOT_OK(MakeDeltaIteratorMergerUnlocked(io_context, start_idx, end_idx,
                                                 empty_schema, compacted_stores,
                                                 compacted_blocks, &inputs_merge));
