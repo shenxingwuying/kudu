@@ -75,6 +75,7 @@
 #include "kudu/common/schema.h"
 #include "kudu/common/timestamp.h"
 #include "kudu/common/txn_id.h"
+#include "kudu/common/wire_protocol.h"
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/gutil/atomicops.h"
@@ -88,6 +89,7 @@
 #include "kudu/gutil/stringprintf.h"
 #include "kudu/gutil/strings/join.h"
 #include "kudu/gutil/strings/substitute.h"
+#include "kudu/gutil/walltime.h"
 #include "kudu/integration-tests/cluster_itest_util.h"
 #include "kudu/integration-tests/data_gen_util.h"
 #include "kudu/master/catalog_manager.h"
@@ -4923,6 +4925,11 @@ TEST_F(ClientTest, TestDeleteAndReserveTable) {
   // Remove the table.
   // NOTE that it returns when the operation is completed on the master side
   string tablet_id = GetFirstTabletId(client_table_.get());
+  scoped_refptr<TabletReplica> tablet_replica;
+  ASSERT_TRUE(cluster_->mini_tablet_server(0)->server()->tablet_manager()->LookupTablet(
+                  tablet_id, &tablet_replica));
+  ASSERT_FALSE(tablet_replica->tablet()->disable_compaction());
+
   ASSERT_OK(client_->DeleteTable(kTableName, false, 60));
   CatalogManager* catalog_manager = cluster_->mini_master()->master()->catalog_manager();
   {
@@ -4934,7 +4941,6 @@ TEST_F(ClientTest, TestDeleteAndReserveTable) {
   }
 
   // Exist tablet is still visible.
-  scoped_refptr<TabletReplica> tablet_replica;
   ASSERT_TRUE(cluster_->mini_tablet_server(0)->server()->tablet_manager()->LookupTablet(
                   tablet_id, &tablet_replica));
 
@@ -5023,19 +5029,32 @@ TEST_F(ClientTest, TestDeleteAndReserveTable) {
   ScanTableToStrings(client_table_.get(), &rows);
   ASSERT_EQ(10, rows.size());
 
+  // Compaction is diable for trash table.
+  ASSERT_TRUE(tablet_replica->tablet()->disable_compaction());
+
   // Try to recall the trashed table.
   s = client_->RecallTable(trashed_table_name);
   ASSERT_TRUE(s.IsAlreadyPresent());
   ASSERT_STR_CONTAINS(s.ToString(), Substitute("table $0 already exists with id", kTableName));
 
-  // Force to delete the trashed table.
-  ASSERT_OK(client_->DeleteTable(trashed_table_name, true));
+  // Force to delete the normal table.
+  ASSERT_OK(client_->DeleteTable(kTableName, true));
+  // Try to recall the trashed table.
+  ASSERT_OK(client_->RecallTable(trashed_table_name));
 
   // Only one table left.
   tables.clear();
   ASSERT_OK(client_->ListTables(&tables));
   ASSERT_EQ(1, tables.size());
   ASSERT_EQ(kTableName, tables[0]);
+
+  ASSERT_OK(client_->OpenTable(kTableName, &client_table_));
+  NO_FATALS(InsertTestRows(client_.get(), client_table_.get(), 10, 30));
+  ScanTableToStrings(client_table_.get(), &rows);
+  ASSERT_EQ(40, rows.size());
+
+  // Compaction is enable for normal table.
+  ASSERT_FALSE(tablet_replica->tablet()->disable_compaction());
 }
 
 TEST_F(ClientTest, TestDeleteAndRecallTable) {

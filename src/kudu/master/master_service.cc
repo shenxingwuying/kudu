@@ -522,8 +522,8 @@ void MasterServiceImpl::DeleteTable(const DeleteTableRequestPB* req,
                                  + std::to_string(WallTime_Now()) + ":"
                                  + req->table().table_name());
     alter_req.set_modify_external_catalogs(req->modify_external_catalogs());
-    (*alter_req.mutable_new_extra_configs())[kTableMaintenancePriority]
-        = std::to_string(-FLAGS_max_priority_range);
+    (*alter_req.mutable_new_extra_configs())[kTableDisableCompaction]
+        = "true";
     (*alter_req.mutable_new_extra_configs())[kTableConfigReserveSeconds]
         = std::to_string(req->has_reserve_seconds() ?
           req->reserve_seconds() : FLAGS_master_default_reserve_trashed_table_seconds);

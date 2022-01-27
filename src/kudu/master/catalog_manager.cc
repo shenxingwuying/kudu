@@ -2331,7 +2331,7 @@ Status CatalogManager::RecallDeletedTableRpc(const RecallDeletedTableRequestPB& 
   alter_req.mutable_table()->CopyFrom(req.table());
   // Revert table name
   alter_req.set_new_table_name(origin_table_name);
-  (*alter_req.mutable_new_extra_configs())[kTableMaintenancePriority] = "";
+  (*alter_req.mutable_new_extra_configs())[kTableDisableCompaction] = "";
   (*alter_req.mutable_new_extra_configs())[kTableConfigReserveSeconds] = "";
 
   AlterTableResponsePB alter_resp;
