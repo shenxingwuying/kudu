@@ -17,6 +17,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools'))
 from mothership_upgrader_tool import MothershipUpgraderTool
 from cdh_upgrader_tool import CdhUpgraderTool
 
+sys.path.append(os.path.join(os.path.dirname(__file__), '../..', 'construction_blueprint', 'tools'))
+from cdh_config_tool import KuduConfigTool
+from mothership_config_tool import MothershipKuduConfigTool
+from config_common import MOTHERSHIP_UPDATE_CONFIG, CDH_UPDATE_CONFIG
+
+
 class KuduUpgraderStep(DirStep):
     def __init__(self):
         super().__init__()
@@ -30,10 +36,12 @@ class KuduUpgraderStep(DirStep):
         if DeployInfo().get_hadoop_distribution() == HadoopDistributionType.MOTHERSHIP:
             mothershipUpgraderTool = MothershipUpgraderTool(self.logger, self.package_dir)
             mothershipUpgraderTool.update()
+            MothershipKuduConfigTool().do_update(MOTHERSHIP_UPDATE_CONFIG)
         elif DeployInfo().get_hadoop_distribution() == HadoopDistributionType.CLOUDERA:
             # todo parcel 升级是否需要设置强制升级，目前会根据版本号判断是否升级
             cdhUpgraderTool = CdhUpgraderTool(self.logger, self.package_dir)
             cdhUpgraderTool.update()
+            KuduConfigTool().do_update(CDH_UPDATE_CONFIG)
         else:
             # 混部场景，暂时不处理
             self.logger.info('hadoop distribution type is mix, no need to update')
