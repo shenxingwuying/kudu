@@ -82,7 +82,10 @@ class KuduConfigTool:
                 self.logger.info('role_group = %s' % role_group)
                 old_role_config_list = cloudera_config_setter.get_value('%s/%s/config' % (setter_path, role_group), setter_name).split('\n')
                 old_role_config_dict = {}
-                for conf in old_role_config_list:
+                for conf in set(old_role_config_list):
+                    conf = conf.strip()
+                    if not conf:
+                        continue
                     items = conf.lstrip('-').split('=')
                     old_role_config_dict[items[0]] = items[1]
                 self.logger.info('old gflagfile_role_safety_valve = [%s]' % old_role_config_dict)
@@ -117,7 +120,10 @@ class KuduConfigTool:
     def get_config_dict(self, cloudera_config_setter, path, name):
         config_list = cloudera_config_setter.get_value(path, name).split('\n')
         config_dict = {}
-        for config in config_list:
+        for config in set(config_list):
+            config = config.strip()
+            if not config:
+                continue
             items = config.lstrip('-').split('=')
             config_dict[items[0]] = items[1]
         return config_dict
