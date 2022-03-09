@@ -68,11 +68,11 @@ publishing {
   repositories {
     maven {
       name "snapshots"
-      url "http://git.sensorsdata.cn:8280/nexus/content/repositories/snapshots/"
+      url "https://jfrog-internal.sensorsdata.cn/artifactory/maven-snapshots/"
     }
     maven {
       name "releases"
-      url "http://git.sensorsdata.cn:8280/nexus/content/repositories/releases/"
+      url "https://jfrog-internal.sensorsdata.cn/artifactory/maven-releases/"
     }
   }
 }
