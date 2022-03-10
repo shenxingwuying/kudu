@@ -29,6 +29,8 @@ if(JavaVersion.current().isJava12Compatible()) {
 }
 
 repositories {
+  // sensorsdata jfrog repo.
+  maven { url "https://jfrog-internal.sensorsdata.cn/artifactory/maven-public" }
   maven { url "https://clojars.org/repo/" }
 }
 
