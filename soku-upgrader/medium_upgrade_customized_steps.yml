@@ -2,3 +2,5 @@
 # 默认是internal_module_dir_step
 kudu:
     class_name: kudu_upgrader_step
+soku_tool:
+    class_name: soku_tool_upgrader_step
