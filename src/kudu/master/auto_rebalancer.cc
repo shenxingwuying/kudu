@@ -24,6 +24,7 @@
 #include <ostream>
 #include <random>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -175,6 +176,7 @@ Status AutoRebalancerTask::Init() {
   RETURN_NOT_OK(MessengerBuilder("auto-rebalancer").Build(&messenger_));
   return Thread::Create("catalog manager", "auto-rebalancer",
                         [this]() { this->RunLoop(); }, &thread_);
+
 }
 
 void AutoRebalancerTask::Shutdown() {
