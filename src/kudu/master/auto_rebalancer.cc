@@ -175,6 +175,7 @@ Status AutoRebalancerTask::Init() {
   RETURN_NOT_OK(MessengerBuilder("auto-rebalancer").Build(&messenger_));
   return Thread::Create("catalog manager", "auto-rebalancer",
                         [this]() { this->RunLoop(); }, &thread_);
+
 }
 
 void AutoRebalancerTask::Shutdown() {

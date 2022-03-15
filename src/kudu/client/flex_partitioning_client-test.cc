@@ -213,7 +213,7 @@ class FlexPartitioningTest : public KuduTest {
     {
       auto* cm = cluster_->mini_master(0)->master()->catalog_manager();
       CatalogManager::ScopedLeaderSharedLock l(cm);
-      ASSERT_OK(cm->GetTableInfo(table->id(), &table_info));
+      cm->GetTableInfo(table->id(), &table_info);
     }
     ASSERT_EQ(expected_count, table_info->num_tablets());
   }
@@ -272,7 +272,7 @@ class FlexPartitioningTest : public KuduTest {
       auto* cm = cluster_->mini_master(0)->master()->catalog_manager();
       CatalogManager::ScopedLeaderSharedLock l(cm);
       scoped_refptr<master::TableInfo> table_info;
-      ASSERT_OK(cm->GetTableInfo(table->id(), &table_info));
+      cm->GetTableInfo(table->id(), &table_info);
       table_info->GetAllTablets(&all_tablets_info);
     }
 

@@ -338,12 +338,7 @@ void MasterPathHandlers::HandleTablePage(const Webserver::WebRequest& req,
   }
 
   scoped_refptr<TableInfo> table;
-  Status s = master_->catalog_manager()->GetTableInfo(table_id, &table);
-  if (!s.ok()) {
-    resp->status_code = HttpStatusCode::ServiceUnavailable;
-    (*output)["error"] = Substitute("Master is not ready: $0", s.ToString());
-    return;
-  }
+  master_->catalog_manager()->GetTableInfo(table_id, &table);
 
   if (!table) {
     resp->status_code = HttpStatusCode::NotFound;
@@ -351,6 +346,7 @@ void MasterPathHandlers::HandleTablePage(const Webserver::WebRequest& req,
     return;
   }
 
+  Status s;
   Schema schema;
   PartitionSchema partition_schema;
   map<string, string> extra_configs;
