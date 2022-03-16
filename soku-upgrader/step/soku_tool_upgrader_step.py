@@ -7,6 +7,7 @@ import sys
 sys.path.append(os.path.join(os.environ['SENSORS_PLATFORM_HOME'], '..', 'armada', 'hyperion'))
 from upgrader.step.dir_step import DirStep
 import utils.shell_wrapper
+from subprocess import getoutput
 
 
 class SokuToolUpgraderStep(DirStep):
@@ -46,11 +47,18 @@ class SokuToolUpgraderStep(DirStep):
         utils.shell_wrapper.check_call(cmd, self.logger.debug)
         # CDH环境下kudu会链接到该目录下，且直接替换的方式并不能使/usr/bin/kudu的优先级更高
         # 保险起见，直接将这里的kudu链接到soku_tool目录下,升级时直接替换源soku_tool目录即可
-        cdh_tool_home = os.path.join("/sensorsdata/main/cloudera/parcels/CDH/bin/", "kudu")
-        if os.path.islink(cdh_tool_home) or os.path.isfile(cdh_tool_home):
-            cmd = "sudo rm -f '%s'" % cdh_tool_home
+        cdh_home = getoutput("""cat ~/.bashrc | grep PATH | grep CDH | sed "s/[=:']/ /g" | awk '{print $3}'""")
+        kudu_tool_path = os.path.join(cdh_home, "../../CDH/bin/kudu")
+        if os.path.islink(kudu_tool_path) or os.path.isfile(kudu_tool_path):
+            cmd = "sudo rm -f '%s'" % kudu_tool_path
             utils.shell_wrapper.check_call(cmd, self.logger.debug)
-            cmd = "sudo ln -s '%s' '%s'" % (src_kudu, cdh_tool_home)
+            cmd = "sudo ln -s '%s' '%s'" % (src_kudu, kudu_tool_path)
+            utils.shell_wrapper.check_call(cmd, self.logger.debug)
+        kudu_sensors_tool_path = os.path.join(cdh_home, "../../KUDU_SENSORS_DATA/bin/kudu")
+        if os.path.islink(kudu_sensors_tool_path) or os.path.isfile(kudu_sensors_tool_path):
+            cmd = "sudo rm -f '%s'" % kudu_sensors_tool_path
+            utils.shell_wrapper.check_call(cmd, self.logger.debug)
+            cmd = "sudo ln -s '%s' '%s'" % (src_kudu, kudu_sensors_tool_path)
             utils.shell_wrapper.check_call(cmd, self.logger.debug)
 
     def rollback(self):
