@@ -19,6 +19,9 @@ from hyperion_utils import shell_utils
 
 import utils.sa_cm_api
 
+import config_common
+
+
 SETTER_ROLE_NAME = {
     'KUDU_COMMON': 'gflagfile_service_safety_valve',
     'KUDU_MASTER': 'gflagfile_role_safety_valve',
@@ -40,6 +43,9 @@ class KuduConfigTool:
             self.logger = logger
         self.local_host = socket.getfqdn()
         self.all_host_list = DeployTopo().get_all_host_list()
+        self.is_simplified_cluster = (1 == len(self.all_host_list))
+        self.random_dirs_count = config_common.get_host_random_dirs_count(self.local_host)
+        self.host_mem_gb = config_common.get_host_mem_gb(self.local_host)
         self.api = utils.sa_cm_api.SaCmAPI(logger=self.logger)
 
     def get_cloudera_config_setter(self):
@@ -69,6 +75,8 @@ class KuduConfigTool:
         setter_name = SETTER_ROLE_NAME[role]
         if 'KUDU_COMMON' == role:
             for (key, value) in new_config_dict.items():
+                if len(value) == 0:
+                    value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster, self.random_dirs_count, self.host_mem_gb)
                 if key not in old_common_config_dict or value != old_common_config_dict[key]:
                     need_update = True
                     old_common_config_dict[key] = value
@@ -93,6 +101,8 @@ class KuduConfigTool:
                 # 判断配置本身是否存在冲突，有冲突直接报错,有相同的删除group中的
                 old_role_config_dict, need_update = self.check_old_config(role, old_common_config_dict, old_role_config_dict)
                 for (key, value) in new_config_dict.items():
+                    if len(value) == 0:
+                        value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster, self.random_dirs_count, self.host_mem_gb)
                     need_update_value, old_role_config_dict = self.update_config(key, value, old_common_config_dict, old_role_config_dict)
                     need_update = need_update_value or need_update
                 if need_update:
@@ -141,7 +151,7 @@ class KuduConfigTool:
         return old_role_config_dict, need_update
 
     def do_update(self, new_roles_config_dict):
-        if 1 == len(self.all_host_list):
+        if self.is_simplified_cluster:
             self.api.waiting_service_ready(True)
         if self.local_host == self.api.cm_host:
             cloudera_config_setter = self.get_cloudera_config_setter()
@@ -150,6 +160,6 @@ class KuduConfigTool:
                 old_common_config_dict = self.check_and_change_cmd_args(role, new_config_dict, old_common_config_dict, cloudera_config_setter)
         else:
             self.logger.info('host(%s) not cm_host(%s), skip' % (self.local_host, self.api.cm_host))
-        if 1 == len(self.all_host_list):
+        if self.is_simplified_cluster:
             cmd = 'sudo service cloudera-scm-server stop'
             shell_utils.check_call(cmd, self.logger.debug)

@@ -4,15 +4,41 @@ import copy
 import os
 import sys
 
-sys.path.append(os.environ['SENSORS_PLATFORM_HOME'])
-from construction_blueprint.installer_constants import HadoopDistributionType
-
 sys.path.append(os.path.join(os.environ['SENSORS_PLATFORM_HOME'], '..', 'armada', 'hyperion'))
 from hyperion_client.deploy_info import DeployInfo
 from hyperion_client.directory_info import DirectoryInfo
 from hyperion_client.hyperion_inner_client.inner_node_info import InnerNodeInfo
-from hyperion_client.hyperion_inner_client.inner_mothership_api import InnerMotherShipApi
-import utils.sa_cm_api
+
+
+def get_host_random_dirs_count(host):
+    random_dirs = DirectoryInfo().get_storage_data_dir_by_hostname(host, 'random')
+    random_dirs_count = len(random_dirs)
+    if random_dirs_count == 0:
+        raise Exception('host %s has no random dirs' % host)
+    return random_dirs_count
+
+
+def get_host_mem_gb(host):
+    return InnerNodeInfo.get_instance().get_machine_mem_gb(host)
+
+
+def get_dynamic_config_value(key, is_simplified_cluster, random_dirs_count, host_mem_gb):
+    if key == "maintenance_manager_num_threads":
+        return str(random_dirs_count * 3)
+
+    if is_simplified_cluster:
+        # set to 1/4 of host's memory size
+        memory_limit_hard_bytes = int((int(host_mem_gb) << 30) * 0.25)
+    else:
+        # TODO(yingchun): it's waste to use only 12 GB on some large memory hosts, we could improve it later
+        memory_limit_hard_bytes = 6 << 30 if host_mem_gb <= 70 else 12 << 30
+    if key == "memory_limit_hard_bytes":
+        return str(memory_limit_hard_bytes)
+    elif key == "block_cache_capacity_mb":
+        block_cache_capacity_mb = int((int(memory_limit_hard_bytes) >> 20) * 0.3)
+        return str(block_cache_capacity_mb)
+    else:
+        raise Exception('key [%s] is not a dynamic config' % key)
 
 
 KUDU_COMMON_CONFIG = {
@@ -34,39 +60,6 @@ KUDU_MASTER_CONFIG = {
     'table_locations_cache_capacity_mb': '64'
 }
 
-kudu_tserver_list = []
-if DeployInfo().get_hadoop_distribution() == HadoopDistributionType.MOTHERSHIP:
-    kudu_tserver_list = InnerMotherShipApi.get_instance().get_host_by_module_and_role(module_name='KUDU', role='kudu_tserver')
-elif DeployInfo().get_hadoop_distribution() == HadoopDistributionType.CLOUDERA:
-    cm_api = utils.sa_cm_api.SaCmAPI()
-    host_info_map = cm_api.get_host_list()["items"]
-    for role in cm_api.get_roles('kudu')['items']:
-        if 'kudu_tserver' == role['type'].lower():
-            # 通过host_info_map中根据hostId找到hostname
-            for host_info in host_info_map:
-                if host_info["hostId"] == role["hostRef"]["hostId"]:
-                    kudu_tserver_list.append(host_info["hostname"])
-else:
-    # 混部场景，暂时不处理
-    raise Exception('hadoop distribution type is mix, no need to update')
-
-if len(kudu_tserver_list) == 0:
-    raise Exception('no tserver found')
-
-host = kudu_tserver_list[0]
-random_dirs = DirectoryInfo().get_storage_data_dir_by_hostname(host, 'random')
-random_dirs_count = len(random_dirs)
-if random_dirs_count == 0:
-    raise Exception('host %s has no random dirs' % host)
-
-host_mem_gb = InnerNodeInfo.get_instance().get_machine_mem_gb(host)
-if DeployInfo().get_simplified_cluster():
-    # set to 1/4 of host's memory size
-    memory_limit_hard_bytes = int((int(host_mem_gb) << 30) * 0.25)
-else:
-    # TODO(yingchun): it's waste to use only 12 GB on some large memory hosts, we could improve it later
-    memory_limit_hard_bytes = 6 << 30 if host_mem_gb <= 70 else 12 << 30
-block_cache_capacity_mb = int((int(memory_limit_hard_bytes) >> 20) * 0.3)
 
 KUDU_TSERVER_CONFIG = {
     'flush_threshold_mb': '128',
@@ -86,9 +79,9 @@ KUDU_TSERVER_CONFIG = {
     'scanner_ttl_ms': '180000',
     'tablet_delta_store_minor_compact_max': '200',
     'tablet_history_max_age_sec': '600',
-    'maintenance_manager_num_threads': str(random_dirs_count * 3),
-    'memory_limit_hard_bytes': str(memory_limit_hard_bytes),
-    'block_cache_capacity_mb': str(block_cache_capacity_mb)
+    'maintenance_manager_num_threads': "",  # 空value项会在设置时动态获取
+    'memory_limit_hard_bytes': "",
+    'block_cache_capacity_mb': ""
 }
 
 CDH_COMMON_CONFIG = copy.deepcopy(KUDU_COMMON_CONFIG)

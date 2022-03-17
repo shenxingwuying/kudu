@@ -7,11 +7,14 @@ import socket
 
 sys.path.append(os.path.join(os.environ['SENSORS_PLATFORM_HOME'], '..', 'armada', 'hyperion'))
 from hyperion_client.config_manager import ConfigManager
+from hyperion_client.deploy_info import DeployInfo
 from hyperion_utils import shell_utils
 
 sys.path.append(os.path.join(os.environ['SENSORS_PLATFORM_HOME'], 'admintools'))
 from mothership_tools.config.mothership_config_tool import MothershipConfigTool
 from mothership_tools.mothership_api import MothershipAPI
+
+import config_common
 
 
 class MothershipKuduConfigTool:
@@ -24,6 +27,9 @@ class MothershipKuduConfigTool:
         self.mothership_api = MothershipAPI(logger=self.logger)
         # 获取 mothership 的 client conf 找到 server 的机器
         self.server_api_url = ConfigManager().get_client_conf_by_key('sp', 'mothership', 'mothership_server_api_url')
+        self.is_simplified_cluster = DeployInfo().get_simplified_cluster()
+        self.random_dirs_count = config_common.get_host_random_dirs_count(self.local_host)
+        self.host_mem_gb = config_common.get_host_mem_gb(self.local_host)
 
     def _check_and_canonicalize_module_name(self, module_name):
         if not module_name:
@@ -71,4 +77,7 @@ class MothershipKuduConfigTool:
             return
         for (role, new_config_dict) in new_roles_config_dict.items():
             for (key, value) in new_config_dict.items():
+                if len(value) == 0:
+                    value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster,
+                                                                   self.random_dirs_count, self.host_mem_gb)
                 self._check_and_change_cmd_args(role, key, value)
