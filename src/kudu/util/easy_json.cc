@@ -23,9 +23,11 @@
 
 #include <glog/logging.h>
 #include <rapidjson/document.h>
+#include <rapidjson/prettywriter.h>
 #include <rapidjson/rapidjson.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
+
 // IWYU pragma: no_include <rapidjson/encodings.h>
 
 using rapidjson::SizeType;
@@ -35,6 +37,11 @@ using std::string;
 namespace kudu {
 
 EasyJson::EasyJson() : alloc_(new EasyJsonAllocator), value_(&alloc_->value()) {}
+
+EasyJson::EasyJson(rapidjson::Value* value)
+    : alloc_(new EasyJsonAllocator), value_(value) {
+  CHECK(value_->IsObject());
+}
 
 EasyJson::EasyJson(EasyJson::ComplexTypeInitializer type)
     : alloc_(new EasyJsonAllocator), value_(&alloc_->value()) {
@@ -196,10 +203,15 @@ template<> EasyJson EasyJson::PushBack(EasyJson::ComplexTypeInitializer val) {
   return EasyJson(&(*value_)[value_->Size() - 1], alloc_);
 }
 
-string EasyJson::ToString() const {
+string EasyJson::ToString(JsonFormat format) const {
   rapidjson::StringBuffer buffer;
-  rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
-  value_->Accept(writer);
+  if (format == JsonFormat::JSON_PRETTY) {
+    rapidjson::PrettyWriter<rapidjson::StringBuffer> pretty_writer(buffer);
+    value_->Accept(pretty_writer);
+  } else {
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    value_->Accept(writer);
+  }
   return buffer.GetString();
 }
 

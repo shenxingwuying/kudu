@@ -210,7 +210,8 @@ Status EditFile(const RunnerContext& context) {
     ReadablePBContainerFile::Format format =
         FLAGS_json_pretty ? ReadablePBContainerFile::Format::JSON_PRETTY :
                             ReadablePBContainerFile::Format::JSON;
-    RETURN_NOT_OK(pb_reader.Dump(&stream, format));
+    RETURN_NOT_OK(pb_reader.Dump(&stream, format,
+                                 ReadablePBContainerFile::DumpFlag::DEFAULT));
     RETURN_NOT_OK_PREPEND(tmp_json_file->Append(stream.str()), "couldn't write to temporary file");
     RETURN_NOT_OK_PREPEND(tmp_json_file->Close(), "couldn't close temporary file");
   }

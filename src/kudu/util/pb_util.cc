@@ -48,6 +48,7 @@
 #include <google/protobuf/stubs/status.h>
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/util/json_util.h>
+#include <rapidjson/document.h>
 
 #include "kudu/gutil/integral_types.h"
 #include "kudu/gutil/macros.h"
@@ -61,8 +62,10 @@
 #include "kudu/util/crc.h"
 #include "kudu/util/debug/sanitizer_scopes.h"
 #include "kudu/util/debug/trace_event.h"
+#include "kudu/util/easy_json.h"
 #include "kudu/util/env.h"
 #include "kudu/util/faststring.h"
+#include "kudu/util/jsonreader.h"
 #include "kudu/util/jsonwriter.h"
 #include "kudu/util/logging.h"
 #include "kudu/util/path_util.h"
@@ -71,6 +74,7 @@
 #include "kudu/util/scoped_cleanup.h"
 #include "kudu/util/slice.h"
 #include "kudu/util/status.h"
+#include "kudu/util/url-coding.h"
 
 using google::protobuf::Descriptor;
 using google::protobuf::DescriptorPool;
@@ -952,7 +956,8 @@ Status ReadablePBContainerFile::GetPrototype(const Message** prototype) {
   return Status::OK();
 }
 
-Status ReadablePBContainerFile::Dump(ostream* os, ReadablePBContainerFile::Format format) {
+Status ReadablePBContainerFile::Dump(ostream* os, ReadablePBContainerFile::Format format,
+                                     DumpFlag flag) {
   DCHECK_EQ(FileState::OPEN, state_);
 
   // Since we use the protobuf library support for dumping JSON, there isn't any easy
@@ -1004,13 +1009,37 @@ Status ReadablePBContainerFile::Dump(ostream* os, ReadablePBContainerFile::Forma
       case Format::JSON:
       case Format::JSON_PRETTY:
         buf.clear();
+        JsonFormat json_format = JsonFormat::JSON;
         auto opt = google::protobuf::util::JsonPrintOptions();
         if (format == Format::JSON_PRETTY) {
             opt.add_whitespace = true;
+            json_format = JsonFormat::JSON_PRETTY;
         }
         const auto& google_status = google::protobuf::util::MessageToJsonString(*msg, &buf, opt);
         if (!google_status.ok()) {
           return Status::RuntimeError("could not convert PB to JSON", google_status.ToString());
+        }
+        if (flag == DumpFlag::DEFAULT) {
+          *os << buf << endl;
+          break;
+        }
+
+        // Fix instance uuid, output of `kudu pbc dump xxx --json and --debug should be the same.
+        JsonReader reader(buf);
+        RETURN_NOT_OK(reader.Init());
+        const rapidjson::Value* json;
+        if (reader.ExtractObject(reader.root(), nullptr, &json).ok()) {
+          std::string uuid_b64;
+          static std::string uuid_field = "uuid";
+          if (reader.ExtractString(json, uuid_field.c_str(), &uuid_b64).ok()) {
+            EasyJson new_json(const_cast<rapidjson::Value*>(json));
+            std::string uuid;
+            if (Base64Decode(uuid_b64, &uuid)) {
+              new_json.Set(uuid_field, uuid);
+              *os << new_json.ToString(json_format) << endl;
+              break;
+            }
+          }
         }
         *os << buf << endl;
         break;

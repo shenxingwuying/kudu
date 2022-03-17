@@ -24,6 +24,12 @@
 
 namespace kudu {
 
+// pretty json or json
+enum class JsonFormat {
+  JSON,
+  JSON_PRETTY
+};
+
 // A wrapper around rapidjson Value objects, to simplify usage.
 // Intended solely for building json objects, not writing/parsing.
 //
@@ -62,6 +68,10 @@ class EasyJson {
   EasyJson();
   // Initializes the EasyJson object with the given type.
   explicit EasyJson(ComplexTypeInitializer type);
+
+  // Pass external Json object.
+  explicit EasyJson(rapidjson::Value* value);
+
   ~EasyJson() = default;
 
   // Returns the child EasyJson associated with key.
@@ -155,7 +165,7 @@ class EasyJson {
   rapidjson::Value& value() const { return *value_; }
 
   // Returns a string representation of the underlying json.
-  std::string ToString() const;
+  std::string ToString(JsonFormat format = JsonFormat::JSON) const;
 
  private:
   // One instance of EasyJsonAllocator is shared among a root

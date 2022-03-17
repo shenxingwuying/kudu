@@ -138,7 +138,6 @@
 #include "kudu/util/subprocess.h"
 #include "kudu/util/test_macros.h"
 #include "kudu/util/test_util.h"
-#include "kudu/util/url-coding.h"
 
 DECLARE_bool(encrypt_data_at_rest);
 DECLARE_bool(fs_data_dirs_consider_available_space);
@@ -1822,32 +1821,22 @@ TEST_F(ToolTest, TestPbcTools) {
   }
   // Test dump --json
   {
-    // Since the UUID is listed as 'bytes' rather than 'string' in the PB, it dumps
-    // base64-encoded.
-    string uuid_b64;
-    Base64Encode(uuid, &uuid_b64);
-
     string stdout;
     NO_FATALS(RunActionStdoutString(Substitute(
         "pbc dump $0 --json", instance_path), &stdout));
     SCOPED_TRACE(stdout);
     ASSERT_STR_MATCHES(stdout, Substitute(
-        R"(^\{"uuid":"$0","formatStamp":"Formatted at .*"\}$$)", uuid_b64));
+        R"(^\{"uuid":"$0","formatStamp":"Formatted at .*"\}$$)", uuid));
   }
   // Test dump --json_pretty
   {
-    // Since the UUID is listed as 'bytes' rather than 'string' in the PB, it dumps
-    // base64-encoded.
-    string uuid_b64;
-    Base64Encode(uuid, &uuid_b64);
-
     vector<string> stdout;
     NO_FATALS(RunActionStdoutLines(Substitute(
         "pbc dump $0 --json_pretty", instance_path), &stdout));
     SCOPED_TRACE(stdout);
     ASSERT_EQ(4, stdout.size());
     ASSERT_EQ("{", stdout[0]);
-    ASSERT_EQ(Substitute(R"( "uuid": "$0",)", uuid_b64), stdout[1]);
+    ASSERT_EQ(Substitute(R"(    "uuid": "$0",)", uuid), stdout[1]);
     ASSERT_STR_MATCHES(stdout[2], R"( "formatStamp": "Formatted at .*")");
     ASSERT_EQ("}", stdout[3]);
   }

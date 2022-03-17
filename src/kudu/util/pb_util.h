@@ -418,7 +418,13 @@ class ReadablePBContainerFile {
     // Dump in JSON pretty format.
     JSON_PRETTY
   };
-  Status Dump(std::ostream* os, Format format);
+
+  enum class DumpFlag {
+    DEFAULT,
+    DECODE_UUID
+  };
+
+  Status Dump(std::ostream* os, Format format, DumpFlag flag = DumpFlag::DECODE_UUID);
 
   // Closes the container.
   Status Close();
