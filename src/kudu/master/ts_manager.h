@@ -45,6 +45,12 @@ class SysCatalogTable;
 
 typedef std::unordered_map<std::string, std::pair<TServerStatePB, int64_t>> TServerStateMap;
 
+// For statistics live count
+enum class LiveCountFlag {
+  INCLUDE_KSYNCER,
+  EXCLUDE_KSYNCER
+};
+
 // Tracks the servers that the master has heard from, along with their
 // last heartbeat, etc.
 //
@@ -107,7 +113,7 @@ class TSManager {
   int GetCount() const;
 
   // Get the live TS count.
-  int GetLiveCount() const;
+  int GetLiveCount(LiveCountFlag flag = LiveCountFlag::INCLUDE_KSYNCER) const;
 
   // Sets the tserver state for the given tserver, persisting it to disk.
   //

@@ -468,7 +468,10 @@ Status Rebalancer::BuildClusterInfo(const ClusterRawInfo& raw_info,
         return Status::InvalidArgument(Substitute(
             "ignored tserver $0 is not reported among known tservers", ignored_tserver));
       }
-      tservers_to_empty.emplace(ignored_tserver, *replica_count);
+      if (ignored_tserver != FLAGS_ksyncer_uuid) {
+        // ksyncer's replicas don't participant in balancing.
+        tservers_to_empty.emplace(ignored_tserver, *replica_count);
+      }
     }
   }
 

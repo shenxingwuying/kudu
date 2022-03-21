@@ -463,8 +463,12 @@ Status AutoRebalancerTask::BuildClusterRawInfo(
   // was not available before, is available for tablet placement again.
   TSDescriptorVector descriptors;
   ts_manager_->GetDescriptorsAvailableForPlacement(&descriptors);
-  if (descriptors.size() != ts_manager_->GetLiveCount()) {
-    return Status::IllegalState(Substitute("not all tservers available for tablet placement"));
+  int live_count = ts_manager_->GetLiveCount(LiveCountFlag::EXCLUDE_KSYNCER);
+  if (descriptors.size() != live_count) {
+    return Status::IllegalState(Substitute(
+        "not all tservers available for tablet placement, "
+        "available ts count: $0, live ts count: $1",
+        descriptors.size(), live_count));
   }
   tserver_uuids.reserve(descriptors.size());
   tserver_summaries.reserve(descriptors.size());

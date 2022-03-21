@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include <gflags/gflags_declare.h>
 #include <glog/logging.h>
 
 #include "kudu/client/client.h"
@@ -76,6 +77,8 @@ using std::unique_ptr;
 using std::vector;
 using strings::Split;
 using strings::Substitute;
+
+DECLARE_string(ksyncer_uuid);
 
 namespace kudu {
 namespace tools {
@@ -471,6 +474,9 @@ Status CheckCompleteReplace(const client::sp::shared_ptr<client::KuduClient>& cl
   bool is_all_voters = true;
   for (const auto& peer : cstate.committed_config().peers()) {
     if (peer.member_type() != RaftPeerPB::VOTER) {
+      if (peer.permanent_uuid() == FLAGS_ksyncer_uuid) {
+        continue;
+      }
       is_all_voters = false;
       break;
     }

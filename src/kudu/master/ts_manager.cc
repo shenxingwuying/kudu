@@ -209,11 +209,16 @@ int TSManager::GetCount() const {
   return servers_by_id_.size();
 }
 
-int TSManager::GetLiveCount() const {
+int TSManager::GetLiveCount(LiveCountFlag flag) const {
   shared_lock<rw_spinlock> l(lock_);
   int live_count = 0;
   for (const auto& entry : servers_by_id_) {
     const shared_ptr<TSDescriptor>& ts = entry.second;
+    if (flag == LiveCountFlag::EXCLUDE_KSYNCER &&
+        ts->permanent_uuid() == FLAGS_ksyncer_uuid) {
+      VLOG(3) << "Not view ksyncer as a live tserver";
+      continue;
+    }
     if (!ts->PresumedDead()) {
       live_count++;
     }
