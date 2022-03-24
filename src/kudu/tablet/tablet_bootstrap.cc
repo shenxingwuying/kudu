@@ -318,7 +318,7 @@ class TabletBootstrap {
   // See ApplyRowOperations() for more details on how the decision of whether an operation
   // is applied or skipped is made.
   Status PlayRowOperations(const IOContext* io_context,
-                           WriteOpState* op_state,
+                           std::shared_ptr<WriteOpState>& op_state,
                            const TxResultPB& orig_result,
                            TxResultPB* new_result);
 
@@ -338,7 +338,7 @@ class TabletBootstrap {
   // - if it previously succeeded but was flushed, skip it.
   // - otherwise, re-apply to the tablet being bootstrapped.
   Status ApplyOperations(const IOContext* io_context,
-                         WriteOpState* op_state,
+                         std::shared_ptr<WriteOpState>& op_state,
                          const TxResultPB& orig_result,
                          TxResultPB* new_result);
 
@@ -1424,7 +1424,9 @@ Status TabletBootstrap::PlayWriteRequest(const IOContext* io_context,
   DCHECK(replicate_msg->has_timestamp());
   WriteRequestPB* write = replicate_msg->mutable_write_request();
 
-  WriteOpState op_state(nullptr, write, nullptr);
+  std::shared_ptr<WriteOpState> op_state_ptr = std::make_shared<WriteOpState>(
+      tablet_replica_.get(), write, nullptr);
+  WriteOpState& op_state = *op_state_ptr;
   op_state.mutable_op_id()->CopyFrom(replicate_msg->id());
   op_state.set_timestamp(Timestamp(replicate_msg->timestamp()));
 
@@ -1487,7 +1489,7 @@ Status TabletBootstrap::PlayWriteRequest(const IOContext* io_context,
     // failure if we attempted to 'Abort()' after entering the applying stage. Allowing it to
     // Commit isn't problematic because we don't expose the results anyway, and the bad
     // Status returned below will cause us to fail the entire tablet bootstrap anyway.
-    play_status = PlayRowOperations(io_context, &op_state, commit_msg.result(), new_result);
+    play_status = PlayRowOperations(io_context, op_state_ptr, commit_msg.result(), new_result);
 
     if (play_status.ok()) {
       // Replace the original commit message's result with the new one from the replayed operation.
@@ -1635,9 +1637,10 @@ Status TabletBootstrap::PlayNoOpRequest(const IOContext* /*io_context*/,
 }
 
 Status TabletBootstrap::PlayRowOperations(const IOContext* io_context,
-                                          WriteOpState* op_state,
+                                          std::shared_ptr<WriteOpState>& op_state_ptr,
                                           const TxResultPB& orig_result,
                                           TxResultPB* new_result) {
+  WriteOpState* op_state = op_state_ptr.get();
   Schema inserts_schema;
   RETURN_NOT_OK_PREPEND(SchemaFromPB(op_state->request()->schema(), &inserts_schema),
                         "Couldn't decode client schema");
@@ -1662,15 +1665,16 @@ Status TabletBootstrap::PlayRowOperations(const IOContext* io_context,
   RETURN_NOT_OK_PREPEND(tablet_->AcquireRowLocks(op_state),
                         "Failed to acquire row locks");
 
-  RETURN_NOT_OK(ApplyOperations(io_context, op_state, orig_result, new_result));
+  RETURN_NOT_OK(ApplyOperations(io_context, op_state_ptr, orig_result, new_result));
 
   return Status::OK();
 }
 
 Status TabletBootstrap::ApplyOperations(const IOContext* io_context,
-                                        WriteOpState* op_state,
+                                        std::shared_ptr<WriteOpState>& op_state_ptr,
                                         const TxResultPB& orig_result,
                                         TxResultPB* new_result) {
+  WriteOpState* op_state = op_state_ptr.get();
   DCHECK_EQ(op_state->row_ops().size(), orig_result.ops_size());
   DCHECK_EQ(op_state->row_ops().size(), new_result->ops_size());
   int32_t op_idx = 0;
@@ -1720,7 +1724,7 @@ Status TabletBootstrap::ApplyOperations(const IOContext* io_context,
 
     // Actually apply it.
     ProbeStats stats; // we don't use this, but tablet internals require non-NULL.
-    RETURN_NOT_OK(tablet_->ApplyRowOperation(io_context, op_state, op, &stats));
+    RETURN_NOT_OK(tablet_->ApplyRowOperation(io_context, op_state_ptr, op, &stats));
     DCHECK(op->has_result());
 
     // We expect that the above Apply() will always succeed, because we're

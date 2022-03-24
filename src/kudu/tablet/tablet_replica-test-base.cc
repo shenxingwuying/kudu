@@ -81,7 +81,7 @@ const MonoDelta kLeadershipTimeout = MonoDelta::FromSeconds(10);
 
 Status TabletReplicaTestBase::ExecuteWrite(TabletReplica* replica, const WriteRequestPB& req) {
   WriteResponsePB resp;
-  unique_ptr<WriteOpState> op_state(new WriteOpState(replica,
+  std::shared_ptr<WriteOpState> op_state(new WriteOpState(replica,
                                                      &req,
                                                      nullptr, // No RequestIdPB
                                                      &resp));

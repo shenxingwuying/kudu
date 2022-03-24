@@ -76,6 +76,7 @@
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_metrics.h"
 #include "kudu/tablet/tablet_mm_ops.h"
+#include "kudu/tablet/tablet_replica.h"
 #include "kudu/tablet/txn_metadata.h"
 #include "kudu/tserver/tserver.pb.h"
 #include "kudu/tserver/tserver_admin.pb.h"
@@ -1225,7 +1226,8 @@ void Tablet::AbortTransaction(Txn* txn,  const OpId& op_id) {
   txn->AbortTransaction();
 }
 
-Status Tablet::ApplyRowOperations(WriteOpState* op_state) {
+Status Tablet::ApplyRowOperations(std::shared_ptr<WriteOpState>& op_state_ptr) {
+  WriteOpState* op_state = op_state_ptr.get();
   int num_ops = op_state->row_ops().size();
 
   StartApplying(op_state);
@@ -1233,11 +1235,12 @@ Status Tablet::ApplyRowOperations(WriteOpState* op_state) {
   IOContext io_context({ tablet_id() });
   RETURN_NOT_OK(BulkCheckPresence(&io_context, op_state));
 
-  // Actually apply the ops.
+  std::vector<tablet::RowOp*> ops;
+  // TODO(duyuqi), WriteOpState is a atomic ops, should write batch to duplicator
   for (int op_idx = 0; op_idx < num_ops; op_idx++) {
     RowOp* row_op = op_state->row_ops()[op_idx];
     if (row_op->has_result()) continue;
-    RETURN_NOT_OK(ApplyRowOperation(&io_context, op_state, row_op,
+    RETURN_NOT_OK(ApplyRowOperation(&io_context, op_state_ptr, row_op,
                                     op_state->mutable_op_stats(op_idx)));
     DCHECK(row_op->has_result());
   }
@@ -1254,9 +1257,10 @@ Status Tablet::ApplyRowOperations(WriteOpState* op_state) {
 }
 
 Status Tablet::ApplyRowOperation(const IOContext* io_context,
-                                 WriteOpState* op_state,
+                                 std::shared_ptr<WriteOpState>& op_state_ptr,
                                  RowOp* row_op,
                                  ProbeStats* stats) {
+  WriteOpState* op_state = op_state_ptr.get();
   if (!ValidateOpOrMarkFailed(row_op)) {
     return Status::OK();
   }
@@ -1290,11 +1294,16 @@ Status Tablet::ApplyRowOperation(const IOContext* io_context,
   }
 
   Status s;
+  const SchemaPtr schema_ptr = schema();
   switch (row_op->decoded_op.type) {
     case RowOperationsPB::INSERT:
     case RowOperationsPB::INSERT_IGNORE:
     case RowOperationsPB::UPSERT:
-      s = InsertOrUpsertUnlocked(io_context, op_state, row_op, stats);
+      if (op_state->tablet_replica()->IsDuplicator()) {
+        s = op_state->tablet_replica()->Duplicate(op_state_ptr, row_op, stats, schema_ptr);
+      } else {
+        s = InsertOrUpsertUnlocked(io_context, op_state, row_op, stats);
+      }
       if (s.IsAlreadyPresent()) {
         return Status::OK();
       }
@@ -1304,7 +1313,11 @@ Status Tablet::ApplyRowOperation(const IOContext* io_context,
     case RowOperationsPB::UPDATE_IGNORE:
     case RowOperationsPB::DELETE:
     case RowOperationsPB::DELETE_IGNORE:
-      s = MutateRowUnlocked(io_context, op_state, row_op, stats);
+      if (op_state->tablet_replica()->IsDuplicator()) {
+        s = op_state->tablet_replica()->Duplicate(op_state_ptr, row_op, stats, schema_ptr);
+      } else {
+        s = MutateRowUnlocked(io_context, op_state, row_op, stats);
+      }
       if (s.IsNotFound()) {
         return Status::OK();
       }

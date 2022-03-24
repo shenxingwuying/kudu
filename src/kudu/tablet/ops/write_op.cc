@@ -142,7 +142,7 @@ Status WriteAuthorizationContext::CheckPrivileges() const {
   return Status::OK();
 }
 
-WriteOp::WriteOp(unique_ptr<WriteOpState> state, DriverType type)
+WriteOp::WriteOp(std::shared_ptr<WriteOpState> state, DriverType type)
   : Op(type, Op::WRITE_OP),
   state_(std::move(state)) {
   start_time_ = MonoTime::Now();
@@ -274,7 +274,8 @@ Status WriteOp::Apply(CommitMsg** commit_msg) {
   }
 
   Tablet* tablet = state()->tablet_replica()->tablet();
-  RETURN_NOT_OK(tablet->ApplyRowOperations(state()));
+  std::shared_ptr<WriteOpState> state_ptr = shared_state();
+  RETURN_NOT_OK(tablet->ApplyRowOperations(state_ptr));
   TRACE("APPLY: Finished.");
 
   UpdatePerRowMetricsAndErrors();

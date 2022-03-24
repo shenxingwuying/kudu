@@ -31,7 +31,9 @@
 
 #include "kudu/consensus/log.h"
 #include "kudu/consensus/metadata.pb.h"
+#include "kudu/consensus/opid.pb.h"
 #include "kudu/consensus/raft_consensus.h"
+#include "kudu/duplicator/duplicator.h"
 #include "kudu/fs/fs_manager.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
@@ -53,6 +55,7 @@ class DnsResolver;
 class MaintenanceManager;
 class MaintenanceOp;
 class MonoDelta;
+class Schema;
 class ThreadPool;
 class ThreadPoolToken;
 class TxnOpDispatcherITest;
@@ -90,10 +93,15 @@ class TabletStatusPB;
 class TxnCoordinator;
 class TxnCoordinatorFactory;
 
+
 // Callback to run once the work to register a participant and start a
 // transaction on the participant has completed (whether successful or not).
 typedef std::function<void(const Status& status, tserver::TabletServerErrorPB::Code code)>
     RegisteredTxnCallback;
+
+class WriteOpState;
+struct ProbeStats;
+struct RowOp;
 
 // A replica in a tablet consensus configuration, which coordinates writes to tablets.
 // Each time Write() is called this class appends a new entry to a replicated
@@ -111,6 +119,9 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
                 TxnCoordinatorFactory* txn_coordinator_factory,
                 consensus::MarkDirtyCallback cb);
 
+  // MockTabletReplica just for Test
+  explicit TabletReplica(const consensus::RaftPeerPB& local_peer_pb);
+
   // Initializes RaftConsensus.
   // This must be called before publishing the instance to other threads.
   // If this fails, the TabletReplica instance remains in a NOT_INITIALIZED
@@ -127,7 +138,9 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
                scoped_refptr<rpc::ResultTracker> result_tracker,
                scoped_refptr<log::Log> log,
                ThreadPool* prepare_pool,
-               DnsResolver* resolver);
+               DnsResolver* resolver,
+               ThreadPool* duplicate_pool = nullptr);
+
 
   // Synchronously transition this replica to STOPPED state from any other
   // state. This also stops RaftConsensus. If a Stop() operation is already in
@@ -160,7 +173,7 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   // replica. The 'scheduler' functor is used to schedule the activities
   // mentioned above.
   Status SubmitTxnWrite(
-      std::unique_ptr<WriteOpState> op_state,
+      std::shared_ptr<WriteOpState> op_state,
       const std::function<Status(int64_t txn_id, RegisteredTxnCallback cb)>& scheduler);
 
   // Unregister TxnWriteOpDispacher for the specified transaction identifier
@@ -175,8 +188,9 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
 
   // Submits a write to a tablet and executes it asynchronously.
   // The caller is expected to build and pass a WriteOpState that points to the
+
   // RPC's WriteRequest, and WriteResponse.
-  Status SubmitWrite(std::unique_ptr<WriteOpState> op_state);
+  Status SubmitWrite(std::shared_ptr<WriteOpState> op_state);
 
   // Submits an op to update transaction participant state, executing it
   // asynchonously.
@@ -309,6 +323,9 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   Status NewReplicaOpDriver(std::unique_ptr<Op> op,
                             scoped_refptr<OpDriver>* driver);
 
+  Status NewDuplicaOpDriver(std::unique_ptr<Op> op,
+                            scoped_refptr<OpDriver>* driver);
+
   // Tells the tablet's log to garbage collect.
   Status RunLogGC();
 
@@ -361,6 +378,7 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
     return txn_coordinator_.get();
   }
 
+
   // Whether or not to run a new staleness transactions aborting task.
   // If the tablet is part of a transaction status table and is in
   // RUNNING state, register the task by increasing the transaction status
@@ -388,6 +406,35 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
 
   // Submit ParticipantOpPB::BEGIN_TXN operation for the specified transaction.
   void BeginTxnParticipantOp(int64_t txn_id, RegisteredTxnCallback began_txn_cb);
+
+
+  bool IsDuplicator() const {
+    return is_duplicator_;
+  }
+
+  Status Duplicate(const std::shared_ptr<WriteOpState>& op_state_ptr,
+                   RowOp* row_op, ProbeStats* stats, const std::shared_ptr<Schema>& schema) {
+    duplicator_->Duplicate(op_state_ptr, row_op, schema);
+    // TODO(duyuuqi), when bootstrapping it default msr_id is what?
+    // because the mrs is not flush, so the mrs_id is all 0 (first MemRowSet id).
+    // So commit id is 0.
+    // need some stats ?
+    // We need satisfy rows.
+    int32_t mrs_id = (tablet_ == nullptr) ? 0 : tablet_->CurrentMrsIdForTests();
+    row_op->SetInsertSucceeded(mrs_id);
+    stats->mrs_consulted++;
+    return Status::OK();
+  }
+
+  const consensus::OpId last_confirmed_opid() const {
+    return duplicator_->last_confirmed_opid();
+  }
+  void set_last_committed_opid(consensus::OpId last_committed_opid) {
+    last_committed_opid_ = last_committed_opid;
+  }
+  const consensus::OpId last_committed_opid() const {
+    return last_committed_opid_;
+  }
 
  private:
   friend class kudu::AlterTableTest;
@@ -428,7 +475,7 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
     // operation. In the two former cases, returns Status::OK(); in the latter
     // case returns non-OK status correspondingly. The 'scheduler' function is
     // invoked to schedule preliminary tasks, if necessary.
-    Status Dispatch(std::unique_ptr<WriteOpState> op,
+    Status Dispatch(std::shared_ptr<WriteOpState> op,
                     const std::function<Status(int64_t txn_id,
                                                RegisteredTxnCallback cb)>& scheduler);
 
@@ -456,13 +503,13 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
     FRIEND_TEST(kudu::TxnOpDispatcherITest, PreliminaryTasksTimeout);
 
     // Add the specified operation into the queue.
-    Status EnqueueUnlocked(std::unique_ptr<WriteOpState> op);
+    Status EnqueueUnlocked(std::shared_ptr<WriteOpState> op);
 
     // Respond to the given write operations with the specified status.
     static Status RespondWithStatus(
         const Status& status,
         tserver::TabletServerErrorPB::Code code,
-        std::deque<std::unique_ptr<WriteOpState>> ops);
+        std::deque<std::shared_ptr<WriteOpState>> ops);
 
     // Pointer to the parent TabletReplica instance which keeps this
     // TxnOpDispatcher instance in its 'txn_op_dispatchers_' map.
@@ -495,7 +542,7 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
     // Queue to buffer txn write operations while the preliminary work of
     // registering the tablet as a participant in the transaction, etc. are
     // in progress.
-    std::deque<std::unique_ptr<WriteOpState>> ops_queue_;
+    std::deque<std::shared_ptr<WriteOpState>> ops_queue_;
   };
 
   ~TabletReplica();
@@ -572,6 +619,7 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   std::shared_ptr<Tablet> tablet_;
   std::shared_ptr<rpc::Messenger> messenger_;
   std::shared_ptr<consensus::RaftConsensus> consensus_;
+  bool is_duplicator_ = false;
 
   // Lock protecting state_, last_status_, as well as pointers to collaborating
   // classes such as tablet_, consensus_, and maintenance_ops_.
@@ -591,6 +639,10 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
 
   // Token for serial task submission to the server-wide op prepare pool.
   std::unique_ptr<ThreadPoolToken> prepare_pool_token_;
+
+  // duplicator will replicate wals to third store system
+  duplicator::Duplicator* duplicator_;
+  consensus::OpId last_committed_opid_;
 
   clock::Clock* clock_;
 

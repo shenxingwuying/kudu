@@ -108,6 +108,8 @@ else
       "oatpp")        F_OATPP=1 ;;
       "oatpp-swagger") F_OATPP_SWAGGER=1 ;;
       "jwt-cpp")      F_JWT_CPP=1;;
+      "rdkafka")      F_KAFKA=1 ;;
+      "cppkafka")     F_KAFKA=1 ;;
       *)              echo "Unknown module: $arg"; exit 1 ;;
     esac
   done
@@ -424,6 +426,11 @@ fi
 
 if [ -n "$F_UNINSTRUMENTED" -o -n "$F_JWT_CPP" ]; then
   build_jwt_cpp
+fi
+
+if [ -n "$F_UNINSTRUMENTED" -o -n "$F_KAFKA" ]; then
+  build_librdkafka
+  build_cppkafka
 fi
 
 restore_env

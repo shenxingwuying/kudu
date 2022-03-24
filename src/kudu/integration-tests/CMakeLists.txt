@@ -163,3 +163,6 @@ endif()
 
 # Tests that should not be run automatically by ctest.
 ADD_KUDU_TEST_NO_CTEST(version_migration-test)
+
+SET_KUDU_TEST_LINK_LIBS(itest_util gumbo-parser gumbo-query kafka)
+ADD_KUDU_TEST(duplication_with_kafka-itest)

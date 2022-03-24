@@ -35,6 +35,10 @@ bool ReplicaController::is_voter(const KuduReplica& replica) {
   return replica.data_->is_voter_;
 }
 
+bool ReplicaController::is_duplicator(const KuduReplica& replica) {
+  return !replica.data_->is_voter_;
+}
+
 } // namespace internal
 } // namespace client
 } // namespace kudu

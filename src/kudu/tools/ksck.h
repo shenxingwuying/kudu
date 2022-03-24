@@ -78,6 +78,13 @@ class KsckTabletReplica {
     return is_voter_;
   }
 
+  // TODO, In fact, !is_voter stable is duplicator, but
+  // not strict correct. When recovering a replica, the replica is non voter, 
+  // and when recovering finished, it promote to voter.
+  bool is_duplicator() {
+    return !is_voter_;
+  }
+
  private:
   const std::string ts_uuid_;
   const bool is_leader_;

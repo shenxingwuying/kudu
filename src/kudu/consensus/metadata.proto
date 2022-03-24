@@ -94,6 +94,9 @@ message RaftPeerPB {
     UNKNOWN_MEMBER_TYPE = 999;
     NON_VOTER = 0;
     VOTER = 1;
+    // DUPLICATOR is a special NON_VOTER which cann't promote to VOTER,
+    // the raft role is LEARNER
+    DUPLICATOR = 2;
   };
 
   // Permanent uuid is optional: RaftPeerPB/RaftConfigPB instances may

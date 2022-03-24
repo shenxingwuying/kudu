@@ -200,6 +200,19 @@ Status KuduTableAlterer::Data::ToRequest(AlterTableRequestPB* req) {
         encoder.Add(upper_bound_type, *s.upper_bound);
         break;
       }
+      case AlterTableRequestPB::ADD_DUPLICATION:
+      {
+        master::DuplicationInfo* info = pb_step->mutable_add_duplication()->mutable_dup_info();
+        info->set_name(s.dup_info->name);
+        // TODO(duyuqi), convert it to real downstream type
+        info->set_type(master::KAFKA);
+        break;
+      }
+      case AlterTableRequestPB::DROP_DUPLICATION:
+      {
+        pb_step->mutable_drop_duplication()->set_name(s.dup_info->name);
+        break;
+      }
       default:
         LOG(FATAL) << "unknown step type " << AlterTableRequestPB::StepType_Name(s.step_type);
     }

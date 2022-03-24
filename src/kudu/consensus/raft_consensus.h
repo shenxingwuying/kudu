@@ -87,6 +87,9 @@ struct ServerContext {
   // Threadpool on which to run Raft tasks.
   ThreadPool* raft_pool;
 
+  // ThreadPool on which to run duplication tasks
+  ThreadPool* duplicate_pool;
+
   // Shared boolean indicating whether Raft consensus should continue sending request messages
   // even if a peer is considered as failed.
   const bool* allow_status_msg_for_failed_peer = nullptr;
@@ -170,6 +173,11 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
 
   // Returns true if RaftConsensus is running.
   bool IsRunning() const;
+
+  // Returns true if local replica is duplicator, used by init.
+  bool IsDuplicator() {
+    return cmeta_->IsDuplicatorInConfig(local_peer_pb_.permanent_uuid(), ACTIVE_CONFIG);
+  }
 
   // Emulates an election by increasing the term number and asserting leadership
   // in the configuration by sending a NO_OP to other peers.

@@ -146,6 +146,8 @@ void BuildConsensusStateForConfigMember(const consensus::ConsensusStatePB& cstat
   for (const auto& pb : peers) {
     if (pb.member_type() == consensus::RaftPeerPB::NON_VOTER) {
       InsertOrDie(&ksck_cstate->non_voter_uuids, pb.permanent_uuid());
+    } else if (pb.member_type() == consensus::RaftPeerPB::DUPLICATOR) {
+      InsertOrDie(&ksck_cstate->duplicator_uuids, pb.permanent_uuid());
     } else {
       InsertOrDie(&ksck_cstate->voter_uuids, pb.permanent_uuid());
     }
@@ -886,9 +888,12 @@ HealthCheckResult Ksck::VerifyTablet(const shared_ptr<KsckTablet>& tablet,
   }
   vector<string> voter_uuids_from_master;
   vector<string> non_voter_uuids_from_master;
+  vector<string> duplicator_uuids_from_master;
   for (const auto& replica : tablet->replicas()) {
     if (replica->is_voter()) {
       voter_uuids_from_master.push_back(replica->ts_uuid());
+    } else if (replica->is_duplicator()) {
+      duplicator_uuids_from_master.push_back(replica->ts_uuid());
     } else {
       non_voter_uuids_from_master.push_back(replica->ts_uuid());
     }
@@ -898,10 +903,13 @@ HealthCheckResult Ksck::VerifyTablet(const shared_ptr<KsckTablet>& tablet,
                                boost::none,
                                leader_uuid,
                                voter_uuids_from_master,
-                               non_voter_uuids_from_master);
+                               non_voter_uuids_from_master,
+                               duplicator_uuids_from_master);
 
   int leaders_count = 0;
+  int duplicators_count = 0;
   int running_voters_count = 0;
+  int running_duplicators_count = 0;
   int copying_replicas_count = 0;
   int conflicting_states = 0;
   int num_voters = 0;
@@ -942,8 +950,13 @@ HealthCheckResult Ksck::VerifyTablet(const shared_ptr<KsckTablet>& tablet,
     if (replica->is_leader()) {
       leaders_count++;
     }
+    if (replica->is_duplicator()) {
+      duplicators_count++;
+    }
     if (repl_info->state == tablet::RUNNING && replica->is_voter()) {
       running_voters_count++;
+    } else if (repl_info->state == tablet::RUNNING && replica->is_duplicator()) {
+      running_duplicators_count++;
     } else if (repl_info->status_pb &&
                repl_info->status_pb->tablet_data_state() == tablet::TABLET_DATA_COPYING) {
       copying_replicas_count++;

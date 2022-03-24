@@ -154,6 +154,9 @@ message SysTabletsEntryPB {
 
   // The delete time of the tablet, in seconds since the epoch.
   optional int64 delete_timestamp = 9;
+
+  // Replica for duplication
+  repeated DuplicationInfo dup_infos = 100;
 }
 
 // The on-disk entry in the sys.catalog table ("metadata" column) for
@@ -211,6 +214,7 @@ message SysTablesEntryPB {
   // table, rather than a system table.
   optional TableTypePB table_type = 14;
 
+
   // Table disk size limit.
   optional int64 table_disk_size_limit = 15;
   // Table row count limit.
@@ -221,6 +225,9 @@ message SysTablesEntryPB {
 
   // The delete time of the table, in seconds since the epoch.
   optional int64 delete_timestamp = 18;
+
+  // Replica for duplication.
+  repeated DuplicationInfo dup_infos = 100;
 }
 
 // The on-disk entry in the sys.catalog table ("metadata" column) to represent
@@ -510,6 +517,23 @@ message GetTabletLocationsResponsePB {
 //  Catalog
 // ============================================================================
 
+enum DuplicationDownstream {
+    INVALID_MAX_SYSTEM = 999;
+    KAFKA = 0;
+}
+
+message DuplicationInfo {
+  // the dup name for alter add or delete
+  required string name = 1;
+  //
+  required DuplicationDownstream type = 2;
+
+  // If not set, server will use the gflag default value
+  optional string uri = 3;
+
+  optional string options = 4;
+}
+
 message CreateTableRequestPB {
   required string name = 1;
   required SchemaPB schema = 2;
@@ -547,8 +571,14 @@ message CreateTableRequestPB {
   // table, rather than a system table.
   optional TableTypePB table_type = 11;
 
+
   // The comment on the table.
   optional string comment = 13;
+
+  // Replica for duplication.
+  // firstly, we support only 1 duplication_infos
+  // TODO(duyuqi), support more than one
+  repeated DuplicationInfo dup_infos = 100;
 }
 
 message CreateTableResponsePB {
@@ -704,6 +734,8 @@ message AlterTableRequestPB {
     ALTER_COLUMN = 4;
     ADD_RANGE_PARTITION = 5;
     DROP_RANGE_PARTITION = 6;
+    ADD_DUPLICATION = 100;
+    DROP_DUPLICATION = 101;
   }
   message AddColumn {
     // The schema to add.
@@ -738,6 +770,12 @@ message AlterTableRequestPB {
     // the range partition to add or drop.
     optional RowOperationsPB range_bounds = 1;
   }
+  message AddDuplication {
+    required DuplicationInfo dup_info = 1;
+  }
+  message DropDuplication {
+    required string name = 1;
+  }
 
   message Step {
     optional StepType type = 1 [ default = UNKNOWN ];
@@ -749,6 +787,8 @@ message AlterTableRequestPB {
     optional AddRangePartition add_range_partition = 5;
     optional DropRangePartition drop_range_partition = 6;
     optional AlterColumn alter_column = 7;
+    optional AddDuplication add_duplication = 100;
+    optional DropDuplication drop_duplication = 101;
   }
 
   required TableIdentifierPB table = 1;
