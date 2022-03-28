@@ -16,14 +16,14 @@ class SokuToolInstallerStep(BaseInstallerStep):
     def update(self):
         # 更新系统目录下kudu工具的链接位置到soku_tool目录下
         dir_kudu = os.path.join("/usr/bin", "kudu")
-        if os.path.islink(dir_kudu):
+        if os.path.islink(dir_kudu) or os.path.isfile(dir_kudu):
             cmd = "sudo rm -f '%s'" % dir_kudu
             check_call(cmd, self.logger.debug)
         src_kudu = os.path.join(self.product_home, "soku_tool/kudu")
         cmd = "sudo ln -s '%s' '%s'" % (src_kudu, dir_kudu)
         check_call(cmd, self.logger.debug)
         dir_sp_kudu = os.path.join("/usr/bin", "sp_kudu")
-        if os.path.islink(dir_sp_kudu):
+        if os.path.islink(dir_sp_kudu) or os.path.isfile(dir_sp_kudu):
             cmd = "sudo rm -f '%s'" % dir_sp_kudu
             check_call(cmd, self.logger.debug)
         src_sp_kudu = os.path.join(self.product_home, "soku_tool/sp_kudu")
