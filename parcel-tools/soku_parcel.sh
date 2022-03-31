@@ -38,6 +38,14 @@ cdh_parcel=${bin_path}/'cdh_parcel'
 cp -rf ${bin_path}/installed ${bin_path}/${full_version}
 cp -rf ${script_path}/../parcel-meta/meta ${bin_path}/${full_version}/
 
+# Fix cdh --superuser_acl=sa_cluster,root,kudu for compatibility
+mkdir -p ${bin_path}/${full_version}/lib/kudu/
+cp -rf ${script_path}/../parcel-meta/sbin-release ${bin_path}/${full_version}/lib/kudu/
+
+pushd ${bin_path}/${full_version}/lib/kudu/
+ln -s sbin-release sbin
+popd
+
 #生成 meta 版本
 sed -i "s/{autogen_version}/${version}/g" ${bin_path}/${full_version}/meta/parcel.json
 if [ "x"${level} = "xdevelop" ]; then

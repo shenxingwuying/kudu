@@ -1,0 +1,2 @@
+#!/bin/bash
+exec ${KUDU_HOME}/../../sbin/kudu-master --superuser_acl=sa_cluster,kudu,root $@
