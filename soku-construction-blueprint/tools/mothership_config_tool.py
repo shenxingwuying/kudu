@@ -28,8 +28,8 @@ class MothershipKuduConfigTool:
         # 获取 mothership 的 client conf 找到 server 的机器
         self.server_api_url = ConfigManager().get_client_conf_by_key('sp', 'mothership', 'mothership_server_api_url')
         self.is_simplified_cluster = DeployInfo().get_simplified_cluster()
-        self.random_dirs_count = config_common.get_host_random_dirs_count(self.local_host)
-        self.host_mem_gb = config_common.get_host_mem_gb(self.local_host)
+        self.tserver_random_dirs_count = config_common.get_role_random_dirs_count(self.mothership_api, 'kudu_tserver')
+        self.tserver_mem_gb = config_common.get_role_mem_gb(self.mothership_api, 'kudu_tserver')
 
     def _check_and_canonicalize_module_name(self, module_name):
         if not module_name:
@@ -79,5 +79,5 @@ class MothershipKuduConfigTool:
             for (key, value) in new_config_dict.items():
                 if len(value) == 0:
                     value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster,
-                                                                   self.random_dirs_count, self.host_mem_gb)
+                                                                   self.tserver_random_dirs_count, self.tserver_mem_gb)
                 self._check_and_change_cmd_args(role, key, value)

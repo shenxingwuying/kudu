@@ -10,16 +10,30 @@ from hyperion_client.directory_info import DirectoryInfo
 from hyperion_client.hyperion_inner_client.inner_node_info import InnerNodeInfo
 
 
-def get_host_random_dirs_count(host):
-    random_dirs = DirectoryInfo().get_storage_data_dir_by_hostname(host, 'random')
-    random_dirs_count = len(random_dirs)
-    if random_dirs_count == 0:
-        raise Exception('host %s has no random dirs' % host)
-    return random_dirs_count
+def get_kudu_role_host_list(api, role, env_type):
+    if env_type == 'cdh':
+        service_name_map = api.conf['service_name_map']
+        real_service_name = service_name_map['kudu']
+        role_host_list = api.get_roles_host(real_service_name, role)
+    else:
+        role_host_list = api.get_host_by_module_and_role('kudu', role)
+    if not role_host_list or not len(role_host_list):
+        raise Exception('failed to get role[%s] host list' % role)
+    return role_host_list
 
 
-def get_host_mem_gb(host):
-    return InnerNodeInfo.get_instance().get_machine_mem_gb(host)
+def get_role_random_dirs_count(api, role, env_type='mothership'):
+    role_host_list = get_kudu_role_host_list(api, role, env_type)
+    # todo 防御性检查,看看 tserver 所在 host 的 random 盘数和内存是一致的?
+    random_dirs = DirectoryInfo().get_storage_data_dir_by_hostname(role_host_list[0], 'random')
+    if random_dirs and len(random_dirs):
+        return len(random_dirs)
+    raise Exception('host %s has no random dirs' % role_host_list[0])
+
+
+def get_role_mem_gb(api, role, env_type='mothership'):
+    role_host_list = get_kudu_role_host_list(api, role, env_type)
+    return InnerNodeInfo.get_instance().get_machine_mem_gb(role_host_list[0])
 
 
 def get_dynamic_config_value(key, is_simplified_cluster, random_dirs_count, host_mem_gb):

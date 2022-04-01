@@ -14,7 +14,7 @@ from cdh_config_common import CdhConfigCommon
 
 sys.path.append(os.path.join(os.environ['SENSORS_PLATFORM_HOME'], '..', 'armada', 'hyperion'))
 from hyperion_client.config_manager import ConfigManager
-from hyperion_client.deploy_topo import DeployTopo
+from hyperion_client.deploy_info import DeployInfo
 from hyperion_utils import shell_utils
 
 import utils.sa_cm_api
@@ -42,11 +42,10 @@ class KuduConfigTool:
         else:
             self.logger = logger
         self.local_host = socket.getfqdn()
-        self.all_host_list = DeployTopo().get_all_host_list()
-        self.is_simplified_cluster = (1 == len(self.all_host_list))
-        self.random_dirs_count = config_common.get_host_random_dirs_count(self.local_host)
-        self.host_mem_gb = config_common.get_host_mem_gb(self.local_host)
+        self.is_simplified_cluster = DeployInfo().get_simplified_cluster()
         self.api = utils.sa_cm_api.SaCmAPI(logger=self.logger)
+        self.tserver_random_dirs_count = config_common.get_role_random_dirs_count(self.api, 'kudu_tserver', 'cdh')
+        self.tserver_mem_gb = config_common.get_role_mem_gb(self.api, 'kudu_tserver', 'cdh')
 
     def get_cloudera_config_setter(self):
         cloudera_client_conf = ConfigManager().get_client_conf('sp', 'cloudera')
@@ -76,7 +75,7 @@ class KuduConfigTool:
         if 'KUDU_COMMON' == role:
             for (key, value) in new_config_dict.items():
                 if len(value) == 0:
-                    value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster, self.random_dirs_count, self.host_mem_gb)
+                    value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster, self.tserver_random_dirs_count, self.tserver_mem_gb)
                 if key not in old_common_config_dict or value != old_common_config_dict[key]:
                     need_update = True
                     old_common_config_dict[key] = value
@@ -102,7 +101,7 @@ class KuduConfigTool:
                 old_role_config_dict, need_update = self.check_old_config(role, old_common_config_dict, old_role_config_dict)
                 for (key, value) in new_config_dict.items():
                     if len(value) == 0:
-                        value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster, self.random_dirs_count, self.host_mem_gb)
+                        value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster, self.tserver_random_dirs_count, self.tserver_mem_gb)
                     need_update_value, old_role_config_dict = self.update_config(key, value, old_common_config_dict, old_role_config_dict)
                     need_update = need_update_value or need_update
                 if need_update:
