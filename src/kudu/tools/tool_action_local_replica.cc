@@ -129,6 +129,7 @@ DEFINE_bool(ignore_nonexistent, false,
 DECLARE_int32(tablet_copy_download_threads_nums_per_session);
 
 DECLARE_string(tables);
+DECLARE_string(tablets);
 
 static bool ValidateCloneFlags() {
   if (FLAGS_current_bucket < 0 && FLAGS_num_clone_processes < 0) {
@@ -491,6 +492,17 @@ Status CloneTserver(const RunnerContext& context) {
   vector<ListTabletsResponsePB::StatusAndSchemaPB> replicas;
   RETURN_NOT_OK(GetReplicas(proxy.get(), &replicas));
 
+  const set<string>& tablet_id_filters = Split(FLAGS_tablets, ",", strings::SkipWhitespace());
+  if (!tablet_id_filters.empty()) {
+    for (auto replica = replicas.begin(); replica != replicas.end();) {
+      if (!ContainsKey(tablet_id_filters, replica->tablet_status().tablet_id())) {
+        replica = replicas.erase(replica);
+      } else {
+        replica++;
+      }
+    }
+  }
+
   sort(replicas.begin(), replicas.end(),
        [](const ListTabletsResponsePB::StatusAndSchemaPB& lhs,
           const ListTabletsResponsePB::StatusAndSchemaPB& rhs) {
@@ -578,23 +590,16 @@ Status CloneTserver(const RunnerContext& context) {
   }
 
   // 6. Start downloading tablets.
-  // Protect finished_byte_size, failed_tablets and succeed_tablets.
+  // Protect finished_byte_size, failed_tablet_to_reason and succeed_tablets.
   simple_spinlock lock;
   int64_t finished_byte_size = 0;
-  vector<string> failed_tablets;
+  map<string, Status> failed_tablet_to_reason;
   vector<string> succeed_tablets;
   std::unique_ptr<ThreadPool> clone_pool;
   ThreadPoolBuilder("clone-pool").set_max_threads(FLAGS_num_max_threads)
                                  .set_min_threads(FLAGS_num_max_threads)
                                  .Build(&clone_pool);
   for (const auto& tablet_id : tablets_to_download) {
-    {
-      std::lock_guard<simple_spinlock> l(lock);
-      // Short circuit break when occured error.
-      if (!failed_tablets.empty()) {
-        break;
-      }
-    }
     RETURN_NOT_OK(clone_pool->Submit([&]() {
       LOG(INFO) << "Downloading tablet " << tablet_id;
       MessengerBuilder builder("tablet_clone_client." + tablet_id);
@@ -602,13 +607,27 @@ Status CloneTserver(const RunnerContext& context) {
       builder.Build(&messenger);
       TabletCopyClient client(tablet_id, &fs_manager, cmeta_manager,
                               messenger, nullptr /* no metrics */);
-      CHECK_OK(client.Start(hp, nullptr));
-      CHECK_OK(client.FetchAll(nullptr));
-      Status s = client.Finish();
+      Status s;
+      do {
+        s = client.Start(hp, nullptr);
+        if (!s.ok()) {
+          break;
+        }
+
+        s = client.FetchAll(nullptr);
+        if (!s.ok()) {
+          break;
+        }
+
+        s = client.Finish();
+        if (!s.ok()) {
+          break;
+        }
+      } while (false);
       {
         std::lock_guard<simple_spinlock> l(lock);
         if (!s.ok()) {
-          failed_tablets.emplace_back(tablet_id);
+          InsertOrDie(&failed_tablet_to_reason, tablet_id, s);
           LOG(INFO) << Substitute("Tablet $0 download failed, error=$1.",
                                   tablet_id, s.ToString());
         } else {
@@ -617,22 +636,16 @@ Status CloneTserver(const RunnerContext& context) {
         }
         finished_byte_size += tablet_id_to_size[tablet_id];
         LOG(INFO) << Substitute("$0/$1 tablets, $2/$3 KiB downloaded, include $4 failed tablets.",
-                                succeed_tablets.size() + failed_tablets.size(),
+                                succeed_tablets.size() + failed_tablet_to_reason.size(),
                                 tablets_to_download.size(),
                                 finished_byte_size >> 10,
                                 total_byte_size >> 10,
-                                failed_tablets.size());
+                                failed_tablet_to_reason.size());
       }
     }));
   }
   clone_pool->Wait();
   clone_pool->Shutdown();
-
-  if (!failed_tablets.empty()) {
-    return Status::Corruption(Substitute("Failed during download, failed tablets are: $0",
-                                         JoinStrings(failed_tablets, ";")));
-  }
-  CHECK_EQ(tablets_to_download.size(), succeed_tablets.size());
 
   // 7. Rewrite config to 'uuid:HOSTF:port', indicate this replica need to be re-distributed.
   if (FLAGS_rewrite_config) {
@@ -645,11 +658,25 @@ Status CloneTserver(const RunnerContext& context) {
 
     int cmeta_updated_count = 0;
     for (const auto& tablet_id : succeed_tablets) {
-      RETURN_NOT_OK(BackupConsensusMetadata(&fs_manager, tablet_id));
+      Status s = BackupConsensusMetadata(&fs_manager, tablet_id);
+      if (!s.ok()) {
+        InsertOrDie(&failed_tablet_to_reason, tablet_id, s);
+        LOG(ERROR) << Substitute("BackupConsensusMetadata for tablet: $0 failed, error: $1",
+                                 tablet_id, s.ToString());
+        continue;
+      }
+
       scoped_refptr<ConsensusMetadataManager> cmeta_manager =
         new ConsensusMetadataManager(&fs_manager);
       scoped_refptr<ConsensusMetadata> cmeta;
-      RETURN_NOT_OK(cmeta_manager->Load(tablet_id, &cmeta));
+      s = cmeta_manager->Load(tablet_id, &cmeta);
+      if (!s.ok()) {
+        InsertOrDie(&failed_tablet_to_reason, tablet_id, s);
+        LOG(ERROR) << Substitute("Load cmeta for tablet: $0 failed, error: $1",
+                                 tablet_id, s.ToString());
+        continue;
+      }
+
       RaftConfigPB current_config = cmeta->CommittedConfig();
       RaftConfigPB new_config = current_config;
       new_config.clear_peers();
@@ -661,14 +688,33 @@ Status CloneTserver(const RunnerContext& context) {
         new_peer.mutable_last_known_addr()->CopyFrom(new_peer_host_port_pb);
         new_config.add_peers()->CopyFrom(new_peer);
       }
+
       cmeta->set_committed_config(new_config);
-      RETURN_NOT_OK(cmeta->Flush());
+      s = cmeta->Flush();
+      if (!s.ok()) {
+        InsertOrDie(&failed_tablet_to_reason, tablet_id, s);
+        LOG(ERROR) << Substitute("Flush cmeta for tablet: $0 failed, error: $1",
+                                 tablet_id, s.ToString());
+        continue;
+      }
+
       LOG(INFO) << Substitute("$0/$1 tablets rewrite done.",
                               ++cmeta_updated_count,
                               succeed_tablets.size());
     }
   }
-  LOG(INFO) << "clone tserver succeed";
+
+  if (!failed_tablet_to_reason.empty()) {
+    LOG(ERROR) << Substitute("Failed clone tablets:\n $0",
+                             JoinMapped(failed_tablet_to_reason,
+                                 [] (const pair<string, Status>& tablet_to_reason) {
+                                   return Substitute("$0 => $1",
+                                                     tablet_to_reason.first,
+                                                     tablet_to_reason.second.ToString());
+                                 },
+                                 "\n"));
+    LOG(FATAL) << "You must re-download the tablets above";
+  }
 
   return Status::OK();
 }
@@ -1235,6 +1281,8 @@ unique_ptr<Mode> BuildLocalReplicaMode() {
       .AddOptionalParameter("num_max_threads")
       .AddOptionalParameter("rewrite_config")
       .AddOptionalParameter("tables")
+      .AddOptionalParameter("tablets")
+      .AddOptionalParameter("tablet_copy_download_threads_nums_per_session")
       .AddOptionalParameter("target_port")
       .Build();
 
