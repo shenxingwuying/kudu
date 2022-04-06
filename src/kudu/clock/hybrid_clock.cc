@@ -66,7 +66,7 @@ using strings::Substitute;
 #define TIME_SOURCE_UNSYNC_SYSTEM "system_unsync"
 #define TIME_SOURCE_MOCK "mock"
 
-DEFINE_int32(max_clock_sync_error_usec, 10 * 1000 * 1000, // 10 secs
+DEFINE_int64(max_clock_sync_error_usec, 10 * 1000 * 1000, // 10 secs
              "Maximum allowed clock synchronization error as reported by NTP "
              "before the server will abort.");
 TAG_FLAG(max_clock_sync_error_usec, advanced);

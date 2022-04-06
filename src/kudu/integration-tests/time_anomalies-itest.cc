@@ -35,7 +35,7 @@
 #include "kudu/util/test_macros.h"
 #include "kudu/util/test_util.h"
 
-DECLARE_int32(max_clock_sync_error_usec);
+DECLARE_int64(max_clock_sync_error_usec);
 
 using kudu::cluster::ExternalMiniClusterOptions;
 using kudu::cluster::BuiltinNtpConfigMode;
