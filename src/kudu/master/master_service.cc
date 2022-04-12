@@ -666,6 +666,34 @@ void MasterServiceImpl::GetTableSchema(const GetTableSchemaRequestPB* req,
   rpc->RespondSuccess();
 }
 
+void MasterServiceImpl::Rebalance(const RebalanceRequestPB* req,
+                                  RebalanceResponsePB* resp,
+                                  rpc::RpcContext* rpc) {
+  Status s;
+  {
+    {
+      CatalogManager::ScopedLeaderSharedLock l(server_->catalog_manager());
+      if (!l.CheckIsInitializedAndIsLeaderOrRespond(resp, rpc)) {
+        return;
+      }
+    }
+
+    if (!server_->IsFromSuperUser(rpc)) {
+      s = Status::NotAuthorized("Unauthorized rebalance");
+      StatusToPB(s, resp->mutable_error()->mutable_status());
+      resp->mutable_error()->set_code(MasterErrorPB::NOT_AUTHORIZED);
+    } else {
+      s = server_->catalog_manager()->Rebalance(
+          req, resp, rpc->remote_user().username(),
+          FLAGS_master_support_authz_tokens ? server_->token_signer()
+                                            : nullptr);
+    }
+  }
+
+  CheckRespErrorOrSetUnknown(s, resp);
+  rpc->RespondSuccess();
+}
+
 void MasterServiceImpl::ListTabletServers(const ListTabletServersRequestPB* req,
                                           ListTabletServersResponsePB* resp,
                                           rpc::RpcContext* rpc) {

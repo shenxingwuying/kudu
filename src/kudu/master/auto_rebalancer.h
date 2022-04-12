@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include <atomic>
 #include <memory>
 #include <random>
@@ -29,12 +31,14 @@
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/rebalance/rebalancer.h"
 #include "kudu/util/countdown_latch.h"
+#include "kudu/util/mutex.h"
 #include "kudu/util/status.h"
 
 namespace kudu {
 
 class HostPort;
 class Thread;
+class ThreadPoolToken;
 
 namespace rebalance {
 class RebalancingAlgo;
@@ -76,12 +80,20 @@ class AutoRebalancerTask {
   // before shutting down the catalog manager.
   void Shutdown();
 
+  // Execute replica rebalance once.
+  Status DataRebalance(bool* should_stop);
+
+  Status NextOnce(int64_t task_id);
+
  private:
 
   friend class AutoRebalancerTest;
 
+  Status NextLoop();
   // Runs the main loop of the auto-rebalancing thread.
   void RunLoop();
+
+  void RunOnce(int64_t task_id);
 
   // Collects information about the cluster at the location specified by the
   // 'location' parameter. If there is no location specified (and the parameter
@@ -168,6 +180,9 @@ class AutoRebalancerTask {
   // The associated TS manager.
   TSManager* ts_manager_;
 
+  // auto submit rebalancing.
+  std::unique_ptr<kudu::ThreadPoolToken> thread_token_;
+
   // The auto-rebalancing thread.
   scoped_refptr<kudu::Thread> thread_;
 
@@ -176,6 +191,10 @@ class AutoRebalancerTask {
 
   // The internal Rebalancer object.
   rebalance::Rebalancer rebalancer_;
+
+  // Only One DataRebelance is Running.
+  // TODO(duyuqi), we can use lightweight lock such as CAS atomic.
+  mutable Mutex running_lock_;
 
   // The Config struct to initialize the Rebalancer object.
   rebalance::Rebalancer::Config config_;

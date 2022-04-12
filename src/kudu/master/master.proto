@@ -843,6 +843,23 @@ message GetTableSchemaResponsePB {
   optional string comment = 11;
 }
 
+message RebalanceRequestPB {
+  enum RebalanceType {
+    UNKNOWN_TYPE = 0;
+    DATA_REBALANCE = 1;
+    LEADER_REBALANCE = 2;
+    REPORT_ONLY = 3;
+  }
+
+  required RebalanceType type = 1;
+}
+
+message RebalanceResponsePB {
+  // The error, if an error occurred with this request.
+  required int64 task_id = 1;
+  optional MasterErrorPB error = 2;
+}
+
 message ConnectToMasterRequestPB {
 }
 
@@ -1167,7 +1184,12 @@ service MasterService {
   rpc GetTableLocations(GetTableLocationsRequestPB) returns (GetTableLocationsResponsePB) {
     option (kudu.rpc.authz_method) = "AuthorizeClientOrServiceUser";
   }
+
   rpc GetTableSchema(GetTableSchemaRequestPB) returns (GetTableSchemaResponsePB) {
+    option (kudu.rpc.authz_method) = "AuthorizeClientOrServiceUser";
+  }
+
+  rpc Rebalance(RebalanceRequestPB) returns (RebalanceResponsePB) {
     option (kudu.rpc.authz_method) = "AuthorizeClientOrServiceUser";
   }
 

@@ -28,7 +28,6 @@
 #include <memory>
 #include <mutex>
 #include <ostream>
-#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -54,7 +53,6 @@
 #include "kudu/util/stopwatch.h"
 #include "kudu/util/test_macros.h"
 #include "kudu/util/test_util.h"
-#include "kudu/util/thread.h"
 #include "kudu/util/trace.h"
 
 using std::atomic;

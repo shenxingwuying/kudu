@@ -660,11 +660,17 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
                         boost::optional<const std::string&> user,
                         const security::TokenSigner* token_signer);
 
+  // Trigger a rebalance.
+  Status Rebalance(const RebalanceRequestPB* req,
+                   RebalanceResponsePB* resp,
+                   const boost::optional<const std::string&>& /*user*/,
+                   const security::TokenSigner* /*token_signer*/);
+
   // Lists all the running tables. If 'user' is provided, only lists those that
   // the given user is authorized to see.
   Status ListTables(const ListTablesRequestPB* req,
                     ListTablesResponsePB* resp,
-                    boost::optional<const std::string&> user);
+                    const boost::optional<const std::string&>& user);
 
   // Get table statistics. If 'user' is provided, checks if the user is
   // authorized to get such statistics.
@@ -841,6 +847,10 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   // Returns the status of submission of the request.
   Status InitiateMasterChangeConfig(ChangeConfigOp op, const HostPort& hp,
                                     const std::string& uuid, rpc::RpcContext* rpc);
+
+  ThreadPool* scheduler_pool() {
+    return scheduler_pool_.get();
+  }
 
  private:
   // These tests call ElectedAsLeaderCb() directly.
@@ -1225,6 +1235,8 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   std::unique_ptr<master::AuthzProvider> authz_provider_;
 
   std::unique_ptr<AutoRebalancerTask> auto_rebalancer_;
+
+  std::unique_ptr<ThreadPool> scheduler_pool_;
 
   enum State {
     kConstructed,

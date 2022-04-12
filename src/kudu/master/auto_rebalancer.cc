@@ -59,6 +59,7 @@
 #include "kudu/util/pb_util.h"
 #include "kudu/util/status.h"
 #include "kudu/util/thread.h"
+#include "kudu/util/threadpool.h"
 
 using kudu::cluster_summary::HealthCheckResult;
 using kudu::cluster_summary::ReplicaSummary;
@@ -133,6 +134,9 @@ DEFINE_uint32(auto_rebalancing_wait_for_replica_moves_seconds, 1,
               "How long to wait before checking to see if the scheduled replica movement "
               "in this iteration of auto-rebalancing has completed.");
 
+DECLARE_bool(auto_rebalancing_enabled);
+DECLARE_int32(raft_heartbeat_interval_ms);
+
 namespace kudu {
 
 namespace master {
@@ -141,6 +145,7 @@ AutoRebalancerTask::AutoRebalancerTask(CatalogManager* catalog_manager,
                                        TSManager* ts_manager)
     : catalog_manager_(catalog_manager),
       ts_manager_(ts_manager),
+      thread_token_(nullptr),
       shutdown_(1),
       rebalancer_(Rebalancer(Rebalancer::Config(
       /*ignored_tservers*/{},
@@ -171,8 +176,9 @@ AutoRebalancerTask::~AutoRebalancerTask() {
 Status AutoRebalancerTask::Init() {
   DCHECK(!thread_) << "AutoRebalancerTask is already initialized";
   RETURN_NOT_OK(MessengerBuilder("auto-rebalancer").Build(&messenger_));
-  return Thread::Create("catalog manager", "auto-rebalancer",
-                        [this]() { this->RunLoop(); }, &thread_);
+  thread_token_ = catalog_manager_->scheduler_pool()->NewToken(ThreadPool::ExecutionMode::SERIAL);
+  RETURN_NOT_OK(NextLoop());
+  return Status::OK();
 }
 
 void AutoRebalancerTask::Shutdown() {
@@ -184,70 +190,126 @@ void AutoRebalancerTask::Shutdown() {
   thread_.reset();
 }
 
-void AutoRebalancerTask::RunLoop() {
+Status AutoRebalancerTask::DataRebalance(bool* should_stop) {
+  // More that two thread can run the function, we should add a lock
+  // to pretect it.
+  MutexLock auto_lock(running_lock_);
+  *should_stop = false;
   vector<Rebalancer::ReplicaMove> replica_moves;
-  while (!shutdown_.WaitFor(
-      MonoDelta::FromSeconds(FLAGS_auto_rebalancing_interval_seconds))) {
+  number_of_loop_iterations_for_test_++;
 
-    // If catalog manager isn't initialized or isn't the leader, don't do rebalancing.
-    // Putting the auto-rebalancer to sleep shouldn't affect the master's ability
-    // to become the leader. When the thread wakes up and discovers it is now
-    // the leader, then it can begin auto-rebalancing.
-    {
-      CatalogManager::ScopedLeaderSharedLock l(catalog_manager_);
-      if (!l.first_failed_status().ok()) {
-        moves_scheduled_this_round_for_test_ = 0;
-        continue;
-      }
-    }
+  // Structs to hold information about the cluster's status.
+  ClusterRawInfo raw_info;
+  ClusterInfo cluster_info;
+  TabletsPlacementInfo placement_info;
+  Status s = BuildClusterRawInfo(/*location*/ boost::none, &raw_info);
+  if (!s.ok()) {
+    LOG(WARNING) << Substitute("Could not retrieve cluster info: $0",
+                               s.ToString());
+    return s;
+  }
 
-    number_of_loop_iterations_for_test_++;
-
-    // Structs to hold information about the cluster's status.
-    ClusterRawInfo raw_info;
-    ClusterInfo cluster_info;
-    TabletsPlacementInfo placement_info;
-    Status s = BuildClusterRawInfo(/*location*/boost::none, &raw_info);
+  // NOTE: There should be no moves in progress, because this loop waits for
+  // scheduled moves to complete before continuing to the next iteration.
+  s = rebalancer_.BuildClusterInfo(raw_info, Rebalancer::MovesInProgress(),
+                                   &cluster_info);
+  if (!s.ok()) {
+    LOG(WARNING) << Substitute("Could not build cluster info: $0",
+                               s.ToString());
+    return s;
+  }
+  if (config_.run_policy_fixer) {
+    s = BuildTabletsPlacementInfo(raw_info, Rebalancer::MovesInProgress(),
+                                  &placement_info);
     if (!s.ok()) {
-      LOG(WARNING) << Substitute("Could not retrieve cluster info: $0", s.ToString());
-      continue;
-    }
-
-    // NOTE: There should be no moves in progress, because this loop waits for
-    // scheduled moves to complete before continuing to the next iteration.
-    s = rebalancer_.BuildClusterInfo(raw_info, Rebalancer::MovesInProgress(), &cluster_info);
-    if (!s.ok()) {
-      LOG(WARNING) << Substitute("Could not build cluster info: $0", s.ToString());
-      continue;
-    }
-    if (config_.run_policy_fixer) {
-      s = BuildTabletsPlacementInfo(raw_info, Rebalancer::MovesInProgress(), &placement_info);
-      if (!s.ok()) {
-        LOG(WARNING) << Substitute("Could not build tablet placement info: $0", s.ToString());
-        continue;
-      }
-    }
-
-    DCHECK(replica_moves.empty());
-    s = GetMoves(raw_info, cluster_info.locality, placement_info, &replica_moves);
-    if (!s.ok()) {
-      LOG(WARNING) << Substitute("could not retrieve auto-rebalancing replica moves: $0",
+      LOG(WARNING) << Substitute("Could not build tablet placement info: $0",
                                  s.ToString());
-      continue;
+      return s;
     }
-    WARN_NOT_OK(ExecuteMoves(replica_moves),
-                "failed to send replica move request");
-    moves_scheduled_this_round_for_test_ = replica_moves.size();
+  }
 
-    // Wait for all of the moves from this iteration to complete.
-    do {
-      if (shutdown_.WaitFor(MonoDelta::FromSeconds(
+  DCHECK(replica_moves.empty());
+  s = GetMoves(raw_info, cluster_info.locality, placement_info, &replica_moves);
+  if (!s.ok()) {
+    LOG(WARNING) << Substitute(
+        "could not retrieve auto-rebalancing replica moves: $0", s.ToString());
+    return s;
+  }
+  WARN_NOT_OK(ExecuteMoves(replica_moves),
+              "failed to send replica move request");
+  moves_scheduled_this_round_for_test_ = replica_moves.size();
+
+  // Wait for all of the moves from this iteration to complete.
+  do {
+    if (shutdown_.WaitFor(MonoDelta::FromSeconds(
             FLAGS_auto_rebalancing_wait_for_replica_moves_seconds))) {
-        return;
-      }
-      WARN_NOT_OK(CheckReplicaMovesCompleted(&replica_moves),
-                  "scheduled replica move failed to complete");
-    } while (!replica_moves.empty());
+      *should_stop = true;
+      break;
+    }
+    WARN_NOT_OK(CheckReplicaMovesCompleted(&replica_moves),
+                "scheduled replica move failed to complete");
+  } while (!replica_moves.empty());
+
+  return Status::OK();
+}
+
+Status AutoRebalancerTask::NextLoop() {
+  return thread_token_->Schedule([this]() { this->RunLoop(); },
+                                 1000 * FLAGS_auto_rebalancing_interval_seconds);
+}
+
+Status AutoRebalancerTask::NextOnce(int64_t task_id) {
+  return thread_token_->Submit([this, task_id]() { this->RunOnce(task_id); });
+}
+
+void AutoRebalancerTask::RunOnce(int64_t task_id) {
+  bool should_stop = false;
+  Status s = DataRebalance(&should_stop);
+  if (!s.ok()) {
+    LOG(WARNING) << Substitute("task_id $0, DataRebalance has warning"
+                               ", $1, should_stop $2", task_id,
+                               s.ToString(), should_stop);
+  }
+  // TODO(duyuqi), adding to finish, for searching.
+}
+
+void AutoRebalancerTask::RunLoop() {
+#define NEXT_EXECUTE_FUNCTION                                                          \
+  WARN_NOT_OK(thread_token_->Schedule([this]() { this->RunLoop(); },                   \
+                                      1000 * FLAGS_auto_rebalancing_interval_seconds), \
+              "schedule auto rebalance task failed");
+
+  if (!FLAGS_auto_rebalancing_enabled) {
+    NextLoop();
+    return;
+  }
+
+  // If catalog manager isn't initialized or isn't the leader, don't do
+  // rebalancing. Putting the auto-rebalancer to sleep shouldn't affect the
+  // master's ability to become the leader. When the thread wakes up and
+  // discovers it is now the leader, then it can begin auto-rebalancing.
+  {
+    CatalogManager::ScopedLeaderSharedLock l(catalog_manager_);
+    if (!l.first_failed_status().ok()) {
+      moves_scheduled_this_round_for_test_ = 0;
+      NextLoop();
+      return;
+    }
+  }
+
+  if (moves_scheduled_this_round_for_test_ == 0) {
+    // To Avoid double leaders.
+    SleepFor(MonoDelta::FromMilliseconds(5 * FLAGS_raft_heartbeat_interval_ms));
+  }
+  bool should_stopped = false;
+  Status s = DataRebalance(&should_stopped);
+  if (!s.ok()) {
+    LOG(WARNING) << Substitute("DataRebalance has warning, $0", s.ToString());
+    NextLoop();
+    return;
+  }
+  if (should_stopped) {
+    return;
   }
 }
 

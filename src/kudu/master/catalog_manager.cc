@@ -996,12 +996,17 @@ Status CatalogManager::Init(bool is_first_run) {
   RETURN_NOT_OK_PREPEND(sys_catalog_->WaitUntilRunning(),
                         "Failed waiting for the catalog tablet to run");
 
-  if (FLAGS_auto_rebalancing_enabled) {
-    unique_ptr<AutoRebalancerTask> task(
-        new AutoRebalancerTask(this, master_->ts_manager()));
-    RETURN_NOT_OK_PREPEND(task->Init(), "failed to initialize auto-rebalancing task");
-    auto_rebalancer_ = std::move(task);
-  }
+  ThreadPoolBuilder("scheduler")
+      .set_min_threads(1)
+      .set_max_threads(4)
+      .set_enable_timer(true)
+      .Build(&scheduler_pool_);
+
+  // Start AutoRebalanceTask.
+  unique_ptr<AutoRebalancerTask> task(
+      new AutoRebalancerTask(this, master_->ts_manager()));
+  RETURN_NOT_OK_PREPEND(task->Init(), "failed to initialize auto-rebalancing task");
+  auto_rebalancer_ = std::move(task);
 
   vector<HostPort> master_addresses;
   RETURN_NOT_OK(master_->GetMasterHostPorts(&master_addresses));
@@ -3480,9 +3485,24 @@ Status CatalogManager::GetTableSchema(const GetTableSchemaRequestPB* req,
   return Status::OK();
 }
 
+Status CatalogManager::Rebalance(const RebalanceRequestPB* req,
+                                 RebalanceResponsePB* resp,
+                                 const boost::optional<const std::string&>& /*user*/,
+                                 const security::TokenSigner* /*token_signer*/) {
+  if (req->type() != RebalanceRequestPB::DATA_REBALANCE) {
+    return SetupError(Status::NotSupported("only support data rebalance"),
+                      resp, MasterErrorPB::UNKNOWN_ERROR);
+  }
+  // generate unique task id for data rebalance.
+  int64_t task_id = CycleClock::Now();
+  auto_rebalancer_->NextOnce(task_id);
+  resp->set_task_id(task_id);
+  return Status::OK();
+}
+
 Status CatalogManager::ListTables(const ListTablesRequestPB* req,
                                   ListTablesResponsePB* resp,
-                                  optional<const string&> user) {
+                                  const optional<const string&>& user) {
   leader_lock_.AssertAcquiredForReading();
 
   vector<scoped_refptr<TableInfo>> tables_info;
@@ -6396,6 +6416,7 @@ INITTED_AND_LEADER_OR_RESPOND(GetTableLocationsResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(GetTableSchemaResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(GetTableStatisticsResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(GetTabletLocationsResponsePB);
+INITTED_AND_LEADER_OR_RESPOND(RebalanceResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(RemoveMasterResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(ReplaceTabletResponsePB);
 

@@ -30,11 +30,16 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
+#include "kudu/common/wire_protocol.h"
 #include "kudu/gutil/basictypes.h"
 #include "kudu/gutil/strings/split.h"
 #include "kudu/gutil/strings/substitute.h"
+#include "kudu/master/master.h"
+#include "kudu/master/master.pb.h"
+#include "kudu/master/master.proxy.h"
 #include "kudu/rebalance/cluster_status.h"
 #include "kudu/rebalance/rebalancer.h"
+#include "kudu/rpc/rpc_controller.h"
 #include "kudu/tools/ksck.h"
 #include "kudu/tools/ksck_remote.h"
 #include "kudu/tools/ksck_results.h"
@@ -42,10 +47,15 @@
 #include "kudu/tools/tool_action.h"
 #include "kudu/tools/tool_action_common.h"
 #include "kudu/tools/tool_replica_util.h"
+#include "kudu/util/monotime.h"
 #include "kudu/util/status.h"
 #include "kudu/util/string_case.h"
 #include "kudu/util/version_util.h"
 
+using kudu::master::Master;
+using kudu::master::MasterServiceProxy;
+using kudu::master::RebalanceRequestPB;
+using kudu::master::RebalanceResponsePB;
 using kudu::rebalance::Rebalancer;
 using kudu::iequals;
 using std::cout;
@@ -389,6 +399,40 @@ Status RunRebalance(const RunnerContext& context) {
   return Status::OK();
 }
 
+Status DataRebalanceAtMaster(const string& master_address) {
+  unique_ptr<MasterServiceProxy> proxy;
+  RETURN_NOT_OK(BuildProxy(master_address, Master::kDefaultPort, &proxy));
+
+  rpc::RpcController ctl;
+  ctl.set_timeout(MonoDelta::FromMilliseconds(5000));
+
+  RebalanceRequestPB req;
+  req.set_type(RebalanceRequestPB::DATA_REBALANCE);
+
+  RebalanceResponsePB resp;
+  RETURN_NOT_OK(proxy->Rebalance(req, &resp, &ctl));
+  if (resp.has_error()) {
+    return StatusFromPB(resp.error().status());
+  }
+  return Status::OK();
+}
+
+Status RunAutoRebalanceOnce(const RunnerContext& context) {
+  vector<string> master_addresses;
+  RETURN_NOT_OK(ParseMasterAddresses(context, &master_addresses));
+
+  Status s;
+  for (const auto& master_address : master_addresses) {
+    s = DataRebalanceAtMaster(master_address);
+    if (s.ok()) {
+      // It's leader master.
+      break;
+    }
+  }
+
+  return s;
+}
+
 } // anonymous namespace
 
 unique_ptr<Mode> BuildClusterMode() {
@@ -458,6 +502,23 @@ unique_ptr<Mode> BuildClusterMode() {
         .AddOptionalParameter("tables")
         .Build();
     builder.AddAction(std::move(rebalance));
+  }
+
+  {
+    constexpr auto desc =
+        "Move tablet replicas between tablet servers to "
+        "balance replica counts for each table and for the cluster as a whole.";
+    constexpr auto extra_desc =
+        "The rebalancing moves tablet replicas between tablet servers by sending "
+        "a Rebalance Request to leader master, and leader master will do the rebalancing "
+        "task, running an auto rebalancing. If kudu master not enable auto-rebalancing, "
+        "or next auto-rebalancing cost very long time, uses can use the command to trigge"
+        " a rebalance in time.";
+    unique_ptr<Action> rebalance_all = ClusterActionBuilder("rebalance_all", &RunAutoRebalanceOnce)
+        .Description(desc)
+        .ExtraDescription(extra_desc)
+        .Build();
+    builder.AddAction(std::move(rebalance_all));
   }
 
   return builder.Build();
