@@ -4,3 +4,5 @@ kudu:
     class_name: kudu_upgrader_step
 soku_tool:
     class_name: soku_tool_upgrader_step
+collector:
+    class_name: collector_upgrader_step    

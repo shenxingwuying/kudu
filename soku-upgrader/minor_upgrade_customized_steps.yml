@@ -1,2 +1,4 @@
 scheduler_job:
     class_name: scheduler_job_step
+collector:
+    class_name: collector_upgrader_step  
