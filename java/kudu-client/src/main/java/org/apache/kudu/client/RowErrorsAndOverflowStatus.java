@@ -49,4 +49,15 @@ public class RowErrorsAndOverflowStatus {
   public boolean isOverflowed() {
     return overflowed;
   }
+
+  @Override
+  public String toString() {
+    StringBuilder sb = new StringBuilder();
+    sb.append("rowErrors size: ").append(rowErrors.length);
+    for (int i = 0; i < rowErrors.length; i++) {
+      sb.append(", rowErrors: {").append(rowErrors[i].toString()).append("}");
+    }
+    sb.append(", overflowed: ").append(overflowed);
+    return sb.toString();
+  }
 }
