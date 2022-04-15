@@ -61,7 +61,7 @@ publishing {
     mavenJava(MavenPublication) {
         groupId = "org.apache.kudu"
         artifactId = "kudu-client"
-        version = "1.14.0-SA"
+        version = "1.14.1-SA"
         from components.java
     }
   }
