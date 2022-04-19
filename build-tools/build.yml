@@ -32,10 +32,8 @@ build_modules:
     types:
       - type: dragon
         add_cmds:
-          # 这里需要执行build的原因是整个编译不会按build.yml的顺序来保证执行顺序
-          - ["RUN", "sh build.sh"]
-          # Collector模块的构成和kudu一样，增加Collector模块的原因是为了使用默认的升级流程来升级Collector
-          - ["COPY", "/opt/kudu/installed/*", "./"]
+          - ["RUN", "sh build_collector.sh"]
+          - ["COPY", "/opt/collector/installed/*", "./"]
           - ["COPY", "soku-construction-blueprint/step/start_kudu_collector.sh", "./"]
 
   soku_tool:

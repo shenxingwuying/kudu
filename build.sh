@@ -56,6 +56,9 @@ strip --remove-section=.strtab $INSTALL_DIR/sbin/kudu-master
 strip --remove-section=.symtab $INSTALL_DIR/sbin/kudu-tserver
 strip --remove-section=.strtab $INSTALL_DIR/sbin/kudu-tserver
 
+strip --remove-section=.symtab $INSTALL_DIR/sbin/kudu-collector
+strip --remove-section=.strtab $INSTALL_DIR/sbin/kudu-collector
+
 strip --remove-section=.symtab $INSTALL_DIR/lib64/libkudu_client.so.0.1.0
 strip --remove-section=.strtab $INSTALL_DIR/lib64/libkudu_client.so.0.1.0
 
