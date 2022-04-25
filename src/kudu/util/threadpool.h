@@ -23,6 +23,7 @@
 #include <deque>
 #include <functional>
 #include <iosfwd>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -119,6 +120,7 @@ class ThreadPoolBuilder {
   ThreadPoolBuilder& set_idle_timeout(const MonoDelta& idle_timeout);
   ThreadPoolBuilder& set_queue_overload_threshold(const MonoDelta& threshold);
   ThreadPoolBuilder& set_metrics(ThreadPoolMetrics metrics);
+  ThreadPoolBuilder& set_enable_timer(bool enable_timer);
 
   // Instantiate a new ThreadPool with the existing builder arguments.
   Status Build(std::unique_ptr<ThreadPool>* pool) const;
@@ -133,8 +135,50 @@ class ThreadPoolBuilder {
   MonoDelta idle_timeout_;
   MonoDelta queue_overload_threshold_;
   ThreadPoolMetrics metrics_;
+  bool enable_timer_;
 
   DISALLOW_COPY_AND_ASSIGN(ThreadPoolBuilder);
+};
+
+
+class ThreadPoolToken;
+// Timer Thread for thread delay task or 
+// periodic schedule tasks.
+class TimerThread {
+public:
+  TimerThread(std::string thread_pool_name);
+
+  ~TimerThread();
+
+  Status Start();
+
+  Status Shutdown();
+
+  struct TimerTask {
+    ThreadPoolToken* thread_pool_token_;
+    std::function<void()> f;
+  };
+
+  void Schedule(ThreadPoolToken* token, std::function<void()> f, const MonoTime& timepoint) {
+    MutexLock auto_lock(mutex_);
+    tasks_.insert({timepoint, TimerTask({token, f})});
+    task_size_++;
+  }
+
+  uint32_t size() {
+    return task_size_;
+  }
+
+private:
+  void RunLoop();
+
+  std::string thread_pool_name_;
+  CountDownLatch shutdown_;
+  mutable Mutex mutex_;
+
+  scoped_refptr<Thread> thread_;
+  std::multimap<MonoTime, TimerTask> tasks_;
+  uint32_t task_size_;
 };
 
 // Thread pool with a variable number of threads.
@@ -185,8 +229,12 @@ class ThreadPool {
   // Submits a new task.
   Status Submit(std::function<void()> f) WARN_UNUSED_RESULT;
 
+  enum class WaitTimerType {
+    NORMAL,
+    TEST
+  };
   // Waits until all the tasks are completed.
-  void Wait();
+  void Wait(WaitTimerType type = WaitTimerType::NORMAL);
 
   // Waits for the pool to reach the idle state, or until 'until' time is reached.
   // Returns true if the pool reached the idle state, false otherwise.
@@ -231,6 +279,7 @@ class ThreadPool {
 
  private:
   FRIEND_TEST(ThreadPoolTest, TestThreadPoolWithNoMinimum);
+  FRIEND_TEST(ThreadPoolTest, TestThreadPoolWithTimerAndNoMinimum);
   FRIEND_TEST(ThreadPoolTest, TestVariableSizeThreadPool);
 
   friend class ThreadPoolBuilder;
@@ -410,6 +459,10 @@ class ThreadPool {
   //  * a new task has been scheduled (i.e. added into the queue)
   void NotifyLoadMeterUnlocked(const MonoDelta& queue_time = MonoDelta());
 
+  TimerThread* timer() {
+    return timer_;
+  }
+
   const std::string name_;
   const int min_threads_;
   const int max_threads_;
@@ -503,6 +556,13 @@ class ThreadPool {
   // Metrics for the entire thread pool.
   const ThreadPoolMetrics metrics_;
 
+  // TimerThread is used for some scenioes, such as 
+  // delay execute is schedule,
+  // another thread send request.
+  TimerThread* timer_;
+
+  bool enable_timer_;
+
   const char* queue_time_trace_metric_name_;
   const char* run_wall_time_trace_metric_name_;
   const char* run_cpu_time_trace_metric_name_;
@@ -526,6 +586,9 @@ class ThreadPoolToken {
   // Submits a new task.
   Status Submit(std::function<void()> f) WARN_UNUSED_RESULT;
 
+  // Submit a task, running after delay_ms delay some time
+  Status Schedule(std::function<void()> f, int64_t delay_ms) WARN_UNUSED_RESULT;
+
   // Marks the token as unusable for future submissions. Any queued tasks not
   // yet running are destroyed. If tasks are in flight, Shutdown() will wait
   // on their completion before returning.
@@ -547,6 +610,7 @@ class ThreadPoolToken {
   bool WaitFor(const MonoDelta& delta);
 
  private:
+  friend class TimerThread;
   // All possible token states. Legal state transitions:
   //   IDLE      -> RUNNING: task is submitted via token
   //   IDLE      -> QUIESCED: token or pool is shut down

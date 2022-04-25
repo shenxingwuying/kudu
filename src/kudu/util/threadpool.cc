@@ -55,7 +55,8 @@ ThreadPoolBuilder::ThreadPoolBuilder(string name)
       min_threads_(0),
       max_threads_(base::NumCPUs()),
       max_queue_size_(std::numeric_limits<int>::max()),
-      idle_timeout_(MonoDelta::FromMilliseconds(500)) {}
+      idle_timeout_(MonoDelta::FromMilliseconds(500)),
+      enable_timer_(false) {}
 
 ThreadPoolBuilder& ThreadPoolBuilder::set_trace_metric_prefix(const string& prefix) {
   trace_metric_prefix_ = prefix;
@@ -89,6 +90,11 @@ ThreadPoolBuilder& ThreadPoolBuilder::set_metrics(ThreadPoolMetrics metrics) {
   return *this;
 }
 
+ThreadPoolBuilder& ThreadPoolBuilder::set_enable_timer(bool enable_timer) {
+  enable_timer_ = enable_timer;
+  return *this;
+}
+
 ThreadPoolBuilder& ThreadPoolBuilder::set_queue_overload_threshold(
     const MonoDelta& threshold) {
   queue_overload_threshold_ = threshold;
@@ -98,6 +104,52 @@ ThreadPoolBuilder& ThreadPoolBuilder::set_queue_overload_threshold(
 Status ThreadPoolBuilder::Build(unique_ptr<ThreadPool>* pool) const {
   pool->reset(new ThreadPool(*this));
   return (*pool)->Init();
+}
+
+TimerThread::TimerThread(std::string thread_pool_name)
+    : thread_pool_name_(thread_pool_name), 
+      shutdown_(1),
+      task_size_(0) {}
+
+TimerThread::~TimerThread() {
+  if (thread_) {
+    Shutdown();
+  }
+}
+Status TimerThread::Start() {
+  return kudu::Thread::Create(
+      thread_pool_name_, "[timer]", [this]() { this->RunLoop(); }, &thread_);
+}
+
+Status TimerThread::Shutdown() {
+  if (thread_) {
+    shutdown_.CountDown();
+    thread_->Join();
+  }
+  return Status::OK();
+}
+
+void TimerThread::RunLoop() {
+  while (!shutdown_.WaitFor(MonoDelta::FromMilliseconds(100))) {
+    MutexLock auto_lock(mutex_);
+    MonoTime now = MonoTime::Now();
+
+    while (true) {
+      const auto it = tasks_.begin();
+      if (it != tasks_.end() && it->first <= now) {
+        ThreadPoolToken* token = it->second.thread_pool_token_;
+        if (token->MaySubmitNewTasks()) {
+          CHECK_OK(token->Submit(it->second.f));
+        } else {
+          break;
+        }
+        tasks_.erase(it);
+        task_size_--; 
+      } else {
+        break;
+      }
+    }
+  }
 }
 
 ////////////////////////////////////////////////////////
@@ -182,6 +234,20 @@ void ThreadPoolToken::Shutdown() {
       t.trace->Release();
     }
   }
+}
+
+// Submit a task, running after delay_ms delay some time
+Status ThreadPoolToken::Schedule(std::function<void()> f, int64_t delay_ms) {
+  if (PREDICT_FALSE(!MaySubmitNewTasks())) {
+    return Status::ServiceUnavailable("Thread pool token was shut down");
+  }
+  if (mode() != ThreadPool::ExecutionMode::SERIAL) {
+    return Status::NotSupported(Substitute("not support mode: CONCURRENT"));
+  }
+  MonoTime timepoint = MonoTime::Now();
+  timepoint.AddDelta(MonoDelta::FromMilliseconds(delay_ms));
+  pool_->timer()->Schedule(this, f, timepoint);
+  return Status::OK();
 }
 
 void ThreadPoolToken::Wait() {
@@ -284,7 +350,9 @@ ThreadPool::ThreadPool(const ThreadPoolBuilder& builder)
       active_threads_(0),
       total_queued_tasks_(0),
       tokenless_(NewToken(ExecutionMode::CONCURRENT)),
-      metrics_(builder.metrics_) {
+      metrics_(builder.metrics_),
+      timer_(nullptr),
+      enable_timer_(builder.enable_timer_) {
   string prefix = !builder.trace_metric_prefix_.empty() ?
       builder.trace_metric_prefix_ : builder.name_;
 
@@ -322,6 +390,10 @@ Status ThreadPool::Init() {
       return status;
     }
   }
+  if (enable_timer_) {
+    timer_ = new TimerThread(name_);
+    timer_->Start();
+  }
   return Status::OK();
 }
 
@@ -329,6 +401,11 @@ void ThreadPool::Shutdown() {
   MutexLock unique_lock(lock_);
   CheckNotPoolThreadUnlocked();
 
+  if (timer_) {
+    timer_->Shutdown();
+    delete timer_;
+    timer_ = nullptr;
+  }
   // Note: this is the same error seen at submission if the pool is at
   // capacity, so clients can't tell them apart. This isn't really a practical
   // concern though because shutting down a pool typically requires clients to
@@ -551,10 +628,14 @@ Status ThreadPool::DoSubmit(std::function<void()> f, ThreadPoolToken* token) {
   return Status::OK();
 }
 
-void ThreadPool::Wait() {
+void ThreadPool::Wait(WaitTimerType type) {
   MutexLock unique_lock(lock_);
   CheckNotPoolThreadUnlocked();
-  while (total_queued_tasks_ > 0 || active_threads_ > 0) {
+  // Generally, ignore timer's pending tasks, but
+  // set WaitTimerType::TEST at unit tests.
+  bool wait_timer = (type == WaitTimerType::TEST && timer_ != nullptr);
+  while (total_queued_tasks_ > 0 || active_threads_ > 0 ||
+        (wait_timer && timer_->size() > 0)) {
     idle_cond_.Wait();
   }
 }
