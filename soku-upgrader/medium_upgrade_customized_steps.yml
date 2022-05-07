@@ -1,8 +1,8 @@
 # 本文件定义第三位版本升级时各个模块的升级方式
 # 默认是internal_module_dir_step
+collector:
+    class_name: collector_upgrader_step 
 kudu:
     class_name: kudu_upgrader_step
 soku_tool:
-    class_name: soku_tool_upgrader_step
-collector:
-    class_name: collector_upgrader_step    
+    class_name: soku_tool_upgrader_step   
