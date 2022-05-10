@@ -44,6 +44,10 @@ class KuduConfigTool:
         self.local_host = socket.getfqdn()
         self.is_simplified_cluster = DeployInfo().get_simplified_cluster()
         self.api = utils.sa_cm_api.SaCmAPI(logger=self.logger)
+        # 单机环境必须先开启cloudera-scm-server才能去获取配置，
+        # 开启cloudera-scm-server前必须确保内存足够
+        if self.is_simplified_cluster:
+            config_common.start_cdh_server(self.api)
         self.tserver_random_dirs_count = config_common.get_role_random_dirs_count(self.api, 'kudu_tserver', 'cdh')
         self.tserver_mem_gb = config_common.get_role_mem_gb(self.api, 'kudu_tserver', 'cdh')
 
@@ -150,8 +154,6 @@ class KuduConfigTool:
         return old_role_config_dict, need_update
 
     def do_update(self, new_roles_config_dict):
-        if self.is_simplified_cluster:
-            self.api.waiting_service_ready(True)
         if self.local_host == self.api.cm_host:
             cloudera_config_setter = self.get_cloudera_config_setter()
             old_common_config_dict = self.get_config_dict(cloudera_config_setter, SETTER_ROLE_PATH['KUDU_COMMON'], SETTER_ROLE_NAME['KUDU_COMMON'])

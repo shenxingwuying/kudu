@@ -8,6 +8,11 @@ sys.path.append(os.path.join(os.environ['SENSORS_PLATFORM_HOME'], '..', 'armada'
 from hyperion_client.deploy_info import DeployInfo
 from hyperion_client.directory_info import DirectoryInfo
 from hyperion_client.hyperion_inner_client.inner_node_info import InnerNodeInfo
+from hyperion_utils import shell_utils
+
+
+CDH_SERVER_USED_MAX_MEM_PERCENT_LIMIT = 0.8
+CDH_SERVER_MIN_PHYSICAL_MEM = 32
 
 
 def get_kudu_role_host_list(api, role, env_type):
@@ -53,6 +58,36 @@ def get_dynamic_config_value(key, is_simplified_cluster, random_dirs_count, host
         return str(block_cache_capacity_mb)
     else:
         raise Exception('key [%s] is not a dynamic config' % key)
+
+
+def get_mem_info_from_local_host(unit):
+    free_cmd = "free -" + unit
+    free_cmd_result = shell_utils.run_cmd(free_cmd)
+    cmd_result_lines = free_cmd_result['stdout'].split("\n")
+    mem_num_line = cmd_result_lines[1]
+    memory_nums = mem_num_line.split()[1:]
+    memory_info_dict = dict()
+    memory_info_dict['total'] = int(memory_nums[0])
+    memory_info_dict['used'] = int(memory_nums[1])
+    memory_info_dict['free'] = int(memory_nums[2])
+    memory_info_dict['shared'] = int(memory_nums[3])
+    memory_info_dict['buff/cache'] = int(memory_nums[4])
+    memory_info_dict['available'] = int(memory_nums[5])
+
+    return memory_info_dict
+
+
+def start_cdh_server(api):
+    local_host_mem = get_mem_info_from_local_host("g")
+    # 物理内存最少限制检查
+    if int(local_host_mem['total']) < CDH_SERVER_MIN_PHYSICAL_MEM:
+        raise Exception("Physical memory can not less than：%sg" % CDH_SERVER_MIN_PHYSICAL_MEM)
+    # 内存使用不超过最大限制才能启动cdh-server
+    is_mem_enough = float(local_host_mem['used']) / float(local_host_mem['total']) < CDH_SERVER_USED_MAX_MEM_PERCENT_LIMIT
+    if not is_mem_enough:
+        raise Exception("The usage of memory is more than %s，can't start cdh-server" % CDH_SERVER_USED_MAX_MEM_PERCENT_LIMIT)
+
+    api.waiting_service_ready(True)
 
 
 KUDU_COMMON_CONFIG = {
