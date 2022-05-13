@@ -34,7 +34,8 @@ allprojects {
   // These are common to all projects, including this
   // top level parent project.
   repositories {
-    maven{url 'http://maven.aliyun.com/nexus/content/groups/public/'}
+    maven { url "https://jfrog-internal.sensorsdata.cn/artifactory/maven-public" }
+    maven { url 'http://maven.aliyun.com/nexus/content/groups/public/' }
     mavenCentral()
     mavenLocal()
   }
