@@ -61,12 +61,12 @@ def check_cluster(cluster_masters_str):
     masters_list = cluster_masters_str.split(',')
     if len(masters_list) != 1 and len(masters_list) != 3:
         return False
-    output = run_cmd('kudu cluster ksck %s' % cluster_masters_str)
+    output = run_cmd('export PATH=$PWD:$PATH && kudu cluster ksck %s' % cluster_masters_str)
     return output['ret'] == 0
 
 
 def check_kudu_version(version):
-    cmd = "kudu -version"
+    cmd = "export PATH=$PWD:$PATH && kudu -version"
     vers1 = version.split(".")
     result = run_cmd(cmd)
     vers2 = result['stdout']
@@ -90,7 +90,7 @@ def check_ssh(hosts, ssh_port):
 
 
 def get_cluster_leader_master(cluster_masters_str):
-    output = run_cmd('kudu master list %s -columns=rpc-addresses,role -format=json' % cluster_masters_str)
+    output = run_cmd('export PATH=$PWD:$PATH && kudu master list %s -columns=rpc-addresses,role -format=json' % cluster_masters_str)
     masters = json.loads(output['stdout'])
     for master in masters:
         if master['role'] == 'LEADER':
@@ -100,7 +100,7 @@ def get_cluster_leader_master(cluster_masters_str):
 
 def get_cluster_tserver_list(cluster_masters_str):
     tserver_list = []
-    output = run_cmd('kudu tserver list %s -columns=rpc-addresses,uuid -format=json' % cluster_masters_str)
+    output = run_cmd('export PATH=$PWD:$PATH && kudu tserver list %s -columns=rpc-addresses,uuid -format=json' % cluster_masters_str)
     tservers = json.loads(output['stdout'])
     for tserver in tservers:
         if not tserver['uuid'] == ksyncer_uuid:
@@ -115,7 +115,7 @@ def get_cluster_tserver_list(cluster_masters_str):
 
 def get_server_config(role, rpc_addr, config):
     assert (role == 'master' or role == 'tserver')
-    output = run_cmd('kudu %s get_flags %s -flags=%s -format=json' % (role, rpc_addr, config))
+    output = run_cmd('export PATH=$PWD:$PATH && kudu %s get_flags %s -flags=%s -format=json' % (role, rpc_addr, config))
     configs = json.loads(output['stdout'])
     assert (len(configs) == 1)
     assert ('value' in configs[0])
@@ -170,16 +170,16 @@ def generate_data_dir(base, timestamp):
 def generate_master_data(old_master_leader,
                          index, new_master_uuids, new_master_peers,
                          fs_wal_dir, fs_data_dirs):
-    run_cmd('sp_kudu fs format '
+    run_cmd('export PATH=$PWD:$PATH && kudu fs format '
             '-fs_wal_dir=%s '
             '-fs_data_dirs=%s '
             '-uuid=%s'
             % (fs_wal_dir, fs_data_dirs, new_master_uuids[index]))
-    run_cmd('sp_kudu local_replica copy_from_remote %s %s '
+    run_cmd('export PATH=$PWD:$PATH && kudu local_replica copy_from_remote %s %s '
             '-fs_wal_dir=%s '
             '-fs_data_dirs=%s'
             % (master_meta_uuid, old_master_leader, fs_wal_dir, fs_data_dirs))
-    run_cmd('sp_kudu local_replica cmeta rewrite_raft_config %s %s '
+    run_cmd('export PATH=$PWD:$PATH && kudu local_replica cmeta rewrite_raft_config %s %s '
             '-fs_wal_dir=%s '
             '-fs_data_dirs=%s'
             % (master_meta_uuid, new_master_peers, fs_wal_dir, fs_data_dirs))
