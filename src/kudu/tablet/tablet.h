@@ -198,6 +198,33 @@ class Tablet {
                            RowOp* row_op,
                            ProbeStats* stats) WARN_UNUSED_RESULT;
 
+  enum class DuplicationMode {
+    WAL_DUPLICATION,
+    REALTIME_DUPLICATION
+  };
+
+  static const char* DuplicationMode_Name(const DuplicationMode mode) {
+    switch (mode) {
+      case DuplicationMode::WAL_DUPLICATION:
+        return "WAL_DUPLICATION";
+      case DuplicationMode::REALTIME_DUPLICATION:
+        return "REALTIME_DUPLICATION";
+      default:
+        return "Unknown";
+    }
+  }
+
+  // Duplicate all of the row operations associated with this op.
+  Status DuplicateRowOperations(const std::shared_ptr<WriteOpState>& op_state_ptr,
+                                DuplicationMode mode = DuplicationMode::REALTIME_DUPLICATION);
+
+  // Duplicate a single row operation.
+  Status DuplicateRowOperation(const fs::IOContext* io_context,
+                               const std::shared_ptr<WriteOpState>& op_state_ptr,
+                               RowOp* row_op,
+                               ProbeStats* stats,
+                               DuplicationMode mode = DuplicationMode::REALTIME_DUPLICATION);
+
   // Begins the transaction, recording its presence in the tablet metadata.
   // Upon calling this, 'op_id' will be anchored until the metadata is flushed,
   // using 'txn' as the anchor owner.
@@ -541,11 +568,18 @@ class Tablet {
                                              int64_t* replay_size = nullptr,
                                              MonoTime* earliest_dms_time = nullptr) const;
 
+  void ResetStateForTest() {
+    std::lock_guard<simple_spinlock> lock(state_lock_);
+    state_ = kudu::tablet::Tablet::State::kInitialized;
+  }
+
  private:
   friend class kudu::AlterTableTest;
   friend class Iterator;
   friend class TabletReplicaTest;
   friend class TabletReplicaTestBase;
+  // friend class TabletHarness;
+
   FRIEND_TEST(TestTablet, TestGetReplaySizeForIndex);
   FRIEND_TEST(TestTabletStringKey, TestSplitKeyRange);
   FRIEND_TEST(TestTabletStringKey, TestSplitKeyRangeWithZeroRowSets);

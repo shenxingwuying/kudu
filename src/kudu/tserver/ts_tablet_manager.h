@@ -37,6 +37,7 @@
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/tserver/tablet_copy_client.h"
 #include "kudu/tserver/tablet_replica_lookup.h"
+#include "kudu/tserver/tablet_server.h"
 #include "kudu/tserver/tserver.pb.h"
 #include "kudu/tserver/tserver_admin.pb.h"
 #include "kudu/util/countdown_latch.h"
@@ -398,6 +399,10 @@ class TSTabletManager : public tserver::TabletReplicaLookupIf {
   void IncrementTabletsProcessed(int tablets_total, std::atomic<int>* tablets_processed,
                              Timer* start_tablets);
 
+
+  // RunLoop.
+  void DoDuplicationWhenSwitchToLeader();
+
   FsManager* const fs_manager_;
 
   const scoped_refptr<consensus::ConsensusMetadataManager> cmeta_manager_;
@@ -420,6 +425,9 @@ class TSTabletManager : public tserver::TabletReplicaLookupIf {
   //                to be able to work with RWMutex and use lock_ from above
   //                to create one to notify the task on shutdown
   CountDownLatch shutdown_latch_;
+
+  scoped_refptr<Thread> switch_to_leader_thread_;
+  CountDownLatch switch_to_leader_shutdown_latch_;
 
   // Map from tablet ID to tablet
   TabletMap tablet_map_;

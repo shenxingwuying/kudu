@@ -197,6 +197,9 @@ void OpTracker::IncrementCounters(const OpDriver& driver) const {
     case Op::PARTICIPANT_OP:
       // TODO(awong): implement me!
       break;
+    case Op::DUPLICATION_OP:
+      // Need not implement me.
+      break;
   }
 }
 
@@ -218,6 +221,9 @@ void OpTracker::DecrementCounters(const OpDriver& driver) const {
       break;
     case Op::PARTICIPANT_OP:
       // TODO(awong): implement me!
+      break;
+    case Op::DUPLICATION_OP:
+      // Need not implement me.
       break;
   }
 }

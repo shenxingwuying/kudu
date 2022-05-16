@@ -192,6 +192,9 @@ TAG_FLAG(tablet_bootstrap_skip_opening_tablet_for_testing, hidden);
 DECLARE_bool(raft_prepare_replacement_before_eviction);
 DECLARE_uint32(txn_staleness_tracker_interval_ms);
 
+DEFINE_uint32(switch_to_leader_checker_internal_ms, 1000,
+              "How long time checker thread should cost between two check task.");
+
 METRIC_DEFINE_gauge_int32(server, tablets_num_not_initialized,
                           "Number of Not Initialized Tablets",
                           kudu::MetricUnit::kTablets,
@@ -319,6 +322,7 @@ TSTabletManager::TSTabletManager(TabletServer* server)
     cmeta_manager_(new ConsensusMetadataManager(fs_manager_)),
     server_(server),
     shutdown_latch_(1),
+    switch_to_leader_shutdown_latch_(1),
     metric_registry_(server->metric_registry()),
     tablet_copy_metrics_(server->metric_entity()),
     state_(MANAGER_INITIALIZING) {
@@ -476,6 +480,12 @@ Status TSTabletManager::Init(Timer* start_tablets,
   RETURN_NOT_OK(txn_status_manager_pool_->Submit([this]() {
     this->TxnStalenessTrackerTask();
   }));
+
+  RETURN_NOT_OK(Thread::Create(
+      "switchrole",
+      "leader",
+      [this]() { this->DoDuplicationWhenSwitchToLeader(); },
+      &switch_to_leader_thread_));
 
   start_tablets->Start();
 
@@ -1008,7 +1018,8 @@ Status TSTabletManager::CreateAndRegisterTabletReplica(
   Status s = replica->Init({ server_->mutable_quiescing(),
                              server_->num_raft_leaders(),
                              server_->raft_pool(),
-                             server_->duplicate_pool() });
+                             server_->duplicate_pool(),
+                             server_->replay_pool() });
   if (PREDICT_FALSE(!s.ok())) {
     replica->SetError(s);
     replica->Shutdown();
@@ -1482,6 +1493,9 @@ void TSTabletManager::Shutdown() {
 
   // Signal the only task running on the txn_status_manager_pool_ to wrap up.
   shutdown_latch_.CountDown();
+
+  switch_to_leader_shutdown_latch_.CountDown();
+
   // Shut down the pool running the dedicated TxnStatusManager-related task.
   txn_status_manager_pool_->Shutdown();
 
@@ -2044,6 +2058,32 @@ Status TSTabletManager::ScheduleAbortTxn(int64_t txn_id, const string& user) {
 void TSTabletManager::SetNextUpdateTimeForTests() {
   std::lock_guard<rw_spinlock> l(lock_update_);
   next_update_time_ = MonoTime::Now();
+}
+
+void TSTabletManager::DoDuplicationWhenSwitchToLeader() {
+  while (!switch_to_leader_shutdown_latch_.WaitFor(
+    MonoDelta::FromMicroseconds(FLAGS_switch_to_leader_checker_internal_ms))) {
+    // Wait for a notification on shutdown or a timeout expiration.
+    std::vector<std::string> leader_tablet_ids = cmeta_manager_->DrainToNewLeaders();
+    if (leader_tablet_ids.empty()) {
+      continue;
+    }
+    for (const std::string& tablet_id : leader_tablet_ids) {
+      scoped_refptr<tablet::TabletReplica> replica;
+      LookupTablet(tablet_id, &replica);
+
+      if (replica->CheckRunning().ok()) {
+        if (replica->ShouldDuplication()) {
+          VLOG(0) << Substitute("start Duplicator, tablet id: $0, peer uuid: $1",
+                                replica->tablet_id(),
+                                replica->permanent_uuid());
+          replica->StartDuplicator();
+        } else if (replica->consensus()->role() == consensus::RaftPeerPB::FOLLOWER) {
+          // TODO(duyuqi), do something ?
+        }
+      }
+    }
+  }
 }
 
 TransitionInProgressDeleter::TransitionInProgressDeleter(

@@ -37,6 +37,7 @@ using std::string;
 namespace kudu {
 namespace client {
 
+using consensus::DuplicationInfoPB;
 using master::AlterTableRequestPB;
 
 KuduTableAlterer::Data::Data(KuduClient* client, string name)
@@ -202,10 +203,10 @@ Status KuduTableAlterer::Data::ToRequest(AlterTableRequestPB* req) {
       }
       case AlterTableRequestPB::ADD_DUPLICATION:
       {
-        master::DuplicationInfo* info = pb_step->mutable_add_duplication()->mutable_dup_info();
+        DuplicationInfoPB* info = pb_step->mutable_add_duplication()->mutable_dup_info();
         info->set_name(s.dup_info->name);
         // TODO(duyuqi), convert it to real downstream type
-        info->set_type(master::KAFKA);
+        info->set_type(consensus::KAFKA);
         break;
       }
       case AlterTableRequestPB::DROP_DUPLICATION:

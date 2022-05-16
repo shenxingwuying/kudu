@@ -93,13 +93,15 @@ Status TabletReplicaTestBase::ExecuteWrite(TabletReplica* replica, const WriteRe
 
   RETURN_NOT_OK(replica->SubmitWrite(std::move(op_state)));
   rpc_latch.Wait();
+  Status status = Status::OK();
   if (resp.has_error()) {
-    return StatusFromPB(resp.error().status());
+    status = StatusFromPB(resp.error().status());
   }
   if (resp.per_row_errors_size() > 0) {
-    return StatusFromPB(resp.per_row_errors(0).error());
+    status = StatusFromPB(resp.per_row_errors(0).error());
+
   }
-  return Status::OK();
+  return status;
 }
 
 void TabletReplicaTestBase::SetUp() {
@@ -227,7 +229,11 @@ Status TabletReplicaTestBase::RestartReplica(bool reset_tablet) {
                                        prepare_pool_.get(),
                                        dns_resolver_.get()));
   // Wait for the replica to be usable.
-  return tablet_replica_->consensus()->WaitUntilLeader(kLeadershipTimeout);
+  RETURN_NOT_OK(tablet_replica_->consensus()->WaitUntilLeader(kLeadershipTimeout));
+  harness()->ResetState();
+  return harness()->Open();
+  // return Status::OK();
+
 }
 
 } // namespace tablet

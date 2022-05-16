@@ -111,6 +111,7 @@ using kudu::consensus::ALTER_SCHEMA_OP;
 using kudu::consensus::CHANGE_CONFIG_OP;
 using kudu::consensus::CommitMsg;
 using kudu::consensus::ConsensusBootstrapInfo;
+using kudu::consensus::DUPLICATE_OP;
 using kudu::consensus::MinimumOpId;
 using kudu::consensus::NO_OP;
 using kudu::consensus::OpId;
@@ -313,6 +314,9 @@ class TabletBootstrap {
 
   Status PlayNoOpRequest(const IOContext* io_context, ReplicateMsg* replicate_msg,
                          const CommitMsg& commit_msg);
+
+  Status PlayDuplicateRequest(const IOContext* io_context, ReplicateMsg* replicate_msg,
+                              const CommitMsg& commit_msg);
 
   // Plays operations, skipping those that have already been flushed or have previously failed.
   // See ApplyRowOperations() for more details on how the decision of whether an operation
@@ -1002,6 +1006,7 @@ Status TabletBootstrap::HandleCommitMessage(const IOContext* io_context, ReplayS
 
   // Match up the COMMIT record with the original entry that it's applied to.
   const OpId& committed_op_id = entry->commit().commited_op_id();
+
   state->UpdateCommittedOpId(committed_op_id);
 
   // If there are no pending replicates, or if this commit's index is lower than the
@@ -1143,6 +1148,10 @@ Status TabletBootstrap::HandleEntryPair(const IOContext* io_context, LogEntryPB*
 
     case NO_OP:
       RETURN_NOT_OK_REPLAY(PlayNoOpRequest, io_context, replicate, commit);
+      break;
+
+    case DUPLICATE_OP:
+      RETURN_NOT_OK_REPLAY(PlayDuplicateRequest, io_context, replicate, commit);
       break;
 
     default:
@@ -1634,6 +1643,16 @@ Status TabletBootstrap::PlayNoOpRequest(const IOContext* /*io_context*/,
                                         ReplicateMsg* /*replicate_msg*/,
                                         const CommitMsg& commit_msg) {
   return AppendCommitMsg(commit_msg);
+}
+
+Status TabletBootstrap::PlayDuplicateRequest(const IOContext* /*io_context*/,
+                                        ReplicateMsg* /*replicate_msg*/,
+                                        const CommitMsg& commit_msg) {
+  Status s = AppendCommitMsg(commit_msg);
+  if (s.ok()) {
+    tablet_replica_->set_last_committed_opid(commit_msg.commited_op_id());
+  }
+  return s;
 }
 
 Status TabletBootstrap::PlayRowOperations(const IOContext* io_context,

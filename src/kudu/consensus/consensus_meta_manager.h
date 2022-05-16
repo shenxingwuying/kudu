@@ -19,10 +19,12 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "kudu/consensus/consensus_meta.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
+#include "kudu/util/blocking_queue.h"
 #include "kudu/util/mutex.h"
 
 namespace kudu {
@@ -81,6 +83,18 @@ class ConsensusMetadataManager : public RefCountedThreadSafe<ConsensusMetadataMa
   // for some reason, perhaps due to a permissions or I/O-related issue.
   Status Delete(const std::string& tablet_id);
 
+  void AppendNewLeaders(const std::string& tablet_id) {
+    VLOG(1) << "DEBUG, AppendNewLeaders: " << tablet_id;
+    new_leader_queue_.Put(tablet_id);
+  }
+
+  std::vector<std::string> DrainToNewLeaders() {
+    std::vector<std::string> leader_tablet_ids;
+    new_leader_queue_.BlockingDrainTo(&leader_tablet_ids);
+    VLOG(1) << "DrainToNewLeaders, drain size: " << leader_tablet_ids.size();
+    return leader_tablet_ids;
+  }
+
  private:
   friend class RefCountedThreadSafe<ConsensusMetadataManager>;
 
@@ -91,6 +105,8 @@ class ConsensusMetadataManager : public RefCountedThreadSafe<ConsensusMetadataMa
 
   // Cache for ConsensusMetadata objects (tablet_id => cmeta).
   std::unordered_map<std::string, scoped_refptr<ConsensusMetadata>> cmeta_cache_;
+
+  BlockingQueue<std::string> new_leader_queue_;
 
   DISALLOW_COPY_AND_ASSIGN(ConsensusMetadataManager);
 };

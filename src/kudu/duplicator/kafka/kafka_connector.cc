@@ -14,8 +14,6 @@
 using kudu::kafka::RawKuduRecord;
 using std::string;
 
-DEFINE_string(kafka_broker_list, "localhost:9092", "");
-DEFINE_string(kafka_target_topic, "kudu_profile_record_stream", "");
 DEFINE_int32(kafka_retry_num, 3, "kafka api retry num if failed");
 
 // support kerberos, detail in https://github.com/edenhill/librdkafka/wiki/Using-SASL-with-librdkafka,
@@ -26,6 +24,9 @@ DEFINE_string(keytab_full_path, "", "keytab file's full path");
 DEFINE_string(principal_name, "", "principal info, your should input correct info");
 
 DEFINE_int32(min_topic_partition_num, 1, "the min value of topic's partition num");
+
+DECLARE_string(kafka_broker_list);
+DECLARE_string(kafka_target_topic);
 
 namespace kudu {
 namespace kafka {

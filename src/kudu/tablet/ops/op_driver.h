@@ -30,6 +30,7 @@
 #include "kudu/util/locks.h"
 #include "kudu/util/monotime.h"
 #include "kudu/util/status.h"
+#include "kudu/util/status_callback.h"
 #include "kudu/util/trace.h"
 
 namespace kudu {
@@ -258,6 +259,11 @@ class OpDriver : public RefCountedThreadSafe<OpDriver> {
   //
   // see comment in the interface for an important TODO.
   void ReplicationFinished(const Status& status);
+
+  void RoundDuplicationFinished(consensus::ConsensusRound* round,
+                                const StatusCallback& client_cb, const Status& status) {
+
+  }
 
   std::string ToString() const;
 

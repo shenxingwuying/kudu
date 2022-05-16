@@ -169,10 +169,20 @@ Status KuduServer::Init() {
                 .set_trace_metric_prefix("raft")
                 .set_max_threads(server_wide_pool_limit)
                 .Build(&raft_pool_));
-  RETURN_NOT_OK(ThreadPoolBuilder("dupli")
-                .set_trace_metric_prefix("dupli")
-                .set_max_threads(server_wide_pool_limit)
-                .Build(&duplicate_pool_));
+  {
+    // @TODO(duyuqi), review the thread num and Add Option Flags.
+    // The two pools are used for duplication.
+    RETURN_NOT_OK(ThreadPoolBuilder("dupli")
+                  .set_trace_metric_prefix("dupli")
+                  .set_max_threads(server_wide_pool_limit)
+                  .Build(&duplicate_pool_));
+
+    RETURN_NOT_OK(ThreadPoolBuilder("replay")
+                  .set_trace_metric_prefix("replay")
+                  .set_min_threads(0)
+                  .set_max_threads(server_wide_pool_limit)
+                  .Build(&replay_pool_));
+  }
 
   num_raft_leaders_ = metric_entity_->FindOrCreateGauge(&METRIC_num_raft_leaders, 0);
 

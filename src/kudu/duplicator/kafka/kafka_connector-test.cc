@@ -70,7 +70,7 @@ class KafkaConnectorTest : public KuduTest {
       : schema_(GetSimpleSchema()),
         client_schema_(schema_.CopyWithoutColumnIds()),
         arena_(256 * 1024) {
-    connector_ = kafka::KafkaConnector<cppkafka::Producer>::GetInstance();
+    connector_ = kafka::KafkaConnector::GetInstance();
   }
   void SetUp() override {
     DestroyKafka();

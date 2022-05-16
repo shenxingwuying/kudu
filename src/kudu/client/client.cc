@@ -106,6 +106,7 @@
 using kudu::client::internal::AsyncLeaderMasterRpc;
 using kudu::client::internal::MetaCache;
 using kudu::client::sp::shared_ptr;
+using kudu::consensus::DuplicationInfoPB;
 using kudu::consensus::RaftPeerPB;
 using kudu::master::AlterTableRequestPB;
 using kudu::master::AlterTableResponsePB;
@@ -263,11 +264,11 @@ string GetAllVersionInfo() {
   return VersionInfo::GetAllVersionInfo();
 }
 
-bool ToDuplicationInfoPB(const DuplicationInfo& info, master::DuplicationInfo* dup_info) {
+bool ToDuplicationInfoPB(const DuplicationInfo& info, consensus::DuplicationInfoPB* dup_info) {
   dup_info->set_name(info.name);
   switch (info.type) {
     case DuplicationDownstream::KAFKA:
-      dup_info->set_type(master::KAFKA);
+      dup_info->set_type(consensus::KAFKA);
       break;
     default:
       LOG(WARNING) << "not support DuplicationDownstream";
@@ -952,7 +953,7 @@ Status KuduTableCreator::Create() {
                                         data_->extra_configs_->end());
   }
   if (data_->dup_info_ != boost::none) {
-    master::DuplicationInfo* dup_info = req.add_dup_infos();
+    DuplicationInfoPB* dup_info = req.add_dup_infos();
     CHECK(ToDuplicationInfoPB(data_->dup_info_.get(), dup_info));
   }
   if (data_->owner_ != boost::none) {

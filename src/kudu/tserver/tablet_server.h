@@ -146,5 +146,6 @@ class TabletServer : public kserver::KuduServer {
   DISALLOW_COPY_AND_ASSIGN(TabletServer);
 };
 
+extern TabletServer* g_tablet_server;
 } // namespace tserver
 } // namespace kudu

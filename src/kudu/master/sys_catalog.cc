@@ -490,7 +490,8 @@ Status SysCatalogTable::SetupTablet(
   consensus::ServerContext server_ctx{/*quiescing*/nullptr,
                                       master_->num_raft_leaders(),
                                       master_->raft_pool(),
-                                      nullptr,
+                                      /* duplicate_pool */ nullptr,
+                                      /* relay_pool */ nullptr,
                                       // Allow sending status-only Raft messages to a master peer
                                       // in FAILED_UNRECOVERABLE state if we allow dynamically
                                       // adding/removing masters.

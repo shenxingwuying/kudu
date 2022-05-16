@@ -118,9 +118,7 @@ bool ShouldAddReplica(const RaftConfigPB& config,
 
 // Return 'true' if number of duplicator less than duplication_factor.
 bool ShouldAddDuplicator(const RaftConfigPB& config,
-                         int duplication_factor,
-                         const std::unordered_set<std::string>& uuids_ignored_for_underreplication =
-                         std::unordered_set<std::string>());
+                         int duplication_factor);
 
 // Check if the given Raft configuration contains at least one extra replica
 // which should (and can) be removed in accordance with the specified
@@ -131,6 +129,9 @@ bool ShouldEvictReplica(const RaftConfigPB& config,
                         const std::string& leader_uuid,
                         int replication_factor,
                         std::string* uuid_to_evict = nullptr);
+
+// Check if the peer is a duplicator.
+bool IsDuplicator(const RaftPeerPB& peer);
 
 }  // namespace consensus
 }  // namespace kudu

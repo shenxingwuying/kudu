@@ -60,6 +60,7 @@ class KuduServer : public server::ServerBase {
   ThreadPool* tablet_apply_pool() { return tablet_apply_pool_.get(); }
   ThreadPool* raft_pool() { return raft_pool_.get(); }
   ThreadPool* duplicate_pool() { return duplicate_pool_.get(); }
+  ThreadPool* replay_pool() { return replay_pool_.get(); }
   scoped_refptr<AtomicGauge<int32_t>> num_raft_leaders() { return num_raft_leaders_; }
 
  private:
@@ -77,6 +78,9 @@ class KuduServer : public server::ServerBase {
 
   // Thread pool for duplicator operations, shared between all duplicators
   std::unique_ptr<ThreadPool> duplicate_pool_;
+
+  // Thread pool for duplicator replay wal when lag too much or bootstrapping.
+  std::unique_ptr<ThreadPool> replay_pool_;
 
   // Gauge counting the number of Raft instances that in leaders mode.
   scoped_refptr<AtomicGauge<int32_t>> num_raft_leaders_;

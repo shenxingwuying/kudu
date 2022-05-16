@@ -28,6 +28,7 @@
 #include <glog/logging.h>
 
 #include "kudu/common/common.pb.h"
+#include "kudu/consensus/metadata.pb.h"
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/port.h"
 #include "kudu/gutil/strings/join.h"
@@ -63,15 +64,6 @@ bool IsRaftConfigVoter(const std::string& uuid, const RaftConfigPB& config) {
   for (const RaftPeerPB& peer : config.peers()) {
     if (peer.permanent_uuid() == uuid) {
       return peer.member_type() == RaftPeerPB::VOTER;
-    }
-  }
-  return false;
-}
-
-bool IsRaftConfigDuplicator(const std::string& uuid, const RaftConfigPB& config) {
-  for (const RaftPeerPB& peer : config.peers()) {
-    if (peer.permanent_uuid() == uuid) {
-      return peer.member_type() == RaftPeerPB::DUPLICATOR;
     }
   }
   return false;
@@ -217,7 +209,9 @@ Status VerifyRaftConfig(const RaftConfigPB& config) {
   }
 
   for (const RaftPeerPB& peer : config.peers()) {
-    if (!peer.has_permanent_uuid() || peer.permanent_uuid().empty()) {
+    bool is_duplicator = IsDuplicator(peer);
+    if ((!peer.has_permanent_uuid() || peer.permanent_uuid().empty()) &&
+       !is_duplicator) {
       return Status::IllegalState(Substitute("One peer didn't have an uuid or had the empty"
           " string. RaftConfig: $0", SecureShortDebugString(config)));
     }
@@ -228,7 +222,7 @@ Status VerifyRaftConfig(const RaftConfigPB& config) {
     }
     uuids.insert(peer.permanent_uuid());
 
-    if (config.peers_size() > 1 && !peer.has_last_known_addr()) {
+    if (config.peers_size() > 1 && !peer.has_last_known_addr() && !is_duplicator) {
       return Status::IllegalState(
           Substitute("Peer: $0 has no address. RaftConfig: $1",
                      peer.permanent_uuid(), SecureShortDebugString(config)));
@@ -538,23 +532,12 @@ bool ShouldAddReplica(const RaftConfigPB& config,
 
 // @TODO(duyuqi), duplicator failover
 bool ShouldAddDuplicator(const RaftConfigPB& config,
-                         int duplication_factor,
-                         const unordered_set<string>& uuids_ignored_for_underreplication) {
+                         int duplication_factor) {
   int num_duplicators_total = 0;
-//  int num_duplicators_healthy = 0;
 
   for (const RaftPeerPB& peer : config.peers()) {
-    const auto& peer_uuid = peer.permanent_uuid();
-    bool ignore_failure_for_underreplication = ContainsKey(uuids_ignored_for_underreplication,
-                                                           peer_uuid);
-    if (VLOG_IS_ON(1) && ignore_failure_for_underreplication) {
-      VLOG(1) << Substitute("check duplictors, ignoring $0 if failed", peer_uuid);
-    }
     switch (peer.member_type()) {
       case RaftPeerPB::DUPLICATOR:
-        if (ignore_failure_for_underreplication) {
-          continue;
-        }
         ++num_duplicators_total;
         break;
       case RaftPeerPB::VOTER:
@@ -651,6 +634,10 @@ bool ShouldEvictReplica(const RaftConfigPB& config,
   // the appropriate default values of those fields.
   VLOG(2) << "config to evaluate: " << SecureDebugString(config);
   for (const RaftPeerPB& peer : config.peers()) {
+    if (peer.has_member_type() && peer.member_type() == RaftPeerPB::DUPLICATOR) {
+      pq_duplicators.emplace(peer_to_elem(peer));
+      continue;
+    }
     DCHECK(peer.has_permanent_uuid() && !peer.permanent_uuid().empty());
     const string& peer_uuid = peer.permanent_uuid();
     const auto overall_health = peer.health_report().overall_health();
@@ -712,10 +699,6 @@ bool ShouldEvictReplica(const RaftConfigPB& config,
         has_non_voter_failed_unrecoverable |= failed_unrecoverable;
         break;
 
-      case RaftPeerPB::DUPLICATOR:
-        // @TODO do something
-        pq_duplicators.emplace(peer_to_elem(peer));
-        break;
       default:
         LOG(DFATAL) << peer.member_type() << ": unsupported member type";
         break;
@@ -897,6 +880,11 @@ bool ShouldEvictReplica(const RaftConfigPB& config,
           << (should_evict ? to_evict : "");
 
   return should_evict;
+}
+
+// Check if the peer is a duplicator.
+bool IsDuplicator(const RaftPeerPB& peer) {
+  return peer.has_member_type() && peer.member_type() == RaftPeerPB::DUPLICATOR;
 }
 
 }  // namespace consensus

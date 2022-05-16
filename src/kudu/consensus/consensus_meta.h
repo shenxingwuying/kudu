@@ -18,7 +18,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <map>
+#include <mutex>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include <gtest/gtest_prod.h>
@@ -28,6 +31,7 @@
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/threading/thread_collision_warner.h"
+#include "kudu/util/mutex.h"
 
 namespace kudu {
 
@@ -95,10 +99,6 @@ class ConsensusMetadata : public RefCountedThreadSafe<ConsensusMetadata> {
   // Returns true iff peer with specified uuid is a member of the specified
   // local Raft config.
   bool IsMemberInConfig(const std::string& uuid, RaftConfigState type);
-
-  // Return true iff peer with specified uuid is a duplicator in the specified
-  // local Raft config.
-  bool IsDuplicatorInConfig(const std::string& uuid, RaftConfigState type);
 
   // Returns a count of the number of voters in the specified local Raft
   // config.
@@ -171,6 +171,14 @@ class ConsensusMetadata : public RefCountedThreadSafe<ConsensusMetadata> {
   // Return cached peer role and term, lock-free.
   RoleAndTerm GetRoleAndTerm() const;
 
+  typedef std::map<std::tuple<std::string, std::string, std::string>, consensus::DuplicationInfoPB>
+      DuplicatorMap;
+
+  DuplicatorMap duplicators() const {
+    std::lock_guard<Mutex> l_lock(mutex_);
+    return duplicators_;
+  }
+
  private:
   friend class RaftConsensusQuorumTest;
   friend class RefCountedThreadSafe<ConsensusMetadata>;
@@ -228,6 +236,9 @@ class ConsensusMetadata : public RefCountedThreadSafe<ConsensusMetadata> {
   // Updates the cached on-disk size of the consensus metadata.
   Status UpdateOnDiskSize();
 
+  // Updates the duplicators of RaftConfigPB.
+  Status UpdateDuplicators(const RaftConfigPB& config);
+
   FsManager* const fs_manager_;
   const std::string tablet_id_;
   const std::string peer_uuid_;
@@ -265,6 +276,14 @@ class ConsensusMetadata : public RefCountedThreadSafe<ConsensusMetadata> {
   // as opposed to uint64_t, which is the return type of the underlying function
   // used to populate this value.
   std::atomic<int64_t> on_disk_size_;
+
+
+  // duplicators, should lock to pretect.
+  std::map<std::tuple<std::string, std::string, std::string>, consensus::DuplicationInfoPB>
+      duplicators_;
+
+  // To pretect duplicators_.
+  mutable Mutex mutex_;
 
   DISALLOW_COPY_AND_ASSIGN(ConsensusMetadata);
 };

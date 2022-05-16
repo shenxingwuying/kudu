@@ -80,14 +80,16 @@ Status RunTabletServer() {
             << "Tablet server version:\n"
             << VersionInfo::GetAllVersionInfo();
 
-  TabletServer server({});
-  RETURN_NOT_OK(server.Init());
+  g_tablet_server = new TabletServer({});
+  RETURN_NOT_OK(g_tablet_server->Init());
   MAYBE_FAULT(FLAGS_fault_before_start);
-  RETURN_NOT_OK(server.Start());
+  RETURN_NOT_OK(g_tablet_server->Start());
 
   while (true) {
     SleepFor(MonoDelta::FromSeconds(60));
   }
+  delete g_tablet_server;
+  g_tablet_server = nullptr;
 }
 
 } // namespace tserver

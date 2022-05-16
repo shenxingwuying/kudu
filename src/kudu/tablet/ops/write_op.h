@@ -388,6 +388,8 @@ class WriteOp : public Op {
   // algorithm.
   Status Apply(consensus::CommitMsg** commit_msg) override;
 
+  Status Duplicate() override;
+
   // If result == COMMITTED, commits the mvcc op and updates the metrics, if
   // result == ABORTED aborts the mvcc op.
   void Finish(OpResult result) override;

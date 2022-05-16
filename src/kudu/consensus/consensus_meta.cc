@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <limits>
 #include <ostream>
+#include <tuple>
 #include <utility>
 
 #include <gflags/gflags.h>
@@ -51,6 +52,9 @@ DEFINE_bool(cmeta_force_fsync, false,
 TAG_FLAG(cmeta_force_fsync, advanced);
 
 DECLARE_bool(cmeta_fsync_override_on_xfs);
+
+DEFINE_string(kafka_broker_list, "localhost:9092", "");
+DEFINE_string(kafka_target_topic, "kudu_profile_record_stream", "");
 
 using std::string;
 using strings::Substitute;
@@ -167,12 +171,6 @@ bool ConsensusMetadata::IsMemberInConfig(const string& uuid,
                                          RaftConfigState type) {
   DFAKE_SCOPED_RECURSIVE_LOCK(fake_lock_);
   return IsRaftConfigMember(uuid, GetConfig(type));
-}
-
-bool ConsensusMetadata::IsDuplicatorInConfig(const string& uuid,
-                                             RaftConfigState type) {
-  DFAKE_SCOPED_RECURSIVE_LOCK(fake_lock_);
-  return IsRaftConfigDuplicator(uuid, GetConfig(type));
 }
 
 int ConsensusMetadata::CountVotersInConfig(RaftConfigState type) {
@@ -409,6 +407,7 @@ void ConsensusMetadata::UpdateActiveRole() {
   DFAKE_SCOPED_RECURSIVE_LOCK(fake_lock_);
   active_role_ = GetConsensusRole(peer_uuid_, leader_uuid_, ActiveConfig());
   UpdateRoleAndTermCache();
+  UpdateDuplicators(ActiveConfig());
   VLOG_WITH_PREFIX(1) << "Updating active role to " << RaftPeerPB::Role_Name(active_role_)
                       << ". Consensus state: "
                       << pb_util::SecureShortDebugString(ToConsensusStatePB());
@@ -425,6 +424,34 @@ Status ConsensusMetadata::UpdateOnDiskSize() {
   uint64_t on_disk_size;
   RETURN_NOT_OK(fs_manager_->env()->GetFileSize(path, &on_disk_size));
   on_disk_size_ = on_disk_size;
+  return Status::OK();
+}
+
+Status ConsensusMetadata::UpdateDuplicators(const RaftConfigPB& config) {
+  std::lock_guard<Mutex> l_lock(mutex_);
+  duplicators_.clear();
+  for (const RaftPeerPB& peer : config.peers()) {
+    if (IsDuplicator(peer)) {
+      CHECK(peer.has_dup_info());
+      string name = peer.dup_info().name();
+      consensus::DownstreamType type = peer.dup_info().type();
+      string type_str = DownstreamType_Name(peer.dup_info().type());
+      string default_uri;
+      if (type == consensus::KAFKA) {
+        default_uri = FLAGS_kafka_broker_list;
+      } else {
+        string msg = Substitute("not supported duplicator downstream type: $0",
+                          type_str);
+        LOG(ERROR) << msg;
+        return Status::NotSupported(msg);
+      }
+
+      string uri = peer.dup_info().has_uri() ? peer.dup_info().uri() : default_uri;
+      auto result = duplicators_.insert({std::tuple<string, string, string>(name, type_str, uri),
+                            peer.dup_info()});
+      CHECK(result.second);
+    }
+  }
   return Status::OK();
 }
 

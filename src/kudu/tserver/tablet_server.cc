@@ -58,6 +58,8 @@ using std::vector;
 namespace kudu {
 namespace tserver {
 
+TabletServer* g_tablet_server = nullptr;
+
 TabletServer::TabletServer(const TabletServerOptions& opts)
     : KuduServer("TabletServer", opts, "kudu.tabletserver"),
       state_(kStopped),

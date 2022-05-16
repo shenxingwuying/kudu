@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <ostream>
 #include <string>
 #include <utility>
@@ -32,6 +33,7 @@
 #include <cppkafka/exceptions.h>
 #include <cppkafka/message_builder.h>
 #include <cppkafka/metadata.h>
+#include <cppkafka/producer.h>
 #include <gflags/gflags_declare.h>
 #include <glog/logging.h>
 
@@ -121,14 +123,14 @@ void RangePKToPB(const Schema& schema,
   *primary_key_hash_code = util_hash::CityHash64(primary_key.data(), primary_key.size());
 }
 
-template <typename T>
+// template <typename T = cppkafka::Producer>
 class KafkaConnector : public duplicator::RemoteConnector {
  public:
-  static KafkaConnector<T>* GetInstance() {
+  static KafkaConnector* GetInstance() {
     if (FLAGS_downstream_type != "kafka") {
       return nullptr;
     }
-    return Singleton<KafkaConnector<T>>::get();
+    return Singleton<KafkaConnector>::get();
   }
 
   Status InitPrepare() override {
@@ -144,7 +146,7 @@ class KafkaConnector : public duplicator::RemoteConnector {
       configuration.set("sasl.kerberos.principal", FLAGS_principal_name);
     }
 
-    auto producer = std::make_shared<T>(configuration);
+    auto producer = std::make_shared<cppkafka::Producer>(configuration);
     producer_.swap(producer);
     return Status::OK();
   }
@@ -153,7 +155,7 @@ class KafkaConnector : public duplicator::RemoteConnector {
     if (inited_) {
       return Status::OK();
     }
-    MutexLock l(init_lock_);
+    std::lock_guard<Mutex> l(init_lock_);
     if (inited_) {
       return Status::OK();
     }
@@ -273,7 +275,7 @@ class KafkaConnector : public duplicator::RemoteConnector {
     return Status::OK();
   }
 
-  std::shared_ptr<T> producer() {
+  std::shared_ptr<cppkafka::Producer> producer() {
     return producer_;
   }
 
@@ -285,7 +287,7 @@ class KafkaConnector : public duplicator::RemoteConnector {
 
  protected:
   // cppkafka::Producer, cppkafka::MockProducer
-  std::shared_ptr<T> producer_;
+  std::shared_ptr<cppkafka::Producer> producer_;
 
   mutable Mutex init_lock_;
   bool inited_ = false;

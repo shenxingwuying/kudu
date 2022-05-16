@@ -156,7 +156,7 @@ message SysTabletsEntryPB {
   optional int64 delete_timestamp = 9;
 
   // Replica for duplication
-  repeated DuplicationInfo dup_infos = 100;
+  repeated consensus.DuplicationInfoPB dup_infos = 100;
 }
 
 // The on-disk entry in the sys.catalog table ("metadata" column) for
@@ -227,7 +227,7 @@ message SysTablesEntryPB {
   optional int64 delete_timestamp = 18;
 
   // Replica for duplication.
-  repeated DuplicationInfo dup_infos = 100;
+  repeated consensus.DuplicationInfoPB dup_infos = 100;
 }
 
 // The on-disk entry in the sys.catalog table ("metadata" column) to represent
@@ -517,23 +517,6 @@ message GetTabletLocationsResponsePB {
 //  Catalog
 // ============================================================================
 
-enum DuplicationDownstream {
-    INVALID_MAX_SYSTEM = 999;
-    KAFKA = 0;
-}
-
-message DuplicationInfo {
-  // the dup name for alter add or delete
-  required string name = 1;
-  //
-  required DuplicationDownstream type = 2;
-
-  // If not set, server will use the gflag default value
-  optional string uri = 3;
-
-  optional string options = 4;
-}
-
 message CreateTableRequestPB {
   required string name = 1;
   required SchemaPB schema = 2;
@@ -578,7 +561,7 @@ message CreateTableRequestPB {
   // Replica for duplication.
   // firstly, we support only 1 duplication_infos
   // TODO(duyuqi), support more than one
-  repeated DuplicationInfo dup_infos = 100;
+  repeated consensus.DuplicationInfoPB dup_infos = 100;
 }
 
 message CreateTableResponsePB {
@@ -771,7 +754,7 @@ message AlterTableRequestPB {
     optional RowOperationsPB range_bounds = 1;
   }
   message AddDuplication {
-    required DuplicationInfo dup_info = 1;
+    required consensus.DuplicationInfoPB dup_info = 1;
   }
   message DropDuplication {
     required string name = 1;

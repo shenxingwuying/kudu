@@ -70,9 +70,9 @@ class KuduClient;
 class KuduTable;
 } // namespace client
 
-namespace master {
-class DuplicationInfo;
-} // namespace master
+namespace consensus {
+class DuplicationInfoPB;
+} // namespace consensus
 
 namespace tablet {
 class FuzzTest;
@@ -1151,7 +1151,8 @@ struct DuplicationInfo {
   std::string options;
 };
 
-extern bool ToDuplicationInfoPB(const DuplicationInfo& info, master::DuplicationInfo* dup_info);
+extern bool ToDuplicationInfoPB(const DuplicationInfo& info,
+                                consensus::DuplicationInfoPB* dup_info);
 
 /// @brief A helper class to create a new table with the desired options.
 class KUDU_EXPORT KuduTableCreator {

@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cstdint>
 #include <ctime>
+#include <memory>
 #include <new>
 #include <ostream>
 #include <vector>
@@ -39,6 +40,7 @@
 #include "kudu/common/txn_id.h"
 #include "kudu/common/wire_protocol.h"
 #include "kudu/common/wire_protocol.pb.h"
+#include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/opid.pb.h"
 #include "kudu/consensus/raft_consensus.h"
 #include "kudu/gutil/dynamic_annotations.h"
@@ -65,7 +67,8 @@
 #include "kudu/util/slice.h"
 #include "kudu/util/trace.h"
 
-DEFINE_int32(tablet_inject_latency_on_apply_write_op_ms, 0,
+DEFINE_int32(tablet_inject_latency_on_apply_write_op_ms,
+             0,
              "How much latency to inject when a write op is applied. "
              "For testing only!");
 TAG_FLAG(tablet_inject_latency_on_apply_write_op_ms, unsafe);
@@ -90,6 +93,18 @@ using tserver::ResourceMetricsPB;
 using tserver::TabletServerErrorPB;
 using tserver::WriteRequestPB;
 using tserver::WriteResponsePB;
+
+class DuplicationOpCompletionCallback : public OpCompletionCallback {
+ public:
+  explicit DuplicationOpCompletionCallback(TabletReplica* replica) : replica_(replica) {}
+
+  void OpCompleted() override {
+    replica_->set_last_committed_opid(replica_->last_confirmed_opid());
+  }
+
+ private:
+  TabletReplica* replica_;
+};
 
 string WritePrivilegeToString(const WritePrivilegeType& type) {
   switch (type) {
@@ -136,16 +151,15 @@ Status WriteAuthorizationContext::CheckPrivileges() const {
   }
   for (const auto& required_write_privilege : required_write_privileges) {
     if (!ContainsKey(write_privileges, required_write_privilege)) {
-      return Status::NotAuthorized(Substitute("not authorized to $0",
-          WritePrivilegeToString(required_write_privilege)));
+      return Status::NotAuthorized(
+          Substitute("not authorized to $0", WritePrivilegeToString(required_write_privilege)));
     }
   }
   return Status::OK();
 }
 
 WriteOp::WriteOp(std::shared_ptr<WriteOpState> state, DriverType type)
-  : Op(type, Op::WRITE_OP),
-  state_(std::move(state)) {
+    : Op(type, Op::WRITE_OP), state_(std::move(state)) {
   start_time_ = MonoTime::Now();
 }
 
@@ -197,8 +211,7 @@ Status WriteOp::Prepare() {
   if (state_->request()->has_txn_id()) {
     for (const auto& op : state_->row_ops()) {
       const auto& op_type = op->decoded_op.type;
-      if (op_type != RowOperationsPB::INSERT &&
-          op_type != RowOperationsPB::INSERT_IGNORE) {
+      if (op_type != RowOperationsPB::INSERT && op_type != RowOperationsPB::INSERT_IGNORE) {
         state()->completion_callback()->set_error(s, TabletServerErrorPB::INVALID_MUTATION);
         return Status::NotSupported("transactions may only insert");
       }
@@ -220,8 +233,8 @@ Status WriteOp::Prepare() {
   // held, since we know the op will not be replicated if the leader cannot
   // take the partition lock.
   if (PREDICT_TRUE(FLAGS_enable_txn_partition_lock)) {
-    RETURN_NOT_OK(tablet->AcquirePartitionLock(state(),
-        type() == consensus::LEADER ? LockManager::TRY_LOCK : LockManager::WAIT_FOR_LOCK));
+    RETURN_NOT_OK(tablet->AcquirePartitionLock(
+        state(), type() == consensus::LEADER ? LockManager::TRY_LOCK : LockManager::WAIT_FOR_LOCK));
   }
   RETURN_NOT_OK(tablet->AcquireRowLocks(state()));
 
@@ -229,9 +242,7 @@ Status WriteOp::Prepare() {
   return Status::OK();
 }
 
-void WriteOp::AbortPrepare() {
-  state()->ReleaseMvccTxn(OpResult::ABORTED);
-}
+void WriteOp::AbortPrepare() { state()->ReleaseMvccTxn(OpResult::ABORTED); }
 
 Status WriteOp::Start() {
   TRACE_EVENT0("op", "WriteOp::Start");
@@ -267,8 +278,8 @@ Status WriteOp::Apply(CommitMsg** commit_msg) {
   TRACE_EVENT0("op", "WriteOp::Apply");
   TRACE("APPLY: Starting");
 
-  if (PREDICT_FALSE(ANNOTATE_UNPROTECTED_READ(
-      FLAGS_tablet_inject_latency_on_apply_write_op_ms) > 0)) {
+  if (PREDICT_FALSE(ANNOTATE_UNPROTECTED_READ(FLAGS_tablet_inject_latency_on_apply_write_op_ms) >
+                    0)) {
     TRACE("Injecting $0ms of latency due to --tablet_inject_latency_on_apply_write_op_ms",
           FLAGS_tablet_inject_latency_on_apply_write_op_ms);
     SleepFor(MonoDelta::FromMilliseconds(FLAGS_tablet_inject_latency_on_apply_write_op_ms));
@@ -284,6 +295,66 @@ Status WriteOp::Apply(CommitMsg** commit_msg) {
   *commit_msg = google::protobuf::Arena::CreateMessage<CommitMsg>(state_->pb_arena());
   state()->ReleaseTxResultPB((*commit_msg)->mutable_result());
   (*commit_msg)->set_op_type(consensus::OperationType::WRITE_OP);
+
+  {
+    consensus::ConsensusMetadata::DuplicatorMap duplicator_map =
+        state()->tablet_replica()->consensus()->duplicators();
+    if (state()->tablet_replica()->ShouldDuplication()) {
+      // @TODO(duyuqi), support all duplicators.
+      // Use raft to replicate prepare log for duplicate_request
+      // and then commit the message.
+
+      CHECK_EQ(1, duplicator_map.size());
+      auto it = duplicator_map.begin();
+      const auto& dup_info = it->second;
+
+      // Step 1. duplicate to the remote destination storage system.
+      Status status = Duplicate();
+      if (!status.ok()) {
+        VLOG(0) << "Duplicate not ok, " << status.ToString();
+      }
+      if (state()->tablet_replica()->duplicator() == nullptr) {
+        // TODO(duyuqi)
+        // What we should do?
+      }
+
+      // Step 2. Commit a specail log for duplicate Msg.
+      TabletReplica* tablet_replica = state()->tablet_replica();
+      consensus::OpId last_confirmed_opid = tablet_replica->last_confirmed_opid();
+      consensus::OpId last_committed_opid = tablet_replica->last_committed_opid();
+      VLOG(1) << Substitute("duplicator apply last_confirmed_opid $0, last_committed_opid $1",
+                            last_confirmed_opid.DebugString(),
+                            last_committed_opid.DebugString());
+
+      if (last_confirmed_opid.term() >= last_committed_opid.term()) {
+        // Should duriable the duplication progress poiint.
+        if (last_confirmed_opid.index() > last_committed_opid.index()) {
+          consensus::DuplicateRequestPB request;
+          consensus::DuplicateResponsePB response;
+          std::unique_ptr<DuplicationOpState> op_state = std::make_unique<DuplicationOpState>(
+              tablet_replica, std::move(request), std::move(response));
+          op_state->set_completion_callback(unique_ptr<OpCompletionCallback>(
+              new DuplicationOpCompletionCallback(tablet_replica)));
+          // Submit the write operation. The RPC will be responded asynchronously.
+          tablet_replica->SubmitDuplicationOp(
+              std::move(op_state), std::move(last_confirmed_opid), dup_info);
+        }
+      }
+    } else {
+      // TODO(duyuqi)
+      // if HasDuplicator and is follower. We should do something?
+    }
+  }
+  return Status::OK();
+}
+
+Status WriteOp::Duplicate() {
+  TRACE_EVENT0("op", "WriteOp::Duplicate");
+  TRACE("Duplicate: Starting");
+
+  std::shared_ptr<WriteOpState> state_ptr = shared_state();
+  RETURN_NOT_OK(state_ptr->tablet_replica()->tablet()->DuplicateRowOperations(state_ptr));
+  TRACE("Duplicate: Finished");
 
   return Status::OK();
 }
@@ -324,8 +395,7 @@ void WriteOp::Finish(OpResult result) {
       if (state()->external_consistency_mode() == COMMIT_WAIT) {
         metrics->commit_wait_duration->Increment(op_m.commit_wait_duration_usec);
       }
-      uint64_t op_duration_usec =
-          (MonoTime::Now() - start_time_).ToMicroseconds();
+      uint64_t op_duration_usec = (MonoTime::Now() - start_time_).ToMicroseconds();
       switch (state()->external_consistency_mode()) {
         case CLIENT_PROPAGATED:
           metrics->write_op_duration_client_propagated_consistency->Increment(op_duration_usec);
@@ -347,20 +417,22 @@ string WriteOp::ToString() const {
   string abs_time_formatted;
   StringAppendStrftime(&abs_time_formatted, "%Y-%m-%d %H:%M:%S", (time_t)abs_time, true);
   return Substitute("WriteOp [type=$0, start_time=$1, state=$2]",
-                    DriverType_Name(type()), abs_time_formatted, state_->ToString());
+                    DriverType_Name(type()),
+                    abs_time_formatted,
+                    state_->ToString());
 }
 
 WriteOpState::WriteOpState(TabletReplica* tablet_replica,
-                           const tserver::WriteRequestPB *request,
+                           const tserver::WriteRequestPB* request,
                            const rpc::RequestIdPB* request_id,
-                           tserver::WriteResponsePB *response,
+                           tserver::WriteResponsePB* response,
                            boost::optional<WriteAuthorizationContext> authz_ctx)
-  : OpState(tablet_replica),
-    request_(DCHECK_NOTNULL(request)),
-    response_(response),
-    authz_context_(std::move(authz_ctx)),
-    mvcc_op_(nullptr),
-    schema_at_decode_time_(nullptr) {
+    : OpState(tablet_replica),
+      request_(DCHECK_NOTNULL(request)),
+      response_(response),
+      authz_context_(std::move(authz_ctx)),
+      mvcc_op_(nullptr),
+      schema_at_decode_time_(nullptr) {
   external_consistency_mode_ = request_->external_consistency_mode();
   if (!response_) {
     response_ = &owned_response_;
@@ -375,8 +447,7 @@ void WriteOpState::SetMvccOp(unique_ptr<ScopedOp> mvcc_op) {
   mvcc_op_ = std::move(mvcc_op);
 }
 
-void WriteOpState::set_tablet_components(
-    const scoped_refptr<const TabletComponents>& components) {
+void WriteOpState::set_tablet_components(const scoped_refptr<const TabletComponents>& components) {
   DCHECK(!tablet_components_) << "Already set";
   DCHECK(components);
   tablet_components_ = components;
@@ -399,8 +470,8 @@ Status WriteOpState::AcquireTxnLockCheckOpen(scoped_refptr<Txn> txn) {
   txn->AcquireReadLock(&temp);
   const auto txn_state = txn->state();
   if (PREDICT_FALSE(txn_state != kOpen)) {
-    return Status::InvalidArgument(Substitute("txn $0 is not open: $1",
-        txn->txn_id(), TxnStateToString(txn_state)));
+    return Status::InvalidArgument(
+        Substitute("txn $0 is not open: $1", txn->txn_id(), TxnStateToString(txn_state)));
   }
   txn_lock_.swap(temp);
   txn_ = std::move(txn);
@@ -429,8 +500,7 @@ void WriteOpState::SetRowOps(vector<DecodedRowOperation> decoded_ops) {
   // Allocate the ProbeStats objects from the op's arena, so
   // they're all contiguous and we don't need to do any central allocation.
   stats_array_ = static_cast<ProbeStats*>(
-      arena->AllocateBytesAligned(sizeof(ProbeStats) * row_ops_.size(),
-                                  alignof(ProbeStats)));
+      arena->AllocateBytesAligned(sizeof(ProbeStats) * row_ops_.size(), alignof(ProbeStats)));
 
   // Manually run the constructor to clear the stats to 0 before collecting them.
   for (int i = 0; i < row_ops_.size(); i++) {
@@ -438,9 +508,7 @@ void WriteOpState::SetRowOps(vector<DecodedRowOperation> decoded_ops) {
   }
 }
 
-void WriteOpState::StartApplying() {
-  CHECK_NOTNULL(mvcc_op_.get())->StartApplying();
-}
+void WriteOpState::StartApplying() { CHECK_NOTNULL(mvcc_op_.get())->StartApplying(); }
 
 void WriteOpState::FinishApplyingOrAbort(Op::OpResult result) {
   ReleaseMvccTxn(result);
@@ -548,13 +616,10 @@ void WriteOpState::AcquireRowLocks(LockManager* lock_manager) {
   rows_lock_ = ScopedRowLock(lock_manager, this, keys, LockManager::LOCK_EXCLUSIVE);
 }
 
-void WriteOpState::ReleaseRowLocks() {
-  rows_lock_.Release();
-}
+void WriteOpState::ReleaseRowLocks() { rows_lock_.Release(); }
 
-Status WriteOpState::AcquirePartitionLock(
-    LockManager* lock_manager,
-    LockManager::LockWaitMode wait_mode) {
+Status WriteOpState::AcquirePartitionLock(LockManager* lock_manager,
+                                          LockManager::LockWaitMode wait_mode) {
   TabletServerErrorPB::Code code = TabletServerErrorPB::UNKNOWN_ERROR;
   DCHECK(!partition_lock_.IsAcquired(&code));
   TxnId txn_id;
@@ -567,13 +632,15 @@ Status WriteOpState::AcquirePartitionLock(
   if (!acquired) {
     Status s;
     if (code == TabletServerErrorPB::TXN_LOCKED_ABORT) {
-      s = Status::Aborted("Write op should be aborted since it tries to acquire the "
-                          "partition lock that is held by another transaction that "
-                          "has lower txn ID");
+      s = Status::Aborted(
+          "Write op should be aborted since it tries to acquire the "
+          "partition lock that is held by another transaction that "
+          "has lower txn ID");
     } else if (code == TabletServerErrorPB::TXN_LOCKED_RETRY_OP) {
-      s = Status::ServiceUnavailable("Write op should retry since it tries to acquire "
-                                     "the partition lock that is held by another transaction "
-                                     "that has higher txn ID");
+      s = Status::ServiceUnavailable(
+          "Write op should retry since it tries to acquire "
+          "the partition lock that is held by another transaction "
+          "that has higher txn ID");
     } else {
       LOG(DFATAL) << "unexpected error code " << code;
     }
@@ -606,9 +673,7 @@ void WriteOpState::ReleaseTxnLock() {
   TRACE("Released schema lock");
 }
 
-WriteOpState::~WriteOpState() {
-  Reset();
-}
+WriteOpState::~WriteOpState() { Reset(); }
 
 void WriteOpState::Reset() {
   FinishApplyingOrAbort(Op::ABORTED);

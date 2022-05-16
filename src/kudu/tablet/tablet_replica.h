@@ -33,16 +33,19 @@
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid.pb.h"
 #include "kudu/consensus/raft_consensus.h"
+#include "kudu/duplicator/duplication_replay.h"
 #include "kudu/duplicator/duplicator.h"
 #include "kudu/fs/fs_manager.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/tablet/metadata.pb.h"
 #include "kudu/tablet/op_order_verifier.h"
+#include "kudu/tablet/ops/duplication_op.h"
 #include "kudu/tablet/ops/op.h"
 #include "kudu/tablet/ops/op_tracker.h"
 #include "kudu/tablet/row_op.h"
 #include "kudu/tablet/rowset.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet_metadata.h"
 #include "kudu/tserver/tserver.pb.h"
@@ -67,6 +70,7 @@ class TxnOpDispatcherITest_LifecycleBasic_Test;
 class TxnOpDispatcherITest_NoPendingWriteOps_Test;
 class TxnOpDispatcherITest_PreliminaryTasksTimeout_Test;
 
+
 namespace consensus {
 class ConsensusMetadataManager;
 class OpStatusPB;
@@ -75,6 +79,11 @@ class TimeManager;
 
 namespace clock {
 class Clock;
+}
+
+namespace duplicator {
+class DuplicationReplayWalTest;
+class DuplicationReplayWalTest_PrepareAndReplay;
 }
 
 namespace log {
@@ -194,6 +203,11 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
 
   // RPC's WriteRequest, and WriteResponse.
   Status SubmitWrite(std::shared_ptr<WriteOpState> op_state);
+
+  // SubmitDuplicationOp to duriable the duplicator's duplicate progress.
+  Status SubmitDuplicationOp(std::unique_ptr<DuplicationOpState> op_state,
+                             consensus::OpId confirmed_opid,
+                             consensus::DuplicationInfoPB dup_info);
 
   // Submits an op to update transaction participant state, executing it
   // asynchonously.
@@ -326,9 +340,6 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   Status NewReplicaOpDriver(std::unique_ptr<Op> op,
                             scoped_refptr<OpDriver>* driver);
 
-  Status NewDuplicaOpDriver(std::unique_ptr<Op> op,
-                            scoped_refptr<OpDriver>* driver);
-
   // Tells the tablet's log to garbage collect.
   Status RunLogGC();
 
@@ -411,21 +422,55 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   void BeginTxnParticipantOp(int64_t txn_id, RegisteredTxnCallback began_txn_cb);
 
 
-  bool IsDuplicator() const {
-    return is_duplicator_;
+  bool ShouldDuplication() const {
+    return consensus_->ShouldDuplication();
+  }
+
+  ThreadPool* duplication_pool() {
+    return consensus_->duplication_pool();
+  }
+
+  ThreadPool* replay_pool() {
+    return consensus_->replay_pool();
+  }
+
+  void TEST_set_duplication_and_replay_pool(ThreadPool* duplicate_pool, ThreadPool* replay_pool) {
+    consensus_->TEST_set_duplication_and_replay_pool(duplicate_pool, replay_pool);
+  }
+
+  duplicator::Duplicator* duplicator() {
+    return duplicator_;
+  }
+
+  void StartDuplicator() {
+    if (duplicator_ == nullptr) {
+      std::lock_guard<Mutex> l_lock(duplicator_mutex_);
+      if (duplicator_ == nullptr) {
+        // Init a ThreadPoolToken for the TabletReplica
+        ThreadPool* duplicate_pool = duplication_pool();
+        CHECK(duplicate_pool != nullptr);
+        duplicator_ = new duplicator::Duplicator(duplicate_pool, this);
+        duplicator_->Init();
+        VLOG(0) << Substitute("Init duplicator Table $0, TabletId $1, PeerUUID $2",
+                              meta_->table_name(),
+                              tablet_id(),
+                              consensus_->peer_uuid());
+      }
+    }
   }
 
   Status Duplicate(const std::shared_ptr<WriteOpState>& op_state_ptr,
-                   RowOp* row_op, ProbeStats* stats, const std::shared_ptr<Schema>& schema) {
-    duplicator_->Duplicate(op_state_ptr, row_op, schema);
+                   RowOp* row_op, ProbeStats* stats, const std::shared_ptr<Schema>& schema,
+                   Tablet::DuplicationMode mode = Tablet::DuplicationMode::REALTIME_DUPLICATION) {
+    duplicator_->Duplicate(op_state_ptr, row_op, schema, mode);
     // TODO(duyuuqi), when bootstrapping it default msr_id is what?
     // because the mrs is not flush, so the mrs_id is all 0 (first MemRowSet id).
     // So commit id is 0.
     // need some stats ?
     // We need satisfy rows.
-    int32_t mrs_id = (tablet_ == nullptr) ? 0 : tablet_->CurrentMrsIdForTests();
-    row_op->SetInsertSucceeded(mrs_id);
-    stats->mrs_consulted++;
+    // int32_t mrs_id = (tablet_ == nullptr) ? 0 : tablet_->CurrentMrsIdForTests();
+    // // row_op->SetInsertSucceeded(mrs_id);
+    // // stats->mrs_consulted++;
     return Status::OK();
   }
 
@@ -450,10 +495,13 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   friend class TabletReplicaTest;
   friend class TabletReplicaTestBase;
   friend class kudu::TxnOpDispatcherITest;
+  friend class duplicator::DuplicationReplayWalTest;
+
   FRIEND_TEST(TabletReplicaTest, TestActiveOpPreventsLogGC);
   FRIEND_TEST(TabletReplicaTest, TestDMSAnchorPreventsLogGC);
   FRIEND_TEST(TabletReplicaTest, TestMRSAnchorPreventsLogGC);
   FRIEND_TEST(kudu::TxnOpDispatcherITest, LifecycleBasic);
+  FRIEND_TEST(DuplicationReplayWalTest, PrepareAndReplay);
 
   // Only for CLI tools and tests.
   TabletReplica();
@@ -630,7 +678,6 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   std::shared_ptr<Tablet> tablet_;
   std::shared_ptr<rpc::Messenger> messenger_;
   std::shared_ptr<consensus::RaftConsensus> consensus_;
-  bool is_duplicator_ = false;
 
   // Lock protecting state_, last_status_, as well as pointers to collaborating
   // classes such as tablet_, consensus_, and maintenance_ops_.
@@ -653,6 +700,9 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
 
   // duplicator will replicate wals to third store system
   duplicator::Duplicator* duplicator_;
+  // To pretect duplicator init.
+  Mutex duplicator_mutex_;
+  // Record last committed_opid for duplication.
   consensus::OpId last_committed_opid_;
 
   clock::Clock* clock_;

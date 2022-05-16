@@ -39,13 +39,16 @@
 #include "kudu/rpc/result_tracker.h"
 #include "kudu/rpc/rpc_header.pb.h"
 #include "kudu/tablet/mvcc.h"
+#include "kudu/tablet/ops/op.h"
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/tablet/op_order_verifier.h"
 #include "kudu/tablet/ops/op_tracker.h"
 #include "kudu/util/debug/trace_event.h"
+#include "kudu/util/locks.h"
 #include "kudu/util/logging.h"
 #include "kudu/util/pb_util.h"
+#include "kudu/util/scoped_cleanup.h"
 #include "kudu/util/status_callback.h"
 #include "kudu/util/threadpool.h"
 #include "kudu/util/trace.h"
@@ -101,7 +104,7 @@ class FollowerOpCompletionCallback : public OpCompletionCallback {
 // OpDriver
 ////////////////////////////////////////////////////////////
 
-OpDriver::OpDriver(OpTracker *op_tracker,
+OpDriver::OpDriver(OpTracker* op_tracker,
                    RaftConsensus* consensus,
                    Log* log,
                    ThreadPoolToken* prepare_pool_token,
@@ -137,7 +140,7 @@ Status OpDriver::Init(unique_ptr<Op> op,
   op_ = std::move(op);
 
 
-  if (type == consensus::FOLLOWER || type == consensus::DUPLICA) {
+  if (type == consensus::FOLLOWER) {
     std::lock_guard<simple_spinlock> lock(opid_lock_);
     op_id_copy_ = op_->state()->op_id();
     DCHECK(op_id_copy_.IsInitialized());
@@ -291,9 +294,7 @@ Status OpDriver::Prepare() {
     // atomically with the change of the prepared state. Otherwise if the
     // prepare thread gets preempted after the state is prepared apply can be
     // triggered by another thread without the rpc being registered.
-    if (op_->type() == consensus::FOLLOWER || op_->type() == consensus::DUPLICA) {
-      // TODO(duyuqi), check the logic., we should move consensus::DUPLICA
-      // to another branch.
+    if (op_->type() == consensus::FOLLOWER) {
       RegisterFollowerOpOnResultTracker();
     // ... else we're a client-started op. Make sure we're still the driver of the
     // RPC and give up if we aren't.
@@ -524,38 +525,10 @@ void OpDriver::ApplyTask() {
     SetResponseTimestamp(op_->state(), op_->state()->timestamp());
 
     {
-      // TODO(duyuqi),
-      // if DUPLICA, should persist the last record's OpId which has written to remote ds.
-      // the CommitMsg would not be continuous.
-      // Be Careful, please cr more cautious.
-      bool duplicator_commit = false;
-      if (state()->tablet_replica()->IsDuplicator()) {
-        consensus::OpId last_confirmed_opid = state()->tablet_replica()->last_confirmed_opid();
-        consensus::OpId last_committed_opid = state()->tablet_replica()->last_committed_opid();
-        LOG(INFO) << "duplicator apply last_confirmed_opid(" << last_confirmed_opid.term() <<","
-          << last_confirmed_opid.index() << ")";
-        LOG(INFO) << "duplicator apply last_committed_opid(" << last_committed_opid.term() <<","
-          << last_committed_opid.index() << ")";
-        if (last_confirmed_opid.term() >= last_committed_opid.term()) {
-          duplicator_commit = last_confirmed_opid.index() > last_committed_opid.index();
-          if (duplicator_commit) {
-            commit_msg->mutable_commited_op_id()->CopyFrom(last_confirmed_opid);
-              TRACE_EVENT1("op", "AsyncAppendCommit", "op", this);
-              CHECK_OK(log_->AsyncAppendCommit(
-                      *commit_msg, [](const Status& s) {
-                        CrashIfNotOkStatusCB("Enqueued commit operation failed to write to WAL",
-                                             s);
-                      }));
-            state()->tablet_replica()->set_last_committed_opid(last_confirmed_opid);
-          }
-        }
-      } else {
-        TRACE_EVENT1("op", "AsyncAppendCommit", "op", this);
-        CHECK_OK(log_->AsyncAppendCommit(*commit_msg, [](const Status& s) {
-                    CrashIfNotOkStatusCB("Enqueued commit operation failed to write to WAL", s);
-                }));
-
-      }
+      TRACE_EVENT1("op", "AsyncAppendCommit", "op", this);
+      CHECK_OK(log_->AsyncAppendCommit(*commit_msg, [](const Status& s) {
+                  CrashIfNotOkStatusCB("Enqueued commit operation failed to write to WAL", s);
+              }));
     }
 
     // If the client requested COMMIT_WAIT as the external consistency mode

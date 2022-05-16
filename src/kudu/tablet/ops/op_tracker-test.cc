@@ -92,6 +92,9 @@ class OpTrackerTest : public KuduTest,
     Status Apply(consensus::CommitMsg** /* commit_msg */) override {
       return Status::OK();
     }
+    Status Duplicate() override {
+      return Status::OK();
+    }
     std::string ToString() const override {
       return "NoOp";
     }

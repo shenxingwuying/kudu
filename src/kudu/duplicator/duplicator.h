@@ -26,6 +26,7 @@
 
 #include "kudu/consensus/opid.pb.h"
 #include "kudu/duplicator/connector.h"
+#include "kudu/duplicator/duplication_replay.h"
 #include "kudu/util/blocking_queue.h"
 #include "kudu/util/status.h"
 
@@ -42,8 +43,8 @@ struct RowOp;
 namespace duplicator {
 
 class Duplicator {
-public:
-  Duplicator(ThreadPool* thread_pool, std::string table_name);
+ public:
+  Duplicator(ThreadPool* thread_pool, tablet::TabletReplica* tablet_replica);
   ~Duplicator();
   Duplicator(const Duplicator& /* dup */) = delete;
   void operator=(const Duplicator& /* dup */) = delete;
@@ -52,28 +53,45 @@ public:
   Status Shutdown();
 
   void Duplicate(const std::shared_ptr<tablet::WriteOpState>& op_state_ptr,
-                 const tablet::RowOp* row_op, const std::shared_ptr<Schema>& schema);
+                 const tablet::RowOp* row_op,
+                 const std::shared_ptr<Schema>& schema,
+                 tablet::Tablet::DuplicationMode expect_mode =
+                     tablet::Tablet::DuplicationMode::REALTIME_DUPLICATION);
   void Apply();
+
   consensus::OpId last_confirmed_opid() const {
-      std::lock_guard<std::mutex> l(mutex_);
-      return last_confirmed_opid_;
+    std::lock_guard<std::mutex> l(mutex_);
+    return last_confirmed_opid_;
   }
-private:
+
+  void set_last_confirmed_opid(const consensus::OpId& op_id) {
+    std::lock_guard<std::mutex> l(mutex_);
+    last_confirmed_opid_ = op_id;
+  }
+
+  WalReplay* wal_replay() { return wal_replay_; }
+
+  string ToString();
+
+ private:
   ThreadPool* duplicate_pool_;
   // std::shared_ptr<tablet::Tablet> tablet_;
-  const std::string table_name_;
+  tablet::TabletReplica* tablet_replica_;
   consensus::OpId last_confirmed_opid_;
   mutable std::mutex mutex_;
   bool stopped_;
   // TODO(duyuqi) use pointer to avoid copy
   BlockingQueue<std::shared_ptr<DuplicateMsg>> queue_;
 
+  std::atomic<tablet::Tablet::DuplicationMode> duplication_mode_;
+  duplicator::WalReplay* wal_replay_;
+
   // Singleton, eg KafkaConnector
   Connector* connector_;
   std::unique_ptr<ThreadPoolToken> duplicate_pool_token_;
 };
 
-} // namespace duplicator
-} // namespace kudu
+}  // namespace duplicator
+}  // namespace kudu
 
 /* vim: set expandtab ts=4 sw=4 sts=4 tw=100: */

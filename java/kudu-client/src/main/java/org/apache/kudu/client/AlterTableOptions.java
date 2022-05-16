@@ -33,6 +33,7 @@ import org.apache.kudu.ColumnSchema;
 import org.apache.kudu.Common;
 import org.apache.kudu.Type;
 import org.apache.kudu.client.ProtobufHelper.SchemaPBConversionFlags;
+import org.apache.kudu.consensus.Metadata;
 import org.apache.kudu.master.Master;
 
 /**
@@ -466,8 +467,9 @@ public class AlterTableOptions {
   public AlterTableOptions enableDuplication(String name) {
     Master.AlterTableRequestPB.Step.Builder stepBuilder =
         Master.AlterTableRequestPB.Step.newBuilder();
-    Master.DuplicationInfo.Builder builder = Master.DuplicationInfo.newBuilder()
-        .setName(name).setType(Master.DuplicationDownstream.KAFKA);
+    
+    Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder()
+        .setName(name).setType(Metadata.DownstreamType.KAFKA);
     stepBuilder.setType(AlterTableRequestPB.StepType.ADD_DUPLICATION)
         .setAddDuplication(Master.AlterTableRequestPB.AddDuplication
         .newBuilder().setDupInfo(builder.build()).build());
@@ -493,11 +495,11 @@ public class AlterTableOptions {
    * @param streamType duplication's destination system, such as Kafka
    * @return this instance
    */
-  public AlterTableOptions addDuplications(String name, Master.DuplicationDownstream streamType) {
+  public AlterTableOptions addDuplications(String name, Metadata.DownstreamType streamType) {
     return addDuplications(name, streamType, null, null);
   }
 
-  public AlterTableOptions addDuplications(String name, Master.DuplicationDownstream streamType,
+  public AlterTableOptions addDuplications(String name, Metadata.DownstreamType streamType,
           String uri) {
     return addDuplications(name, streamType, uri, null);
   }
@@ -512,9 +514,9 @@ public class AlterTableOptions {
    * @param options such as user token infomation, json format
    * @return this instance
    */
-  public AlterTableOptions addDuplications(String name, Master.DuplicationDownstream streamType,
+  public AlterTableOptions addDuplications(String name, Metadata.DownstreamType streamType,
       String uri, String options) {
-    Master.DuplicationInfo.Builder builder = Master.DuplicationInfo.newBuilder();
+    Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
     builder.setName(name).setType(streamType);
     if (uri != null && "".equals(uri)) {
       builder.setUri(uri);

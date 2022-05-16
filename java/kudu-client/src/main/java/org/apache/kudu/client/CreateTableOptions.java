@@ -27,6 +27,7 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
 
 import org.apache.kudu.Common;
+import org.apache.kudu.consensus.Metadata;
 import org.apache.kudu.master.Master;
 
 /**
@@ -276,9 +277,8 @@ public class CreateTableOptions {
    * @param name Kafka Topic Name
   */
   public CreateTableOptions enableDuplication(String name) {
-    Master.DuplicationInfo.Builder builder = Master.DuplicationInfo.newBuilder();
-    builder.setName(name)
-        .setType(Master.DuplicationDownstream.KAFKA);
+    Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
+    builder.setName(name).setType(Metadata.DownstreamType.KAFKA).setUri("localhost:9092");
     pb.addDupInfos(builder.build());
     return this;
   }
@@ -291,7 +291,7 @@ public class CreateTableOptions {
    * @param streamType duplication's destination system, such as Kafka
    * @return CreateTableOptions
    */
-  public CreateTableOptions addDuplications(String name, Master.DuplicationDownstream streamType) {
+  public CreateTableOptions addDuplications(String name, Metadata.DownstreamType streamType) {
     return addDuplications(name, streamType, null, null);
   }
 
@@ -304,7 +304,7 @@ public class CreateTableOptions {
    * @param uri optional, destination's discovered service name
    * @return CreateTableOptions
    */
-  public CreateTableOptions addDuplications(String name, Master.DuplicationDownstream streamType,
+  public CreateTableOptions addDuplications(String name, Metadata.DownstreamType streamType,
           String uri) {
     return addDuplications(name, streamType, uri, null);
   }
@@ -319,15 +319,15 @@ public class CreateTableOptions {
    * @param options such as user token infomation, json format
    * @return CreateTableOptions
    */
-  public CreateTableOptions addDuplications(String name, Master.DuplicationDownstream streamType,
+  public CreateTableOptions addDuplications(String name, Metadata.DownstreamType streamType,
       String uri, String options) {
-    Master.DuplicationInfo.Builder builder = Master.DuplicationInfo.newBuilder();
+    Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
     builder.setName(name)
         .setType(streamType);
-    if (uri != null && "".equals(uri)) {
+    if (uri != null && !uri.isEmpty()) {
       builder.setUri(uri);
     }
-    if (options != null && "".equals(options)) {
+    if (options != null && !options.isEmpty()) {
       builder.setOptions(options);
     }
     pb.addDupInfos(builder.build());

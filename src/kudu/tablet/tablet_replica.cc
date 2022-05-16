@@ -128,6 +128,7 @@ using kudu::consensus::ConsensusBootstrapInfo;
 using kudu::consensus::ConsensusOptions;
 using kudu::consensus::ConsensusRound;
 using kudu::consensus::ConsensusStatePB;
+using kudu::consensus::DUPLICATE_OP;
 using kudu::consensus::MarkDirtyCallback;
 using kudu::consensus::OpId;
 using kudu::consensus::PARTICIPANT_OP;
@@ -210,10 +211,6 @@ TabletReplica::TabletReplica(consensus::RaftPeerPB local_peer_pb) :
 }
 
 TabletReplica::~TabletReplica() {
-  if (duplicator_ != nullptr) {
-    delete duplicator_;
-    duplicator_ = nullptr;
-  }
   // We are required to call Shutdown() before destroying a TabletReplica.
   CHECK(state_ == SHUTDOWN || state_ == FAILED)
       << "TabletReplica not fully shut down. State: "
@@ -227,22 +224,12 @@ Status TabletReplica::Init(ServerContext server_ctx) {
   ConsensusOptions options;
   options.tablet_id = meta_->tablet_id();
   shared_ptr<RaftConsensus> consensus;
-  ThreadPool* duplicate_pool = server_ctx.duplicate_pool;
   RETURN_NOT_OK(RaftConsensus::Create(std::move(options),
                                       local_peer_pb_,
                                       cmeta_manager_,
                                       std::move(server_ctx),
                                       &consensus));
   consensus_ = std::move(consensus);
-  is_duplicator_ = consensus_->IsDuplicator();
-  if (is_duplicator_) {
-    // Init a ThreadPoolToken for the TabletReplica
-    CHECK(duplicate_pool != nullptr);
-    duplicator_ = new duplicator::Duplicator(duplicate_pool, meta_->table_name());
-    duplicator_->Init();
-    VLOG(2) << "Init duplicator Table " << meta_->table_name() << " TableId " <<
-      tablet_id() << " PeerUUID " << consensus_->peer_uuid();
-  }
   set_state(INITIALIZED);
   SetStatusMessage("Initialized. Waiting to start...");
   return Status::OK();
@@ -372,8 +359,10 @@ void TabletReplica::Stop() {
 
   if (consensus_) consensus_->Stop();
 
-  if (IsDuplicator()) {
+  if (duplicator_) {
     duplicator_->Shutdown();
+    delete duplicator_;
+    duplicator_ = nullptr;
   }
 
   // TODO(KUDU-183): Keep track of the pending tasks and send an "abort" message.
@@ -635,6 +624,19 @@ Status TabletReplica::SubmitWrite(std::shared_ptr<WriteOpState> op_state) {
   return Status::OK();
 }
 
+Status TabletReplica::SubmitDuplicationOp(std::unique_ptr<DuplicationOpState> op_state,
+                                          consensus::OpId confirmed_opid,
+                                          consensus::DuplicationInfoPB dup_info) {
+  RETURN_NOT_OK(CheckRunning());
+  op_state->SetResultTracker(result_tracker_);
+  unique_ptr<DuplicationOp> op(new DuplicationOp(
+      std::move(op_state), consensus::LEADER, std::move(confirmed_opid), std::move(dup_info)));
+  scoped_refptr<OpDriver> driver;
+  RETURN_NOT_OK(NewLeaderOpDriver(std::move(op), &driver));
+  driver->ExecuteAsync();
+  return Status::OK();
+}
+
 Status TabletReplica::SubmitTxnParticipantOp(std::unique_ptr<ParticipantOpState> op_state) {
   RETURN_NOT_OK(CheckRunning());
 
@@ -755,6 +757,9 @@ void TabletReplica::GetInFlightOps(Op::TraceType trace_type,
         case Op::PARTICIPANT_OP:
           status_pb.set_op_type(consensus::PARTICIPANT_OP);
           break;
+        case Op::DUPLICATION_OP:
+          status_pb.set_op_type(consensus::DUPLICATE_OP);
+          break;
       }
       status_pb.set_description(driver->ToString());
       int64_t running_for_micros =
@@ -833,10 +838,6 @@ Status TabletReplica::StartFollowerOp(const scoped_refptr<ConsensusRound>& round
   consensus::ReplicateMsg* replicate_msg = round->replicate_msg();
   DCHECK(replicate_msg->has_timestamp());
   consensus::DriverType driver_type = consensus::FOLLOWER;
-  if (IsDuplicator()) {
-    LOG(INFO) << LogPrefix() << ", IsDuplicator()";
-    driver_type = consensus::DUPLICA;
-  }
   unique_ptr<Op> op;
   switch (replicate_msg->op_type()) {
     case WRITE_OP:
@@ -886,11 +887,7 @@ Status TabletReplica::StartFollowerOp(const scoped_refptr<ConsensusRound>& round
   state->set_consensus_round(round);
 
   scoped_refptr<OpDriver> driver;
-  if (IsDuplicator()) {
-    RETURN_NOT_OK(NewDuplicaOpDriver(std::move(op), &driver));
-  } else {
-    RETURN_NOT_OK(NewReplicaOpDriver(std::move(op), &driver));
-  }
+  RETURN_NOT_OK(NewReplicaOpDriver(std::move(op), &driver));
 
   // A raw pointer is required to avoid a refcount cycle.
   auto* driver_raw = driver.get();
@@ -964,21 +961,6 @@ Status TabletReplica::NewReplicaOpDriver(unique_ptr<Op> op,
     apply_pool_,
     &op_order_verifier_);
   RETURN_NOT_OK(op_driver->Init(std::move(op), consensus::FOLLOWER));
-  *driver = std::move(op_driver);
-
-  return Status::OK();
-}
-
-Status TabletReplica::NewDuplicaOpDriver(unique_ptr<Op> op,
-                                         scoped_refptr<OpDriver>* driver) {
-  scoped_refptr<OpDriver> op_driver = new OpDriver(
-    &op_tracker_,
-    consensus_.get(),
-    log_.get(),
-    prepare_pool_token_.get(),
-    apply_pool_,
-    &op_order_verifier_);
-  RETURN_NOT_OK(op_driver->Init(std::move(op), consensus::DUPLICA));
   *driver = std::move(op_driver);
 
   return Status::OK();

@@ -79,6 +79,7 @@
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/consensus.proxy.h"
+#include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid_util.h"
 #include "kudu/consensus/quorum_util.h"
 #include "kudu/fs/fs_manager.h"
@@ -411,6 +412,7 @@ using google::protobuf::Map;
 using kudu::cfile::TypeEncodingInfo;
 using kudu::consensus::ConsensusServiceProxy;
 using kudu::consensus::ConsensusStatePB;
+using kudu::consensus::DuplicationInfoPB;
 using kudu::consensus::IsRaftConfigMember;
 using kudu::consensus::RaftConfigPB;
 using kudu::consensus::RaftConsensus;
@@ -3272,8 +3274,8 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
               return Status::InvalidArgument("DROP_DUPLICATION missing duplication");
           }
           if (l.mutable_data()->pb.dup_infos_size() > 0) {
-            ::google::protobuf::RepeatedPtrField<DuplicationInfo>& dup_infos =
-                const_cast<::google::protobuf::RepeatedPtrField<DuplicationInfo>&>(
+            ::google::protobuf::RepeatedPtrField<DuplicationInfoPB>& dup_infos =
+                const_cast<::google::protobuf::RepeatedPtrField<DuplicationInfoPB>&>(
                     l.mutable_data()->pb.dup_infos());
             auto it = dup_infos.begin();
             for ( ; it != dup_infos.end();) {
@@ -4532,7 +4534,8 @@ class AsyncAddReplicaTask : public AsyncChangeConfigTask {
                       scoped_refptr<TabletInfo> tablet,
                       ConsensusStatePB cstate,
                       RaftPeerPB::MemberType member_type,
-                      ThreadSafeRandom* rng);
+                      ThreadSafeRandom* rng,
+                      const consensus::DuplicationInfoPB* dup_info = nullptr);
 
   string type_name() const override;
 
@@ -4541,20 +4544,26 @@ class AsyncAddReplicaTask : public AsyncChangeConfigTask {
 
  private:
   const RaftPeerPB::MemberType member_type_;
-
   // Used to make random choices in replica selection.
   ThreadSafeRandom* rng_;
+
+  // For add duplicator.
+  consensus::DuplicationInfoPB dup_info_;
 };
 
 AsyncAddReplicaTask::AsyncAddReplicaTask(Master* master,
                                          scoped_refptr<TabletInfo> tablet,
                                          ConsensusStatePB cstate,
                                          RaftPeerPB::MemberType member_type,
-                                         ThreadSafeRandom* rng)
+                                         ThreadSafeRandom* rng,
+                                         const consensus::DuplicationInfoPB* dup_info)
     : AsyncChangeConfigTask(master, std::move(tablet), std::move(cstate),
                             consensus::ADD_PEER),
       member_type_(member_type),
       rng_(rng) {
+  if (dup_info != nullptr) {
+    dup_info_ = *(const_cast<DuplicationInfoPB*>(dup_info));
+  }
 }
 
 string AsyncAddReplicaTask::type_name() const {
@@ -4640,23 +4649,34 @@ bool AsyncAddReplicaTask::SendRequest(int attempt) {
     return false;
   }
 
-  DCHECK(extra_replica);
   consensus::ChangeConfigRequestPB req;
   req.set_dest_uuid(target_ts_desc_->permanent_uuid());
   req.set_tablet_id(tablet_->id());
   req.set_type(consensus::ADD_PEER);
   req.set_cas_config_opid_index(cstate_.committed_config().opid_index());
   RaftPeerPB* peer = req.mutable_server();
-  peer->set_permanent_uuid(extra_replica->permanent_uuid());
-  if (FLAGS_raft_prepare_replacement_before_eviction &&
-      member_type_ == RaftPeerPB::NON_VOTER) {
-    peer->mutable_attrs()->set_promote(true);
-  }
-  ServerRegistrationPB peer_reg;
-  extra_replica->GetRegistration(&peer_reg);
-  CHECK_GT(peer_reg.rpc_addresses_size(), 0);
-  *peer->mutable_last_known_addr() = peer_reg.rpc_addresses(0);
   peer->set_member_type(member_type_);
+
+  if (member_type_ == RaftPeerPB::DUPLICATOR) {
+    consensus::DuplicationInfoPB* duplication_pb = peer->mutable_dup_info();
+    *duplication_pb = dup_info_;
+    LOG(INFO) << "duplication name: " << duplication_pb->name()
+              << ", type: " << DownstreamType_Name(duplication_pb->type());
+  } else {
+    DCHECK(extra_replica);
+    ServerRegistrationPB peer_reg;
+    extra_replica->GetRegistration(&peer_reg);
+    CHECK_GT(peer_reg.rpc_addresses_size(), 0);
+
+    *peer->mutable_last_known_addr() = peer_reg.rpc_addresses(0);
+
+    peer->set_permanent_uuid(extra_replica->permanent_uuid());
+    if (FLAGS_raft_prepare_replacement_before_eviction &&
+        member_type_ == RaftPeerPB::NON_VOTER) {
+      peer->mutable_attrs()->set_promote(true);
+    }
+  }
+
   VLOG(1) << Substitute("Sending $0 request to $1 (attempt $2): $3",
                         type_name(), target_ts_desc_->ToString(), attempt,
                         SecureDebugString(req));
@@ -5009,10 +5029,15 @@ Status CatalogManager::ProcessTabletReport(
         }
 
         // TODO(duyuqi), check the logic whether is correct
+        int current_duplicator_size =
+            CountMembers(cstate.committed_config(), RaftPeerPB::DUPLICATOR);
         if (FLAGS_master_add_server_when_underreplicated &&
-            CountMembers(cstate.committed_config(), RaftPeerPB::DUPLICATOR) < duplication_factor) {
+            current_duplicator_size < duplication_factor) {
+          // TODO(duyuqi), should use the unique key to add, now need check carefully.
+          const consensus::DuplicationInfoPB& dup_info =
+            table->metadata().state().pb.dup_infos()[current_duplicator_size];
           rpcs.emplace_back(new AsyncAddReplicaTask(
-              master_, tablet, cstate, RaftPeerPB::DUPLICATOR, &rng_));
+              master_, tablet, cstate, RaftPeerPB::DUPLICATOR, &rng_, &dup_info));
         }
 
       // When --raft_prepare_replacement_before_eviction is enabled, we
@@ -5051,11 +5076,13 @@ Status CatalogManager::ProcessTabletReport(
           rpcs.emplace_back(new AsyncAddReplicaTask(
               master_, tablet, cstate, RaftPeerPB::NON_VOTER, &rng_));
         } else if (FLAGS_master_add_server_when_underreplicated &&
-                   ShouldAddDuplicator(config, duplication_factor,
-                                       uuids_ignored_for_underreplication)) {
-        // TODO(duyuqi), should check and repair duplicator
+                   ShouldAddDuplicator(config, duplication_factor)) {
+          int current_duplicator_size = CountMembers(config, RaftPeerPB::DUPLICATOR);
+          // TODO(duyuqi), should use the unique key to add, now need check carefully.
+          const consensus::DuplicationInfoPB& dup_info =
+            table->metadata().state().pb.dup_infos()[current_duplicator_size];
           rpcs.emplace_back(new AsyncAddReplicaTask(
-              master_, tablet, cstate, RaftPeerPB::DUPLICATOR, &rng_));
+              master_, tablet, cstate, RaftPeerPB::DUPLICATOR, &rng_, &dup_info));
         }
       }
     }
@@ -5641,7 +5668,7 @@ Status CatalogManager::SelectReplicasForTablet(const PlacementPolicy& policy,
                    table_guard.data().name(), nreplicas, policy.ts_num()));
   }
   const auto num_duplicas = table_guard.data().pb.dup_infos_size();
-  if (policy.ts_num() < (nreplicas + num_duplicas)) {
+  if (policy.ts_num() < nreplicas) {
     LOG(ERROR) << Substitute("Not enough tablet server are online for table '$0', need "
                              "downgrade duplications, maybe place them the same as voters, "
                             "Now invalid parameters",
@@ -5649,7 +5676,7 @@ Status CatalogManager::SelectReplicasForTablet(const PlacementPolicy& policy,
     return Status::InvalidArgument(
         Substitute("Not enough tablet server are online for table '$0', Need at lease $1 "
                    "duplications, maybe place them the same as voters",
-                   table_guard.data().name(), (nreplicas + num_duplicas)));
+                   table_guard.data().name(), nreplicas));
   }
 
   ConsensusStatePB* cstate = tablet->mutable_metadata()->
@@ -5671,28 +5698,30 @@ Status CatalogManager::SelectReplicasForTablet(const PlacementPolicy& policy,
 
   // Select the set of replicas for the tablet.
   TSDescriptorVector descriptors;
-  RETURN_NOT_OK_PREPEND(policy.PlaceTabletReplicas(nreplicas + num_duplicas,
+  RETURN_NOT_OK_PREPEND(policy.PlaceTabletReplicas(nreplicas,
                                                    dimension, &descriptors),
                         Substitute("failed to place replicas for tablet $0 "
                                    "(table '$1')",
                                    tablet->id(), table_guard.data().name()));
-  int index = 0;
   for (const auto& desc : descriptors) {
     ServerRegistrationPB reg;
     desc->GetRegistration(&reg);
 
     RaftPeerPB* peer = config->add_peers();
-    if (index < nreplicas) {
-        peer->set_member_type(RaftPeerPB::VOTER);
-    } else {
-        peer->set_member_type(RaftPeerPB::DUPLICATOR);
-    }
+    peer->set_member_type(RaftPeerPB::VOTER);
     peer->set_permanent_uuid(desc->permanent_uuid());
 
     for (const HostPortPB& addr : reg.rpc_addresses()) {
       peer->mutable_last_known_addr()->CopyFrom(addr);
     }
-    index++;
+  }
+  for (int i = 0; i < num_duplicas; i++) {
+    RaftPeerPB* peer = config->add_peers();
+    // DUPLICATOR is a virtual role, it's leader's shadow.
+    // So DUPLICATOR need not permanent_uuid and last_known_addr.
+    peer->set_member_type(RaftPeerPB::DUPLICATOR);
+    peer->mutable_dup_info()->CopyFrom(
+        tablet->metadata().state().pb.dup_infos()[i]);
   }
 
   return Status::OK();
@@ -5704,6 +5733,10 @@ void CatalogManager::SendCreateTabletRequest(const scoped_refptr<TabletInfo>& ta
       tablet_lock.data().pb.consensus_state().committed_config();
   tablet->set_last_create_tablet_time(MonoTime::Now());
   for (const RaftPeerPB& peer : config.peers()) {
+    // RaftPeerPB::DUPLICATOR is not a real replica. It's just leader's shadow.
+    if (IsDuplicator(peer)) {
+      continue;
+    }
     scoped_refptr<AsyncCreateReplica> task = new AsyncCreateReplica(
         master_, peer.permanent_uuid(), tablet, tablet_lock);
     tablet->table()->AddTask(tablet->id(), task);

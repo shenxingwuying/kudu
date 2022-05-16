@@ -64,6 +64,35 @@ message HealthReportPB {
   optional HealthStatus overall_health = 1;
 }
 
+enum DownstreamType {
+    INVALID_MAX_SYSTEM = 999;
+    KAFKA = 0;
+    // TODO(duyuqi), support below.
+    KUDU_BACKUP = 1;
+    KUDU_GLOBAL_INDEX = 2;
+    KUDU_LOCAL_INDEX = 3;
+}
+
+message DuplicationInfoPB {
+  // Dup name, can be add or delete by alter. 
+  // If kafka, name is topic name. 
+  // If kudu, name is table name.
+  // (name, type, uri) should be an unique key.
+  required string name = 1;
+  
+  required DownstreamType type = 2;
+
+  // Thirdparty storage master addresses, called uri, eg: host1:port1,...
+  optional string uri = 3;
+
+  // More informations for the duplication.
+  optional string options = 4;
+
+  // TODO(duyuqi)
+  // Filters, only focus some columns of all.
+  // optional string filters = 5;
+}
+
 // A peer in a configuration.
 message RaftPeerPB {
   // The possible roles for peers.
@@ -117,6 +146,9 @@ message RaftPeerPB {
   // Replica's health report, as seen by the leader. This is a run-time
   // only field, it should not be persisted or read from the persistent storage.
   optional HealthReportPB health_report = 5;
+
+  // If member_type is DUPLICATOR, duplicator should be valid.
+  optional DuplicationInfoPB dup_info = 6;
 }
 
 // A set of peers, serving a single tablet.

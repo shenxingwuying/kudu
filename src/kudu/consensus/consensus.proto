@@ -95,6 +95,8 @@ enum OperationType {
   ALTER_SCHEMA_OP = 4;
   CHANGE_CONFIG_OP = 5;
   PARTICIPANT_OP = 6;
+  // For durability the progress of duplication.
+  DUPLICATE_OP = 7;
 }
 
 // The op driver type: indicates whether an op is being executed on a leader
@@ -103,7 +105,6 @@ enum DriverType {
   UNKNOWN_DRIVER = 0;
   LEADER = 1;
   FOLLOWER = 2;
-  DUPLICA = 3;
 }
 
 // A configuration change request for the tablet with 'tablet_id'.
@@ -144,6 +145,8 @@ message ChangeConfigRequestPB {
   // The peer to add or remove.
   // When 'type' == ADD_PEER, both the permanent_uuid and last_known_addr
   // fields must be set. Otherwise, only the permanent_uuid field is required.
+  // When ADD_PEER a duplictor, permanent_uuid and last_known_addr set to
+  // localhost:port, but no real.
   optional RaftPeerPB server = 3;
 
   // The OpId index of the committed config to replace.
@@ -211,11 +214,13 @@ message ReplicateMsg {
   optional rpc.RequestIdPB request_id = 8;
 
   optional NoOpRequestPB noop_request = 999;
+  optional DuplicateRequestPB duplicate_request = 1000;
 }
 
 // A commit message for a previous operation.
 // This is a commit in the consensus sense and may abort/commit any operation
 // that required a consensus round.
+// DUPLICATE_OP is a specific op for mark the progress of duplication.
 message CommitMsg {
   required OperationType op_type = 1;
   // the id of the message this commit pertains to
@@ -238,6 +243,16 @@ message NoOpRequestPB {
  // leader marking a successful Raft election, this is true. If not set, it is
  // assumed to be true.
  optional bool timestamp_in_opid_order = 2;
+}
+
+message DuplicateRequestPB {
+  required OpId op_id = 1;
+  required DuplicationInfoPB dup_info = 2;
+}
+
+// DuplicateRequest need not response.
+message DuplicateResponsePB {
+  optional fixed64 timestamp = 1;
 }
 
 // Status message received in the peer responses.

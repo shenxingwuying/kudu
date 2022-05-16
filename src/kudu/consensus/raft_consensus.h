@@ -47,6 +47,7 @@
 #include "kudu/util/metrics.h"
 #include "kudu/util/monotime.h"
 #include "kudu/util/random.h"
+#include "kudu/util/scoped_cleanup.h"
 #include "kudu/util/status_callback.h"
 
 namespace kudu {
@@ -88,7 +89,10 @@ struct ServerContext {
   ThreadPool* raft_pool;
 
   // ThreadPool on which to run duplication tasks.
-  ThreadPool* duplicate_pool;
+  ThreadPool* duplicate_pool = nullptr;
+
+  // Threadpool on which to run replay wal for duplication.
+  ThreadPool* replay_pool = nullptr;
 
   // Shared boolean indicating whether Raft consensus should continue sending request messages
   // even if a peer is considered as failed.
@@ -174,9 +178,17 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   // Returns true if RaftConsensus is running.
   bool IsRunning() const;
 
-  // Returns true if local replica is duplicator, used by init.
-  bool IsDuplicator() {
-    return cmeta_->IsDuplicatorInConfig(local_peer_pb_.permanent_uuid(), ACTIVE_CONFIG);
+  // Returns true if local replica is leader and has duplicators.
+  bool HasDuplicator() const {
+    return !duplicators().empty();
+  }
+
+  bool ShouldDuplication() const {
+    return role() == RaftPeerPB::LEADER && HasDuplicator();
+  }
+
+  ConsensusMetadata::DuplicatorMap duplicators() const {
+    return cmeta_->duplicators();
   }
 
   // Emulates an election by increasing the term number and asserting leadership
@@ -415,6 +427,52 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   int64_t MetadataOnDiskSize() const;
 
   int64_t GetMillisSinceLastLeaderHeartbeat() const;
+
+  ThreadPool* duplication_pool() const {
+    return server_ctx_.duplicate_pool;
+  }
+
+  ThreadPool* replay_pool() const {
+    return server_ctx_.replay_pool;
+  }
+
+  void TEST_set_duplication_and_replay_pool(ThreadPool* duplicate_pool, ThreadPool* replay_pool) {
+    server_ctx_.duplicate_pool = duplicate_pool;
+    server_ctx_.replay_pool = replay_pool;
+  }
+
+  simple_spinlock& lock() {
+    return lock_;
+  }
+
+  void UnsafeLock() {
+    lock_.lock();
+  }
+  void UnsafeUnlock() {
+    lock_.is_locked();
+    lock_.unlock();
+  }
+
+  void DuplicateTxRoundReplicationFinished(ConsensusRound* round,
+                                           const std::function<void(const OpId& opid)> f,
+                                           const OpId& opid,
+                                           const StatusCallback& client_cb,
+                                           const Status& status) {
+    LockGuard l(lock_);
+    f(opid);
+    NonTxRoundReplicationFinished(round, client_cb, status);
+  }
+
+  // As a leader, append a new ConsensusRound to the queue.
+  Status AppendNewRoundToQueue(const scoped_refptr<ConsensusRound>& round) {
+    LockGuard l(lock_);
+    return AppendNewRoundToQueueUnlocked(round);
+  }
+
+  // As a leader, append a new ConsensusRound to the queue.
+  Status AppendNewRoundToQueueUnlocked(const scoped_refptr<ConsensusRound>& round);
+
+  void SwitchToLeaderStatusCB(const Status& status) const;
 
  protected:
   RaftConsensus(ConsensusOptions options,
@@ -774,9 +832,6 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
                                      const StatusCallback& client_cb,
                                      const Status& status);
 
-  // As a leader, append a new ConsensusRound to the queue.
-  Status AppendNewRoundToQueueUnlocked(const scoped_refptr<ConsensusRound>& round);
-
   // As a follower, start a consensus round not associated with an op.
   Status StartConsensusOnlyRoundUnlocked(const ReplicateRefPtr& msg);
 
@@ -870,7 +925,7 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   const scoped_refptr<ConsensusMetadataManager> cmeta_manager_;
 
   // State shared by Raft instances on a given server.
-  const ServerContext server_ctx_;
+  ServerContext server_ctx_;
 
   // TODO(dralves) hack to serialize updates due to repeated/out-of-order messages
   // should probably be refactored out.

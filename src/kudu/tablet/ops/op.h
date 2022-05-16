@@ -81,6 +81,7 @@ class Op {
     WRITE_OP,
     ALTER_SCHEMA_OP,
     PARTICIPANT_OP,
+    DUPLICATION_OP,
   };
 
   enum TraceType {
@@ -130,6 +131,8 @@ class Op {
   // this phase depend on the op type, but usually this is the
   // method where data-structures are changed.
   virtual Status Apply(consensus::CommitMsg** commit_msg) = 0;
+
+  virtual Status Duplicate() = 0;
 
   // Executed after the op has been applied and the Raft commit message has
   // been appended to the log (though it might not be durable yet), or if the

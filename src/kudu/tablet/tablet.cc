@@ -1256,6 +1256,23 @@ Status Tablet::ApplyRowOperations(const std::shared_ptr<WriteOpState>& op_state_
   return Status::OK();
 }
 
+Status Tablet::DuplicateRowOperations(const std::shared_ptr<WriteOpState>& op_state_ptr,
+                                      DuplicationMode mode) {
+  WriteOpState* op_state = op_state_ptr.get();
+  int num_ops = op_state->row_ops().size();
+
+  IOContext io_context({ tablet_id() });
+
+  std::vector<tablet::RowOp*> ops;
+  // TODO(duyuqi), WriteOpState is a atomic ops, should write batch to duplicator
+  for (int op_idx = 0; op_idx < num_ops; op_idx++) {
+    RowOp* row_op = op_state->row_ops()[op_idx];
+    RETURN_NOT_OK(DuplicateRowOperation(&io_context, op_state_ptr, row_op,
+                                        op_state->mutable_op_stats(op_idx), mode));
+  }
+  return Status::OK();
+}
+
 Status Tablet::ApplyRowOperation(const IOContext* io_context,
                                  const std::shared_ptr<WriteOpState>& op_state_ptr,
                                  RowOp* row_op,
@@ -1299,11 +1316,7 @@ Status Tablet::ApplyRowOperation(const IOContext* io_context,
     case RowOperationsPB::INSERT:
     case RowOperationsPB::INSERT_IGNORE:
     case RowOperationsPB::UPSERT:
-      if (op_state->tablet_replica()->IsDuplicator()) {
-        s = op_state->tablet_replica()->Duplicate(op_state_ptr, row_op, stats, schema_ptr);
-      } else {
-        s = InsertOrUpsertUnlocked(io_context, op_state, row_op, stats);
-      }
+      s = InsertOrUpsertUnlocked(io_context, op_state, row_op, stats);
       if (s.IsAlreadyPresent()) {
         return Status::OK();
       }
@@ -1313,15 +1326,38 @@ Status Tablet::ApplyRowOperation(const IOContext* io_context,
     case RowOperationsPB::UPDATE_IGNORE:
     case RowOperationsPB::DELETE:
     case RowOperationsPB::DELETE_IGNORE:
-      if (op_state->tablet_replica()->IsDuplicator()) {
-        s = op_state->tablet_replica()->Duplicate(op_state_ptr, row_op, stats, schema_ptr);
-      } else {
-        s = MutateRowUnlocked(io_context, op_state, row_op, stats);
-      }
+      s = MutateRowUnlocked(io_context, op_state, row_op, stats);
       if (s.IsNotFound()) {
         return Status::OK();
       }
       return s;
+
+    default:
+      LOG_WITH_PREFIX(FATAL) << RowOperationsPB::Type_Name(row_op->decoded_op.type);
+  }
+  return Status::OK();
+}
+
+Status Tablet::DuplicateRowOperation(const IOContext* io_context,
+                                     const std::shared_ptr<WriteOpState>& op_state_ptr,
+                                     RowOp* row_op,
+                                     ProbeStats* stats,
+                                     DuplicationMode mode) {
+  WriteOpState* op_state = op_state_ptr.get();
+  // op_state->tablet_replica()->StartDuplicator();
+
+  const SchemaPtr schema_ptr = schema();
+  switch (row_op->decoded_op.type) {
+    case RowOperationsPB::INSERT:
+    case RowOperationsPB::INSERT_IGNORE:
+    case RowOperationsPB::UPSERT:
+      return op_state->tablet_replica()->Duplicate(op_state_ptr, row_op, stats, schema_ptr, mode);
+
+    case RowOperationsPB::UPDATE:
+    case RowOperationsPB::UPDATE_IGNORE:
+    case RowOperationsPB::DELETE:
+    case RowOperationsPB::DELETE_IGNORE:
+      return op_state->tablet_replica()->Duplicate(op_state_ptr, row_op, stats, schema_ptr, mode);
 
     default:
       LOG_WITH_PREFIX(FATAL) << RowOperationsPB::Type_Name(row_op->decoded_op.type);

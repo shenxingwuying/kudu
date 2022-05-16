@@ -55,6 +55,8 @@
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/gutil/walltime.h"
 #include "kudu/rpc/periodic.h"
+#include "kudu/tserver/tablet_server.h"
+#include "kudu/tserver/ts_tablet_manager.h"
 #include "kudu/util/async_util.h"
 #include "kudu/util/debug/trace_event.h"
 #include "kudu/util/flag_tags.h"
@@ -161,6 +163,9 @@ METRIC_DEFINE_gauge_int64(tablet, time_since_last_leader_heartbeat,
                           "in milliseconds. This metric is identically zero on a leader replica.",
                           kudu::MetricLevel::kDebug);
 
+namespace tserver {
+class TabletServer;
+} // namespace tserver
 
 using boost::optional;
 using google::protobuf::util::MessageDifferencer;
@@ -709,9 +714,11 @@ Status RaftConsensus::BecomeLeaderUnlocked() {
   scoped_refptr<ConsensusRound> round(
       new ConsensusRound(this, make_scoped_refptr(new RefCountedReplicate(replicate))));
   auto* round_raw = round.get();
+
   round->SetConsensusReplicatedCallback(
       [this, round_raw](const Status& s) {
-        this->NonTxRoundReplicationFinished(round_raw, &DoNothingStatusCB, s);
+        this->NonTxRoundReplicationFinished(round_raw,
+        std::bind(&RaftConsensus::SwitchToLeaderStatusCB, this, std::placeholders::_1), s);
       });
 
   last_leader_communication_time_micros_ = 0;
@@ -1096,7 +1103,7 @@ Status RaftConsensus::Update(const ConsensusRequestPB* request,
 
 // Helper function to check if the op is a no-op op.
 static bool IsConsensusOnlyOperation(OperationType op_type) {
-  return op_type == NO_OP || op_type == CHANGE_CONFIG_OP;
+  return op_type == NO_OP || op_type == CHANGE_CONFIG_OP || op_type == DUPLICATE_OP;
 }
 
 Status RaftConsensus::StartFollowerOpUnlocked(const ReplicateRefPtr& msg) {
@@ -1943,7 +1950,7 @@ Status RaftConsensus::BulkChangeConfig(const BulkChangeConfigRequestPB& req,
       ChangeConfigType type = item.type();
       const RaftPeerPB& peer = item.peer();
 
-      if (PREDICT_FALSE(!peer.has_permanent_uuid())) {
+      if (PREDICT_FALSE(!IsDuplicator(peer) && !peer.has_permanent_uuid())) {
         return Status::InvalidArgument("peer must have permanent_uuid specified",
                                        SecureShortDebugString(req));
       }
@@ -1969,7 +1976,7 @@ Status RaftConsensus::BulkChangeConfig(const BulkChangeConfigRequestPB& req,
             return Status::InvalidArgument("peer must have member_type specified",
                                            SecureShortDebugString(req));
           }
-          if (!peer.has_last_known_addr()) {
+          if (!IsDuplicator(peer) && !peer.has_last_known_addr()) {
             return Status::InvalidArgument("peer must have last_known_addr specified",
                                            SecureShortDebugString(req));
           }
@@ -2918,6 +2925,29 @@ void RaftConsensus::CompleteConfigChangeRoundUnlocked(ConsensusRound* round, con
   DCHECK(round->replicate_msg()->change_config_record().has_new_config());
   const RaftConfigPB& old_config = round->replicate_msg()->change_config_record().old_config();
   const RaftConfigPB& new_config = round->replicate_msg()->change_config_record().new_config();
+
+  // One support add a duplicator.
+  bool old_has_duplicator = false;
+  for (const RaftPeerPB& peer : old_config.peers()) {
+    if (IsDuplicator(peer)) {
+      old_has_duplicator = true;
+      break;
+    }
+  }
+  bool new_has_duplicator = false;
+  for (const RaftPeerPB& peer : new_config.peers()) {
+    if (IsDuplicator(peer)) {
+      new_has_duplicator = true;
+      break;
+    }
+  }
+  if (new_has_duplicator && !old_has_duplicator) {
+    // Add Duplicator
+    if (cmeta_->active_role() == RaftPeerPB::LEADER) {
+      cmeta_manager_->AppendNewLeaders(options_.tablet_id);
+    }
+  }
+
   DCHECK(old_config.has_opid_index());
   DCHECK(new_config.has_opid_index());
   // Check if the pending Raft config has an OpId less than the committed
@@ -3248,8 +3278,13 @@ ConsensusMetadata* RaftConsensus::consensus_metadata_for_tests() const {
 }
 
 int64_t RaftConsensus::GetMillisSinceLastLeaderHeartbeat() const {
-    return last_leader_communication_time_micros_ == 0 ?
-        0 : (GetMonoTimeMicros() - last_leader_communication_time_micros_) / 1000;
+  return last_leader_communication_time_micros_ == 0 ?
+      0 : (GetMonoTimeMicros() - last_leader_communication_time_micros_) / 1000;
+}
+
+void RaftConsensus::SwitchToLeaderStatusCB(const Status& status) const {
+  cmeta_manager_->AppendNewLeaders(options_.tablet_id);
+  DoNothingStatusCB(status);
 }
 
 ////////////////////////////////////////////////////////////////////////
