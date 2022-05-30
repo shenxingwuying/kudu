@@ -1,6 +1,9 @@
 #!/bin/env python
 # -*- coding: UTF-8 -*-
 
+import copy
+import json
+import logging
 import os
 import sys
 import subprocess
@@ -8,11 +11,10 @@ import time
 
 from collections import defaultdict
 
-import utils.sa_utils
-import utils.shell_wrapper
-
+sys.path.append(os.path.join(os.environ['SENSORS_PLATFORM_HOME'], '..', 'armada', 'hyperion'))
+from hyperion_utils import shell_utils
 from hyperion_client.config_manager import ConfigManager
-from hyperion_client.deploy_topo import DeployTopo
+from hyperion_client.deploy_info import DeployInfo
 
 SOKU_TOOL_ROOT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'soku_tool')
 if SOKU_TOOL_ROOT_PATH not in sys.path:
@@ -20,181 +22,176 @@ if SOKU_TOOL_ROOT_PATH not in sys.path:
 sys.path.append(os.path.join(os.environ['SENSORS_SOKU_HOME'], 'soku_tool', 'tools'))
 from base_tool import BaseTool
 
+
 class BalanceTool(BaseTool):
     example_doc = '''
 soku_tool banlance start # 开始balance
 '''
-    def _is_standalone(self):
-        """简单判断是否单机"""
-        master_addresses = ConfigManager().get_client_conf("sp", "kudu")['master_address']
-        get_ts_list_cmd = 'kudu tserver list %s -columns=http_addresses -format=space' % \
-                      master_addresses
-        res = utils.shell_wrapper.run_cmd(get_ts_list_cmd, self.logger.info)
-        if res['ret'] != 0:
-            raise Exception('Unable to call kudu tserver list cmd. %s' % res['stderr'])
-        ts_cnt = len(res['stdout'].strip().split('\n'))
-        return  ts_cnt == 1
+
+    # 需要设置日志等级，否则有时默认WARNING级别
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger()
+    reached = False
+    best_op = [float("inf"), [], []]
 
     def init_parser(self, parser):
         return 0
 
+    def run_cmd(self, cmd):
+        result = shell_utils.run_cmd(cmd, self.logger.info)
+        if result['ret'] != 0:
+            self.logger.info('execute %s error:%s' % (cmd, result))
+            sys.exit(1)
+        return result
+
     def do(self, args):
-        self.logger.debug(args)
-        if self._is_standalone():
-            self.logger.info("This cluster is standalone, no need do leader rebalance. Exit!!!")
+        # 判断是否为单机环境
+        if DeployInfo().get_simplified_cluster():
+            self.logger.info("This cluster is standalone, no need do leader rebalance. Exit!")
             sys.exit(0)
+        # 获取master地址
         master_addresses = ConfigManager().get_client_conf("sp", "kudu")['master_address']
-        get_table_cmd = 'kudu table list {master_addresses}'.format(master_addresses=master_addresses)
-        res = utils.shell_wrapper.run_cmd(get_table_cmd, self.logger.info)
-        if res['ret'] != 0:
-            raise Exception('Unable to call kudu table list cmd. %s' % res['stderr'])
-        table_str = res['stdout'].strip().split('\n')
-        for table in table_str:
+        # 获取所有的表
+        cmd = 'sp_kudu table list {master_addresses}'.format(master_addresses=master_addresses)
+        res = self.run_cmd(cmd)
+        tables_list = res['stdout'].strip().split('\n')
+        for table in tables_list:
+            # 过滤掉trashed的表
+            if "TRASHED" in table:
+                continue
             self.solution(master_addresses, table)
-        self.logger.info('NOTE: cluster has rebalance done, exit!!!')
+        self.logger.info('Finish leader rebalance task!')
         sys.exit(0)
 
-    def ksck(self, master_addresses):
-        ksck_cmd = 'kudu cluster ksck %s -ksck_format=plain_full' % master_addresses
-        ksck_output = utils.shell_wrapper.run_cmd(ksck_cmd, self.logger.info)
-        if ksck_output['ret'] != 0:
-            raise Exception('Unable to call kudu cluster ksck cmd. %s' % res['stderr'])
-        ksck_lines = ksck_output['stdout'].strip().split('\n')
-        return ksck_lines
+    def ksck(self, master_addresses, table_filter):
+        ksck_cmd = 'sp_kudu cluster ksck %s -ksck_format=json_compact -sections=TABLET_SUMMARIES -tables=%s' \
+            % (master_addresses, table_filter)
+        # 无法使用云平台的接口，因为含有特殊字符，云平台的接口解析不了
+        p = subprocess.Popen([ksck_cmd], stdout=subprocess.PIPE, shell=True)
+        stdout, _ = p.communicate()
+        stdout = stdout.strip()
+        if p.returncode != 0:
+            self.logger.info("execute command:%s failed" % ksck_cmd)
+            exit(1)
+        # ksck json格式输出，partitioin key包含一个特殊编码，需要解析成cp1252
+        stdout = stdout.decode("cp1252")
+        return stdout
 
     def scheduling_uno_op(self, master_addresses, op):
-        tablet, leader = op
-        step_down_cmd = 'kudu tablet leader_step_down %s %s -new_leader_uuid=%s' % (master_addresses, tablet, leader)
-        utils.shell_wrapper.run_cmd(step_down_cmd, self.logger.info)
+        tablet, _, to_ts = op
+        step_down_cmd = 'sp_kudu tablet leader_step_down %s %s -new_leader_uuid=%s' % (master_addresses, tablet, to_ts)
+        self.run_cmd(step_down_cmd)
 
-    def parse_ksck(self, ksck_lines, table_filter):
-        idx = 0
+    # ts_map: <tserver, all leader tablets in it>
+    # tablet_tuple_list: <tablet_id, tserver of leader replica, all tservers of replicas>
+    def parse_ksck(self, ksck_output):
+        tablets = json.loads(ksck_output)
         ts_map = defaultdict(list)
         tablet_tuple_list = list()
-        while idx < len(ksck_lines):
-            line = ksck_lines[idx]
-            tablet_id, table = '', ''
-            # e.g. Tablet 288b5b776eb84f0f9b1f32163be5870b of table 'profile_wos_p2' is healthy.
-            if 'Tablet' in line and 'of table' in line:
-                tablet_id = line.split(' ')[1]
-                table = line.split(' ')[4][1:-1]
-                idx += 1
-            else:
-                idx += 1
-                continue
-            if  table not in table_filter:
-                continue
-            leader_ts = ''
-            all_ts_of_tablet = []
-            ts_id = ''
-            # To parse the tablet ts mapping info e.g.
-            #   a1cbc1e51e6e43d9be09bea38c3fade3 (debugboxreset1775x3.sa:7050): RUNNING [LEADER]
-            #   e1919bbab5f544128aab6215451583a9 (debugboxreset1775x2.sa:7050): RUNNING
-            #   b5d3cd51688a4af1a25a6d5c9ba4c840 (debugboxreset1775x1.sa:7050): RUNNING
-            while ksck_lines[idx].startswith('  '):
-                if not 'RUNNING' in ksck_lines[idx] or 'NONVOTER' in ksck_lines[idx]:
-                    idx += 1
-                    continue
-                ts_id = ksck_lines[idx].strip().split(' ')[0]
-                all_ts_of_tablet.append(ts_id)
-                ts_map[ts_id] # access make all ts is in map
-                if ksck_lines[idx].endswith('[LEADER]'):
-                    ts_map[ts_id].append(tablet_id)
-                    leader_ts = ts_id
-                idx += 1
-            if len(all_ts_of_tablet) != 3:
-                del ts_map[ts_id]
-            else:
-                tablet_tuple_list.append((tablet_id, leader_ts, all_ts_of_tablet))
+        for tablet in tablets['tablet_summaries']:
+            replica_tservers = []
+            tablet_id = tablet['id']
+            leader_tserver = tablet['master_cstate']['leader_uuid']
+            ts_map[leader_tserver].append(tablet_id)
+            for replica_ts in tablet['master_cstate']['voter_uuids']:
+                if replica_ts not in ts_map:
+                    ts_map[replica_ts] = list()
+                replica_tservers.append(replica_ts)
+            tablet_tuple_list.append((tablet_id, leader_tserver, replica_tservers))
         return tablet_tuple_list, ts_map
 
-    def cal_mean(self, ts_map):
-        all_cnt = sum([len(_) for _ in ts_map.values()])
-        ts_cnt = len(ts_map)
-        mean_cnt = all_cnt / ts_cnt
-        return mean_cnt
+    # 计算leader tablet平均值
+    # num_leader_tablets / num_tservers
+    def cal_mean(self, tserver_leader_tablets_map):
+        num_leader_tablets = sum([len(_) for _ in tserver_leader_tablets_map.values()])
+        num_tservers = len(tserver_leader_tablets_map)
+        return num_leader_tablets / num_tservers
 
-    def eval_score(self, ts_map):
-        # true -> balanced
-        mean_cnt = self.cal_mean(ts_map)
-        score = sum([((len(_)) - mean_cnt) ** 2 for _ in ts_map.values()])
-        return score, score < 1
+    # 计算方差，方差代表当前拓扑结构的均衡分数
+    def eval_score(self, tserver_leader_tablets_map):
+        mean_leader_tablets = self.cal_mean(tserver_leader_tablets_map)
+        variance = sum([((len(_)) - mean_leader_tablets) ** 2 for _ in tserver_leader_tablets_map.values()])
+        return variance
 
-    def print_skew_info(self, ts_map):
-        mean_cnt = self.cal_mean(ts_map)
-        for ts, v in ts_map.items():
-            skew_value = len(v) - mean_cnt
-            if abs(skew_value) < 1: # balanced
-                self.logger.info('ts %s has %d avg is %f' % (ts, len(v), mean_cnt))
+    def report(self, tserver_leader_tablets_map):
+        mean_cnt = self.cal_mean(tserver_leader_tablets_map)
+        num_leader_tablets = sum([len(_) for _ in tserver_leader_tablets_map.values()])
+        num_tservers = len(tserver_leader_tablets_map)
+        self.logger.info("Total tservers: %s, Total leader tablets: %s, Mean: %s" % (num_tservers, num_leader_tablets, mean_cnt))
+        for tserver, leader_tablets in tserver_leader_tablets_map.items():
+            skew_value = len(leader_tablets) - mean_cnt
+            if abs(skew_value) < 1:
+                self.logger.info('ts %s has %d avg is %f' % (tserver, len(leader_tablets), mean_cnt))
                 continue
             elif skew_value > 0:
-                self.logger.info('ts %s execceds %f' % (ts, skew_value))
+                self.logger.info('ts %s execceds %f' % (tserver, skew_value))
             else:
-                self.logger.info('ts %s behinds %f' % (ts, skew_value))
+                self.logger.info('ts %s behinds %f' % (tserver, skew_value))
 
-    reached = False
-    best_op = [float("inf"), []]
-    # op = (tablet, leader)
-
-    def dfs(self, tablet_tuple_list, ops, leader_map, mean_cnt):
-        sorted_ts_list = sorted(leader_map.items(), key=lambda x:len(x[1]))
+    def dfs(self, tablet_tuple_list, ops, leader_map, index):
         if self.reached:
             return
-        if len(tablet_tuple_list) == 0:
-            score, _ = self.eval_score(leader_map)
+        if index >= len(tablet_tuple_list):
+            score = self.eval_score(leader_map)
             if score < self.best_op[0]:
-                self.best_op[0], self.best_op[1] = score, ops[::] # deep clone into result
+                self.best_op[0], self.best_op[1], self.best_op[2] = score, ops[::], copy.deepcopy(leader_map)
                 if score < 1:
                     self.reached = True
             return
-        tablet_id, leader, ts_list = tablet_tuple_list.pop()
-        for ts, tablets in sorted_ts_list:
-            if ts in ts_list:
-                leader_map[ts].append(tablet_id)
-                if leader != ts:
-                    ops.append((tablet_id, ts))
-                self.dfs(tablet_tuple_list, ops[::], leader_map, mean_cnt)
-                if leader != ts:
-                    ops.pop()
-                leader_map[ts].remove(tablet_id)
+        tablet_id, leader, ts_list = tablet_tuple_list[index]
+        for ts in ts_list:
+            leader_map[ts].append(tablet_id)
+            if leader != ts:
+                ops.append((tablet_id, leader, ts))
+            self.dfs(tablet_tuple_list, ops[::], leader_map, index + 1)
+            if leader != ts:
+                ops.pop()
+            leader_map[ts].remove(tablet_id)
 
-    def solution(self, master_addresses, table_filter):
-        ksck_output = self.ksck(master_addresses)
-        tablet_tuple_list, ts_map = self.parse_ksck(ksck_output, table_filter)
-        score, balanced = self.eval_score(ts_map)
-        self.logger.info('current skew info')
-        self.print_skew_info(ts_map)
-        if balanced:
+    # tablet_tuple_list: 记录每个tablet的leader 副本所在的tserver，所有副本的所在的tserver
+    def solution(self, master_addresses, table_filter, only_report=False):
+        ksck_output = self.ksck(master_addresses, table_filter)
+        tablet_tuple_list, tserver_leader_tablets_map = self.parse_ksck(ksck_output)
+        score = self.eval_score(tserver_leader_tablets_map)
+        self.report(tserver_leader_tablets_map)
+        # 方差小于1，则集群已经平衡
+        if score < 1:
             self.logger.info('table %s was rebalanced' % table_filter)
             return 0
-        else:
-            self.logger.info('looking for solution')
-            leader_map = defaultdict(list)
-            for ts in ts_map.keys():
-                leader_map[ts] # just access and gen default
-            self.dfs(tablet_tuple_list, [], leader_map, self.cal_mean(ts_map))
-            self.logger.info(self.best_op[0])
-            self.logger.info(self.best_op[1])
-            for op in self.best_op[1]:
-                self.scheduling_uno_op(master_addresses, op)
-            try_time = 0
-            has_to_try = True
-            self.logger.info('gathering info')
-            while try_time < 5 and has_to_try:
-                has_to_try = not self.try_and_gen_score(master_addresses)
-                try_time += 1
-            return 1 if has_to_try else 0
 
-    def try_and_gen_score(self, master_addresses):
+        leader_map = defaultdict(list)
+        for tserver in tserver_leader_tablets_map.keys():
+            leader_map[tserver]
+        self.dfs(tablet_tuple_list, [], leader_map, 0)
+
+        self.logger.info("Migrate solution is as follow:")
+        for op in self.best_op[1]:
+            tablet, from_tserver, to_tserver = op
+            self.logger.info("Tablet:%s will migrate from %s to %s" % (tablet, from_tserver, to_tserver))
+        self.logger.info("After migrating, the tablet distribution will be:")
+        self.report(self.best_op[2])
+        # 仅打印迁移方案，不具体执行
+        if only_report:
+            return 0
+        for op in self.best_op[1]:
+            self.scheduling_uno_op(master_addresses, op)
+        try_time = 0
+        has_to_try = True
+        while try_time < 5 and has_to_try:
+            has_to_try = not self.try_and_gen_score(master_addresses, table_filter)
+            try_time += 1
+        return 1 if has_to_try else 0
+
+    def try_and_gen_score(self, master_addresses, table_filter):
         try:
             time.sleep(5)
             self.logger.info('waiting for skew info after gen')
-            ksck_output = self.ksck(master_addresses)
-            tablet_tuple_list, ts_map = self.parse_ksck(ksck_output, table_filter)
-            score, balanced = self.eval_score(ts_map)
+            ksck_output = self.ksck(master_addresses, table_filter)
+            _, ts_map = self.parse_ksck(ksck_output)
+            score = self.eval_score(ts_map)
             self.logger.info('after rebalance skew map')
-            self.print_skew_info(ts_map)
+            self.report(ts_map)
             return score < 1
-        except:
+        except Exception:
             self.logger.info('cluster not rebalance done, waiting')
             return False
