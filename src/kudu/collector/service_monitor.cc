@@ -49,6 +49,8 @@
 #include "kudu/util/thread.h"
 #include "kudu/util/trace.h"
 
+DEFINE_bool(collector_disable_balance, true,
+            "Disable collector leader/replica balance.");
 DEFINE_string(collector_monitor_table_name, "system.__kudu_collector_monitor",
               "Table name of monitor table.");
 DEFINE_uint32(collector_probe_monitor_table_interval_sec, 180,
@@ -243,6 +245,8 @@ Status ServiceMonitor::CheckMonitorTable() {
     LOG(FATAL) <<
         Substitute("Table '$0' replica count doesn't match cluster's tserver count.", table_name);
   }
+
+  if (FLAGS_collector_disable_balance) return Status::OK();
 
   // Check if all tablet servers at least has one leader replica running on it.
   unordered_map<string, vector<string>> ts_tablets;
