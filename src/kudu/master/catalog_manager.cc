@@ -126,6 +126,7 @@
 #include "kudu/server/monitored_task.h"
 #include "kudu/tablet/metadata.pb.h"
 #include "kudu/tablet/ops/op_tracker.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/tserver/tserver_admin.pb.h"
 #include "kudu/tserver/tserver_admin.proxy.h"
@@ -154,6 +155,11 @@ DEFINE_int32(master_ts_rpc_timeout_ms, 30 * 1000, // 30 sec
              "Timeout used for the master->TS async rpc calls.");
 TAG_FLAG(master_ts_rpc_timeout_ms, advanced);
 TAG_FLAG(master_ts_rpc_timeout_ms, runtime);
+
+DEFINE_int32(schedule_period_ms, 100,
+             "every schedule_period_ms scheduler pool would check time and may run some tasks");
+
+DEFINE_int32(scheduler_pool_max_thread_num, 4, "max thread numbers of scheduler thread pool");
 
 DEFINE_int32(tablet_creation_timeout_ms, 30 * 1000, // 30 sec
              "Timeout used by the master when attempting to create tablet "
@@ -347,6 +353,7 @@ DEFINE_bool(auto_rebalancing_enabled, false,
             "Whether auto-rebalancing is enabled.");
 TAG_FLAG(auto_rebalancing_enabled, advanced);
 TAG_FLAG(auto_rebalancing_enabled, experimental);
+TAG_FLAG(auto_rebalancing_enabled, runtime);
 
 DEFINE_uint32(table_locations_cache_capacity_mb, 0,
               "Capacity for the table locations cache (in MiB); a value "
@@ -976,6 +983,13 @@ CatalogManager::CatalogManager(Master* master)
   } else {
     authz_provider_.reset(new DefaultAuthzProvider);
   }
+  CHECK_OK(ThreadPoolBuilder("scheduler")
+               .set_min_threads(1)
+               .set_max_threads(FLAGS_scheduler_pool_max_thread_num)
+               .set_enable_scheduler()
+               .set_schedule_period_ms(FLAGS_schedule_period_ms)
+               .Build(&scheduler_pool_));
+
   CHECK_OK(ThreadPoolBuilder("leader-initialization")
            // Presently, this thread pool must contain only a single thread
            // (to correctly serialize invocations of ElectedAsLeaderCb upon
@@ -1007,12 +1021,9 @@ Status CatalogManager::Init(bool is_first_run) {
   RETURN_NOT_OK_PREPEND(sys_catalog_->WaitUntilRunning(),
                         "Failed waiting for the catalog tablet to run");
 
-  if (FLAGS_auto_rebalancing_enabled) {
-    unique_ptr<AutoRebalancerTask> task(
-        new AutoRebalancerTask(this, master_->ts_manager()));
-    RETURN_NOT_OK_PREPEND(task->Init(), "failed to initialize auto-rebalancing task");
-    auto_rebalancer_ = std::move(task);
-  }
+  unique_ptr<AutoRebalancerTask> task(new AutoRebalancerTask(this, master_->ts_manager()));
+  RETURN_NOT_OK_PREPEND(task->Init(), "failed to initialize auto-rebalancing task");
+  auto_rebalancer_ = std::move(task);
 
   vector<HostPort> master_addresses;
   RETURN_NOT_OK(master_->GetMasterHostPorts(&master_addresses));
@@ -1631,6 +1642,10 @@ void CatalogManager::Shutdown() {
   if (hms_catalog_) {
     hms_notification_log_listener_->Shutdown();
     hms_catalog_->Stop();
+  }
+
+  if (scheduler_pool_) {
+    scheduler_pool_->Shutdown();
   }
 
   if (auto_rebalancer_) {
@@ -3567,6 +3582,28 @@ Status CatalogManager::GetTableSchema(const GetTableSchemaRequestPB* req,
   resp->set_comment(l.data().pb.comment());
 
   return ExtraConfigPBToPBMap(l.data().pb.extra_config(), resp->mutable_extra_configs());
+}
+
+Status CatalogManager::Rebalance(const RebalanceRequestPB* req,
+                                 RebalanceResponsePB* resp,
+                                 const optional<string>& /*user*/,
+                                 const security::TokenSigner* /*token_signer*/) {
+  if (req->type() != RebalanceType::REPLICA_REBALANCE) {
+    return SetupError(Status::NotSupported("only support data rebalance"),
+                      resp, MasterErrorPB::UNKNOWN_ERROR);
+  }
+  // generate unique task id for data rebalance.
+  int64_t task_id = CycleClock::Now();
+  auto_rebalancer_->ScheduleMannualReplicaRebalance(task_id);
+  resp->set_task_id(task_id);
+  return Status::OK();
+}
+
+Status CatalogManager::IsRebalanceDone(const IsRebalanceDoneRequestPB* req,
+                                       IsRebalanceDoneResponsePB* resp,
+                                       const std::optional<std::string>& /*user*/,
+                                       const security::TokenSigner* /*token_signer*/) {
+  return auto_rebalancer_->IsRebalanceDone(req->task_id(), resp);
 }
 
 Status CatalogManager::ListTables(const ListTablesRequestPB* req,
@@ -6479,9 +6516,11 @@ INITTED_AND_LEADER_OR_RESPOND(CreateTableResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(DeleteTableResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(IsAlterTableDoneResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(IsCreateTableDoneResponsePB);
+INITTED_AND_LEADER_OR_RESPOND(IsRebalanceDoneResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(ListTablesResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(GetTableLocationsResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(GetTableSchemaResponsePB);
+INITTED_AND_LEADER_OR_RESPOND(RebalanceResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(GetTableStatisticsResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(GetTabletLocationsResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(RemoveMasterResponsePB);

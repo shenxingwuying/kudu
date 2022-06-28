@@ -660,6 +660,16 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
                         const std::optional<std::string>& user,
                         const security::TokenSigner* token_signer);
 
+  Status Rebalance(const RebalanceRequestPB* req,
+                   RebalanceResponsePB* resp,
+                   const std::optional<std::string>& /*user*/,
+                   const security::TokenSigner* /*token_signer*/);
+
+  Status IsRebalanceDone(const IsRebalanceDoneRequestPB* req,
+                         IsRebalanceDoneResponsePB* resp,
+                         const std::optional<std::string>& /*user*/,
+                         const security::TokenSigner* /*token_signer*/);
+
   // Lists all the running tables. If 'user' is provided, only lists those that
   // the given user is authorized to see.
   Status ListTables(const ListTablesRequestPB* req,
@@ -819,6 +829,10 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
 
   master::AutoRebalancerTask* auto_rebalancer() const {
     return auto_rebalancer_.get();
+  }
+
+  ThreadPool* scheduler_pool() {
+    return scheduler_pool_.get();
   }
 
   // Returns the normalized form of the provided table name.
@@ -1246,6 +1260,11 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
 
   // Singleton pool that serializes invocations of ElectedAsLeaderCb().
   std::unique_ptr<ThreadPool> leader_election_pool_;
+
+  // The thread pool can be used to schedule async execute a delay task or
+  // implement period tasks, such as auto rebalancer, auto leader rebalancer
+  // at kudu-master.
+  std::unique_ptr<ThreadPool> scheduler_pool_;
 
   // This field is updated when a node becomes leader master,
   // waits for all outstanding uncommitted metadata (table and tablet metadata)

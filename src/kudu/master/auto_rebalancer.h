@@ -17,15 +17,18 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include <atomic>
+#include <map>
 #include <memory>
 #include <optional>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "kudu/gutil/port.h"
-#include "kudu/gutil/ref_counted.h"
 #include "kudu/rebalance/rebalancer.h"
 #include "kudu/util/countdown_latch.h"
 #include "kudu/util/status.h"
@@ -33,7 +36,8 @@
 namespace kudu {
 
 class HostPort;
-class Thread;
+class MonoTime;
+class ThreadPoolToken;
 
 namespace rebalance {
 class RebalancingAlgo;
@@ -48,6 +52,7 @@ class Messenger;
 namespace master {
 
 class CatalogManager;
+class IsRebalanceDoneResponsePB;
 class TSManager;
 
 enum CrossLocations {
@@ -75,12 +80,22 @@ class AutoRebalancerTask {
   // before shutting down the catalog manager.
   void Shutdown();
 
- private:
+  Status ScheduleMannualReplicaRebalance(int task_id);
 
+
+  Status IsRebalanceDone(int64_t task_id, IsRebalanceDoneResponsePB* resp);
+
+ private:
   friend class AutoRebalancerTest;
 
-  // Runs the main loop of the auto-rebalancing thread.
-  void RunLoop();
+  void MannualReplicaRebalance(int64_t task_id);
+
+  Status ScheduleRebalance();
+
+  // Runs the main loop of the auto-rebalancing task.
+  void Rebalance();
+
+  Status DoReplicaRebalance();
 
   // Collects information about the cluster at the location specified by the
   // 'location' parameter. If there is no location specified (and the parameter
@@ -167,11 +182,14 @@ class AutoRebalancerTask {
   // The associated TS manager.
   TSManager* ts_manager_;
 
-  // The auto-rebalancing thread.
-  scoped_refptr<kudu::Thread> thread_;
+  // The token where AutoRebalancerTasks will be submitted to.
+  std::unique_ptr<kudu::ThreadPoolToken> scheduler_pool_token_;
 
   // Latch used to indicate that the thread is shutting down.
   CountDownLatch shutdown_;
+
+  // Only one ReplicaRebelance is running.
+  std::atomic<bool> rebalancer_running_;
 
   // The internal Rebalancer object.
   rebalance::Rebalancer rebalancer_;
@@ -188,6 +206,9 @@ class AutoRebalancerTask {
   // Variables for testing.
   std::atomic<int> number_of_loop_iterations_for_test_;
   std::atomic<int> moves_scheduled_this_round_for_test_;
+
+  // task_id -> <clear deadline, is_finished>.
+  std::map<int64_t, std::pair<MonoTime, bool>> tasks_info_;
 };
 
 } // namespace master

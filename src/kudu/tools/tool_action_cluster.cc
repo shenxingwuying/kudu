@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <cstdint>
+
 #include <algorithm>
 #include <cstdlib>
 #include <functional>
@@ -30,11 +32,16 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
+#include "kudu/common/wire_protocol.h"
 #include "kudu/gutil/basictypes.h"
 #include "kudu/gutil/strings/split.h"
 #include "kudu/gutil/strings/substitute.h"
+#include "kudu/master/master.h"
+#include "kudu/master/master.pb.h"
+#include "kudu/master/master.proxy.h"
 #include "kudu/rebalance/cluster_status.h"
 #include "kudu/rebalance/rebalancer.h"
+#include "kudu/rpc/rpc_controller.h"
 #include "kudu/tools/ksck.h"
 #include "kudu/tools/ksck_remote.h"
 #include "kudu/tools/ksck_results.h"
@@ -42,10 +49,15 @@
 #include "kudu/tools/tool_action.h"
 #include "kudu/tools/tool_action_common.h"
 #include "kudu/tools/tool_replica_util.h"
+#include "kudu/util/monotime.h"
 #include "kudu/util/status.h"
 #include "kudu/util/string_case.h"
 #include "kudu/util/version_util.h"
 
+using kudu::master::Master;
+using kudu::master::MasterServiceProxy;
+using kudu::master::RebalanceRequestPB;
+using kudu::master::RebalanceResponsePB;
 using kudu::rebalance::Rebalancer;
 using kudu::iequals;
 using std::cout;
@@ -389,6 +401,75 @@ Status RunRebalance(const RunnerContext& context) {
   return Status::OK();
 }
 
+Status ReplicaRebalanceAtMaster(const string& master_address, int64_t* task_id) {
+  unique_ptr<MasterServiceProxy> proxy;
+  RETURN_NOT_OK(BuildProxy(master_address, Master::kDefaultPort, &proxy));
+
+  rpc::RpcController ctl;
+  ctl.set_timeout(MonoDelta::FromMilliseconds(5000));
+
+  RebalanceRequestPB req;
+  req.set_type(master::RebalanceType::REPLICA_REBALANCE);
+
+  RebalanceResponsePB resp;
+  RETURN_NOT_OK(proxy->Rebalance(req, &resp, &ctl));
+  if (resp.has_error()) {
+    return StatusFromPB(resp.error().status());
+  }
+  *task_id = resp.task_id();
+  return Status::OK();
+}
+
+Status IsRebalanceDoneAtMaster(const string& master_address, const int64_t task_id) {
+  unique_ptr<MasterServiceProxy> proxy;
+  RETURN_NOT_OK(BuildProxy(master_address, Master::kDefaultPort, &proxy));
+
+  rpc::RpcController ctl;
+  ctl.set_timeout(MonoDelta::FromMilliseconds(5000));
+
+  master::IsRebalanceDoneRequestPB req;
+  req.set_task_id(task_id);
+  req.set_type(master::RebalanceType::REPLICA_REBALANCE);
+
+  master::IsRebalanceDoneResponsePB resp;
+  RETURN_NOT_OK(proxy->IsRebalanceDone(req, &resp, &ctl));
+  Status s = Status::OK();
+  if (resp.has_error()) {
+    s = StatusFromPB(resp.error().status());
+  }
+  return s;
+}
+
+Status RunAutoRebalanceOnce(const RunnerContext& context) {
+  vector<string> master_addresses;
+  RETURN_NOT_OK(ParseMasterAddresses(context, &master_addresses));
+
+  string leader_master_address;
+  int64_t task_id = 0;
+  Status s;
+  for (const auto& master_address : master_addresses) {
+    VLOG(1) << Substitute("trying connect master $0", master_address);
+    s = ReplicaRebalanceAtMaster(master_address, &task_id);
+    if (s.ok()) {
+      leader_master_address = master_address;
+      VLOG(0) << Substitute(" $0 is leader", master_address);
+      break;
+    }
+  }
+  while (true) {
+    Status status = IsRebalanceDoneAtMaster(leader_master_address, task_id);
+    if (status.IsIncomplete()) {
+      VLOG(0) << Substitute("Rebalance task $0 not finish, status $1", task_id, status.ToString());
+      SleepFor(MonoDelta::FromMilliseconds(1000));
+      continue;
+    }
+    VLOG(0) << Substitute("Rebalance task $0 finish, status $1", task_id, status.ToString());
+    break;
+  }
+
+  return s;
+}
+
 } // anonymous namespace
 
 unique_ptr<Mode> BuildClusterMode() {
@@ -458,6 +539,23 @@ unique_ptr<Mode> BuildClusterMode() {
         .AddOptionalParameter("tables")
         .Build();
     builder.AddAction(std::move(rebalance));
+  }
+
+  {
+    constexpr auto desc =
+        "Move tablet replicas between tablet servers to "
+        "balance replica counts for each table and for the cluster as a whole.";
+    constexpr auto extra_desc =
+        "The rebalancing moves tablet replicas between tablet servers by sending "
+        "a Rebalance Request to leader master, and leader master will do the rebalancing "
+        "task, running an auto rebalancing. If kudu master not enable auto-rebalancing, "
+        "or next auto-rebalancing cost very long time, uses can use the command to trigge"
+        " a rebalance in time.";
+    unique_ptr<Action> rebalance_all = ClusterActionBuilder("rebalance_all", &RunAutoRebalanceOnce)
+        .Description(desc)
+        .ExtraDescription(extra_desc)
+        .Build();
+    builder.AddAction(std::move(rebalance_all));
   }
 
   return builder.Build();

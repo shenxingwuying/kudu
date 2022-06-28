@@ -141,6 +141,7 @@
 #include "kudu/util/test_util.h"
 #include "kudu/util/url-coding.h"
 
+DECLARE_bool(auto_rebalancing_enabled);
 DECLARE_bool(encrypt_data_at_rest);
 DECLARE_bool(fs_data_dirs_consider_available_space);
 DECLARE_bool(hive_metastore_sasl_enabled);
@@ -152,6 +153,7 @@ DECLARE_int32(tserver_unresponsive_timeout_ms);
 DECLARE_int32(rpc_negotiation_inject_delay_ms);
 DECLARE_string(block_manager);
 DECLARE_string(hive_metastore_uris);
+DECLARE_int64(timeout_ms);
 
 METRIC_DECLARE_counter(bloom_lookups);
 METRIC_DECLARE_entity(tablet);
@@ -7610,6 +7612,34 @@ TEST_F(ToolTest, TabletServersWithUnusualFlags) {
     ASSERT_TRUE(s.IsRuntimeError()) << s.ToString();
     ASSERT_STR_CONTAINS(err, "unacceptable health status UNAVAILABLE");
   }
+}
+
+TEST_F(ToolTest, TestRebalanceAll) {
+  static constexpr int kNumTabletServers = 4;
+
+  ExternalMiniClusterOptions opts;
+  FLAGS_auto_rebalancing_enabled = false;
+  opts.num_tablet_servers = kNumTabletServers;
+  NO_FATALS(StartExternalMiniCluster(std::move(opts)));
+
+  // The 'cluster ksck' tool should report on unavailable tablet servers.
+  const string& master_addr = cluster_->master()->bound_rpc_addr().ToString();
+
+  Status s = Status::OK();
+  // Add 2 TabletServer
+  ASSERT_OK(cluster_->AddTabletServer());
+  ASSERT_OK(cluster_->AddTabletServer());
+  for (int i = 0; i < 4 * kNumTabletServers; i++) {
+    SleepFor(MonoDelta::FromMilliseconds(1000));
+    Status s = RunActionStderrString(Substitute("cluster ksck $0", master_addr), nullptr);
+    if (s.ok()) {
+      break;
+    }
+  }
+  ASSERT_TRUE(s.ok());
+
+  s = RunActionStderrString(Substitute("cluster rebalance_all $0", master_addr), nullptr);
+  ASSERT_TRUE(s.ok());
 }
 
 TEST_F(ToolTest, TestParseStacks) {

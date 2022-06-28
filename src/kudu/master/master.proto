@@ -856,6 +856,39 @@ message GetTableSchemaResponsePB {
   optional string comment = 11;
 }
 
+enum RebalanceType {
+  UNKNOWN_TYPE = 0;
+  REPLICA_REBALANCE = 1;
+  LEADER_REBALANCE = 2;
+  REPORT_ONLY = 3;
+}
+
+message RebalanceRequestPB {
+  required RebalanceType type = 1;
+  // If task_id is setted, that means check the task's status.
+  optional int64 task_id = 2;
+}
+
+message RebalanceResponsePB {
+  // Rebalance would async execution, task_id will be used to check
+  // whether the rebalance task is finished.
+  required int64 task_id = 1;
+  // The error, if an error occurred with this request.
+  optional MasterErrorPB error = 2;
+}
+
+message IsRebalanceDoneRequestPB {
+  required RebalanceType type = 1;
+  // If task_id is setted, that means check the task's status.
+  required int64 task_id = 2;
+}
+
+message IsRebalanceDoneResponsePB {
+  // The error, if an error occurred with this request.
+  optional MasterErrorPB error = 1;
+  optional bool is_finished = 2;
+}
+
 message ConnectToMasterRequestPB {
 }
 
@@ -1183,6 +1216,14 @@ service MasterService {
     option (kudu.rpc.authz_method) = "AuthorizeClientOrServiceUser";
   }
   rpc GetTableSchema(GetTableSchemaRequestPB) returns (GetTableSchemaResponsePB) {
+    option (kudu.rpc.authz_method) = "AuthorizeClientOrServiceUser";
+  }
+
+  rpc Rebalance(RebalanceRequestPB) returns (RebalanceResponsePB) {
+    option (kudu.rpc.authz_method) = "AuthorizeClientOrServiceUser";
+  }
+
+  rpc IsRebalanceDone(IsRebalanceDoneRequestPB) returns (IsRebalanceDoneResponsePB) {
     option (kudu.rpc.authz_method) = "AuthorizeClientOrServiceUser";
   }
 

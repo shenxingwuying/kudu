@@ -62,6 +62,8 @@ class IsAlterTableDoneRequestPB;
 class IsAlterTableDoneResponsePB;
 class IsCreateTableDoneRequestPB;
 class IsCreateTableDoneResponsePB;
+class IsRebalanceDoneRequestPB;
+class IsRebalanceDoneResponsePB;
 class ListMastersRequestPB;
 class ListMastersResponsePB;
 class ListTablesRequestPB;
@@ -71,16 +73,18 @@ class ListTabletServersResponsePB;
 class Master;
 class PingRequestPB;
 class PingResponsePB;
+class RebalanceRequestPB;
+class RebalanceResponsePB;
 class RefreshAuthzCacheRequestPB;
 class RefreshAuthzCacheResponsePB;
 class RemoveMasterRequestPB;
 class RemoveMasterResponsePB;
-class UnregisterTServerRequestPB;
-class UnregisterTServerResponsePB;
 class ReplaceTabletRequestPB;
 class ReplaceTabletResponsePB;
 class TSHeartbeatRequestPB;
 class TSHeartbeatResponsePB;
+class UnregisterTServerRequestPB;
+class UnregisterTServerResponsePB;
 
 // Implementation of the master service. See master.proto for docs
 // on each RPC.
@@ -167,6 +171,14 @@ class MasterServiceImpl : public MasterServiceIf {
   void GetTableSchema(const GetTableSchemaRequestPB* req,
                       GetTableSchemaResponsePB* resp,
                       rpc::RpcContext* rpc) override;
+
+  void Rebalance(const RebalanceRequestPB* req,
+                 RebalanceResponsePB* resp,
+                 rpc::RpcContext* rpc) override;
+
+  void IsRebalanceDone(const IsRebalanceDoneRequestPB* req,
+                       IsRebalanceDoneResponsePB* resp,
+                       rpc::RpcContext* rpc) override;
 
   void ListTabletServers(const ListTabletServersRequestPB* req,
                          ListTabletServersResponsePB* resp,
