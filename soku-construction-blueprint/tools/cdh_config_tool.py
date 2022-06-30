@@ -60,14 +60,8 @@ class KuduConfigTool:
                                cloudera_client_conf['cloudera_manager_password'],
                                self.logger)
 
-    def update_config(self, key, value, old_common_config_dict, old_role_config_dict):
-        if key in old_role_config_dict:
-            if value == old_role_config_dict[key]:
-                return False, old_role_config_dict
-            else:
-                old_role_config_dict[key] = value
-                return True, old_role_config_dict
-        if key in old_common_config_dict and value == old_common_config_dict[key]:
+    def update_config(self, role, key, value, old_common_config_dict, old_role_config_dict, old_role_assign_config_dict):
+        if key in old_role_config_dict or key in old_common_config_dict or key in old_role_assign_config_dict:
             return False, old_role_config_dict
         old_role_config_dict[key] = value
         return True, old_role_config_dict
@@ -77,36 +71,43 @@ class KuduConfigTool:
         setter_path = SETTER_ROLE_PATH[role]
         setter_name = SETTER_ROLE_NAME[role]
         if 'KUDU_COMMON' == role:
+            old_master_config_dict = self.get_role_config_dict(cloudera_config_setter, 'KUDU_MASTER')
+            old_tserver_config_dict = self.get_role_config_dict(cloudera_config_setter, 'KUDU_TSERVER')
             for (key, value) in new_config_dict.items():
+                if key in old_master_config_dict or key in old_tserver_config_dict:
+                    self.logger.info('%s: the conf item [ %s ] already exists in role conf, no update'
+                                     % (role, key))
                 if len(value) == 0:
                     value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster, self.tserver_random_dirs_count, self.tserver_mem_gb)
-                if key not in old_common_config_dict or value != old_common_config_dict[key]:
+                if key not in old_common_config_dict:
                     need_update = True
                     old_common_config_dict[key] = value
+                elif value == old_common_config_dict[key]:
+                    self.logger.info('%s: conf (%s: %s) already exists, and the value is the same, no update'
+                                     % (role, key, value))
+                else:
+                    self.logger.info('%s: conf (%s) already exists, but the value is inconsistent, no update,'
+                                     ' old_val: %s, new_val: %s' % (role, key, old_common_config_dict[key], value))
             if need_update:
                 new_common_configs = '\n'.join('--' + key + '=' + value for key, value in old_common_config_dict.items())
                 self.logger.info('%s: new common gflagfile = %s' % (role, new_common_configs))
                 cloudera_config_setter.put_if_needed(setter_path, setter_name, new_common_configs, ('kudu:common gflagfile'))
         else:
             # cloudera_config_setter.get_role_groups 的返回值是什么？
+            old_role_config_dict = self.get_role_config_dict(cloudera_config_setter, role)
+            self.logger.info('%s: old gflagfile_role_safety_valve = [%s]' % (role, old_role_config_dict))
             for role_group in cloudera_config_setter.get_role_groups('kudu', role, setter_path):
-                self.logger.info('role_group = %s' % role_group)
-                old_role_config_list = cloudera_config_setter.get_value('%s/%s/config' % (setter_path, role_group), setter_name).split('\n')
-                old_role_config_dict = {}
-                for conf in set(old_role_config_list):
-                    conf = conf.strip()
-                    if not conf:
-                        continue
-                    items = conf.lstrip('-').split('=')
-                    old_role_config_dict[items[0]] = items[1]
-                self.logger.info('old gflagfile_role_safety_valve = [%s]' % old_role_config_dict)
+                old_role_assign_config_dict = cloudera_config_setter.get_all_assign_item_value('%s/%s/config' % (setter_path, role_group))
+                if old_role_assign_config_dict.get(setter_name) is not None:
+                    del old_role_assign_config_dict[setter_name]
 
-                # 判断配置本身是否存在冲突，有冲突直接报错,有相同的删除group中的
+                # 判断配置本身是否存在冲突, 有冲突直接报错, 有相同的删除 group 中的
                 old_role_config_dict, need_update = self.check_old_config(role, old_common_config_dict, old_role_config_dict)
                 for (key, value) in new_config_dict.items():
                     if len(value) == 0:
                         value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster, self.tserver_random_dirs_count, self.tserver_mem_gb)
-                    need_update_value, old_role_config_dict = self.update_config(key, value, old_common_config_dict, old_role_config_dict)
+                    # 检查配置项是否已经存在设置过, 设置过则不更新
+                    need_update_value, old_role_config_dict = self.update_config(role, key, value, old_common_config_dict, old_role_config_dict, old_role_assign_config_dict)
                     need_update = need_update_value or need_update
                 if need_update:
                     new_common_configs = '\n'.join('--' + key + '=' + value for key, value in old_role_config_dict.items())
@@ -119,7 +120,7 @@ class KuduConfigTool:
         start = datetime.datetime.now()
         while (datetime.datetime.now() - start).total_seconds() < timeout:
             try:
-                # 默认服务起来就 ok le
+                # 默认服务起来就 ok
                 status = self.api.get_service_status(service)
                 self.logger.info('kudu service %s health %s' % (status['serviceState'], status['healthSummary']))
                 if status['serviceState'] == 'STARTED':
@@ -141,12 +142,20 @@ class KuduConfigTool:
             config_dict[items[0]] = items[1]
         return config_dict
 
+    def get_role_config_dict(self, cloudera_config_setter, role):
+        setter_path = SETTER_ROLE_PATH[role]
+        setter_name = SETTER_ROLE_NAME[role]
+        for role_group in cloudera_config_setter.get_role_groups('kudu', role, setter_path):
+            self.logger.info('role_group = %s' % role_group)
+            setter_role_path = '%s/%s/config' % (setter_path, role_group)
+            return self.get_config_dict(cloudera_config_setter, setter_role_path, setter_name)
+
     def check_old_config(self, role, old_common_config_dict, old_role_config_dict):
         need_update = False
         for (key, value) in old_common_config_dict.items():
             if key in old_role_config_dict:
                 if value != old_role_config_dict[key]:
-                    raise Exception('[%s] update config error! [%s=%s] conflict with common gflagfile[%s=%s]' % (
+                    self.logger.warning('[%s] old config warn! [%s=%s] conflict with common gflagfile[%s=%s]' % (
                         role, key, old_role_config_dict[key], key, old_common_config_dict[key]))
                 else:
                     old_role_config_dict.pop(key, None)

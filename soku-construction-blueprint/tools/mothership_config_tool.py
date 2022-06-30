@@ -48,21 +48,23 @@ class MothershipKuduConfigTool:
         else:
             raise Exception('invalid role [%s]!, check!' % (role_type))
 
-        need_update = False
-        key_exist = False
+        need_update = True
         config_group_name = 'Default'
         config_tool = MothershipConfigTool(self.mothership_api)
         module = self._check_and_canonicalize_module_name('kudu')
         for config_group_name, old_value in config_tool.get_config_from_all_config_group(module, role, key):
-            # key 已存在
-            key_exist = True
-            # value 发生了变化
+            need_update = False
+            # 与 old value 的值不一致
             if old_value.lower() != value:
-                need_update = True
-                break
-        # 需要更新配置
-        if need_update or not key_exist:
-            self.logger.info('%s: config (%s) not exist or not conform, reset to %s' % (role_type, key, value))
+                self.logger.info('%s: conf (%s) already exists, but the value is inconsistent, no update,'
+                                 ' old_val: %s, new_val: %s' % (role_type, key, old_value, value))
+            else:
+                self.logger.info('%s: conf (%s: %s) already exists, and the value is the same, no update'
+                                 % (role_type, key, value))
+            break
+        # 配置项需要更新配置
+        if need_update:
+            self.logger.info('%s: config (%s) not exist, set to %s' % (role_type, key, value))
             shell_utils.check_call(
                 'spadmin mothership config set -m kudu -c {} -g {} -n {} -v {}'
                 ' --comment \"update config\" '.format(role, config_group_name, key, value))

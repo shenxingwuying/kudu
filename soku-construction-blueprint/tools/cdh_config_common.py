@@ -71,6 +71,11 @@ class CdhConfigCommon():
         self.logger.debug('value=%s' % value)
         return value[0].get('value', value[0].get('default', None))
 
+    def get_all_assign_item_value(self, path):
+        response = self.__get('%s?view=full' % path)
+        items = [x for x in response['items'] if x.get('value') is not None]
+        return dict(map(lambda item: (item['name'], item['value']), items))
+
     def put_if_needed(self, path, name, value, key):
         # 1. 查看旧值
         old_value = self.get_value(path, name)
