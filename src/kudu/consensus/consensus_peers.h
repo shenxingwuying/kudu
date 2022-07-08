@@ -255,6 +255,12 @@ class PeerProxy {
     LOG(DFATAL) << "Not implemented";
   }
 
+  virtual void GetLastOpId(const GetLastOpIdRequestPB& /* request */,
+                           GetLastOpIdResponsePB* /* response */,
+                           rpc::RpcController* /* controller */) {
+    LOG(DFATAL) << "Not implemented";
+  }
+
   // Remote endpoint or description of the peer.
   virtual std::string PeerName() const = 0;
 };
@@ -297,6 +303,10 @@ class RpcPeerProxy : public PeerProxy {
                             StartTabletCopyResponsePB* response,
                             rpc::RpcController* controller,
                             const rpc::ResponseCallback& callback) override;
+
+  void GetLastOpId(const GetLastOpIdRequestPB& request,
+                   GetLastOpIdResponsePB* response,
+                   rpc::RpcController* controller) override;
 
   std::string PeerName() const override;
 

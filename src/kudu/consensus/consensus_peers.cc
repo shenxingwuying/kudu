@@ -576,6 +576,13 @@ void RpcPeerProxy::StartTabletCopyAsync(const StartTabletCopyRequestPB& request,
   consensus_proxy_->StartTabletCopyAsync(request, response, controller, callback);
 }
 
+void RpcPeerProxy::GetLastOpId(const GetLastOpIdRequestPB& request,
+                               GetLastOpIdResponsePB* response,
+                               rpc::RpcController* controller) {
+  controller->set_timeout(MonoDelta::FromMilliseconds(FLAGS_consensus_rpc_timeout_ms));
+  consensus_proxy_->GetLastOpId(request, response, controller);
+}
+
 string RpcPeerProxy::PeerName() const {
   return hostport_.ToString();
 }

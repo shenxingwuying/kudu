@@ -87,6 +87,9 @@ struct ServerContext {
   // Threadpool on which to run Raft tasks.
   ThreadPool* raft_pool;
 
+  // Threadpool on which to run delay tasks.
+  ThreadPool* scheduler_pool = nullptr;
+
   // Shared boolean indicating whether Raft consensus should continue sending request messages
   // even if a peer is considered as failed.
   const bool* allow_status_msg_for_failed_peer = nullptr;
@@ -186,6 +189,11 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   // used sparingly, e.g. only in tests, or in applications that don't require
   // high concurrency.
   Status WaitUntilLeader(const MonoDelta& timeout) WARN_UNUSED_RESULT;
+
+  // Send request to leader and get the last committed opid.
+  Status GetLeaderLatestCommittedOpId(OpId* latest_committed_opid);
+
+  Status WaitCommittedOpId(const OpId& latest_committed_opid);
 
   // Return a copy of the failure detector instance. Only for use in tests.
   std::shared_ptr<rpc::PeriodicTimer> GetFailureDetectorForTests() const {
@@ -881,6 +889,7 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
 
   // Threadpool token for constructing requests to peers, handling RPC callbacks, etc.
   std::unique_ptr<ThreadPoolToken> raft_pool_token_;
+  std::unique_ptr<ThreadPoolToken> scheduler_pool_token_;
 
   scoped_refptr<log::Log> log_;
   std::unique_ptr<TimeManager> time_manager_;

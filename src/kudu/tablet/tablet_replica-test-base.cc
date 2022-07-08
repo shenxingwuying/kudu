@@ -26,6 +26,7 @@
 #include <gtest/gtest.h>
 
 #include "kudu/common/common.pb.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.h"
 #include "kudu/consensus/consensus_meta.h"
 #include "kudu/consensus/consensus_meta_manager.h"
@@ -107,6 +108,12 @@ void TabletReplicaTestBase::SetUp() {
   ASSERT_OK(ThreadPoolBuilder("prepare").Build(&prepare_pool_));
   ASSERT_OK(ThreadPoolBuilder("apply").Build(&apply_pool_));
   ASSERT_OK(ThreadPoolBuilder("raft").Build(&raft_pool_));
+  ASSERT_OK(ThreadPoolBuilder("scheduler")
+                .set_enable_scheduler()
+                .set_min_threads(1)
+                .set_max_threads(1)
+                .set_schedule_period_ms(10)
+                .Build(&scheduler_pool_));
   MessengerBuilder builder("TxnStatusManagerTest");
   ASSERT_OK(builder.Build(&messenger_));
 
@@ -156,7 +163,8 @@ Status TabletReplicaTestBase::SetUpReplica(bool new_replica) {
   // before Tablet is instantiated.
   RETURN_NOT_OK(tablet_replica_->Init({ /*quiescing*/nullptr,
                                         /*num_leaders*/nullptr,
-                                        raft_pool_.get() }));
+                                        raft_pool_.get(),
+                                        scheduler_pool_.get() }));
   tablet_replica_->log_anchor_registry_ = tablet()->log_anchor_registry_;
   return Status::OK();
 }

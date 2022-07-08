@@ -1007,9 +1007,10 @@ Status TSTabletManager::CreateAndRegisterTabletReplica(
                         [this, tablet_id](const string& reason) {
                           this->MarkTabletDirty(tablet_id, reason);
                         }));
-  Status s = replica->Init({ server_->mutable_quiescing(),
-                             server_->num_raft_leaders(),
-                             server_->raft_pool() });
+  Status s = replica->Init({server_->mutable_quiescing(),
+                            server_->num_raft_leaders(),
+                            server_->raft_pool(),
+                            server_->scheduler_pool()});
   if (PREDICT_FALSE(!s.ok())) {
     replica->SetError(s);
     replica->Shutdown();

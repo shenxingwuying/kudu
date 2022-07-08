@@ -59,7 +59,13 @@ class KuduServer : public server::ServerBase {
   ThreadPool* tablet_prepare_pool() { return tablet_prepare_pool_.get(); }
   ThreadPool* tablet_apply_pool() { return tablet_apply_pool_.get(); }
   ThreadPool* raft_pool() { return raft_pool_.get(); }
+  ThreadPool* scheduler_pool() { return scheduler_pool_.get(); }
+
   scoped_refptr<AtomicGauge<int32_t>> num_raft_leaders() { return num_raft_leaders_; }
+
+ protected:
+  // The 'scheduler_pool_' used by periodic or delayed tasks.
+  std::unique_ptr<ThreadPool> scheduler_pool_;
 
  private:
   // The options that this server was created with.

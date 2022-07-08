@@ -349,6 +349,8 @@ message NewScanRequestPB {
 
   // An authorization token with which to authorize this request.
   optional security.SignedTokenPB authz_token = 15;
+
+  optional ReadConsistencyMode read_consistency_mode = 17 [ default = WEAK_CONSISTENCY ];
 }
 
 // A scan request. Initially, it should specify a scan. Later on, you

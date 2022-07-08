@@ -43,6 +43,7 @@
 #include "kudu/util/net/dns_resolver.h"
 #include "kudu/util/net/net_util.h"
 #include "kudu/util/status.h"
+#include "kudu/util/threadpool.h"
 
 namespace kudu {
 class Timer;
@@ -172,6 +173,9 @@ void TabletServer::ShutdownImpl() {
   if (kInitialized == state_ || kRunning == state_) {
     const string name = rpc_server_->ToString();
     LOG(INFO) << "TabletServer@" << name << " shutting down...";
+
+    // Shutdown ‘scheduler_pool_’
+    scheduler_pool_->Shutdown();
 
     // 1. Stop accepting new RPCs.
     UnregisterAllServices();

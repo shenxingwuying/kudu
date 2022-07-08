@@ -64,6 +64,7 @@
 #include "kudu/gutil/casts.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/map-util.h"
+#include "kudu/gutil/port.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/stringprintf.h"
 #include "kudu/gutil/strings/substitute.h"
@@ -2013,6 +2014,26 @@ void ConsensusServiceImpl::GetLastOpId(const consensus::GetLastOpIdRequestPB *re
                        resp, context);
     return;
   }
+  if (req->has_limit_type() && req->limit_type() == consensus::LimitType::ONLY_LEADER) {
+    if (consensus->role() != RaftPeerPB::LEADER) {
+      SetupErrorAndRespond(
+          resp->mutable_error(),
+          Status::IllegalState(
+              "GetLastOpId Request should be sent to leader, but the replica role is $0",
+              RaftPeerPB::Role_Name(consensus->role())),
+          TabletServerErrorPB::NOT_THE_LEADER,
+          context);
+      return;
+    }
+    if (PREDICT_FALSE(req->opid_type() != consensus::OpIdType::COMMITTED_OPID)) {
+      HandleUnknownError(
+          Status::InvalidArgument(
+              "Invalid opid_type specified to GetLastOpId(), should be COMMITTED_OPID"),
+          resp,
+          context);
+      return;
+    }
+  }
   optional<OpId> opid = consensus->GetLastOpId(req->opid_type());
   if (!opid) {
     SetupErrorAndRespond(resp->mutable_error(),
@@ -2204,6 +2225,21 @@ void TabletServiceImpl::Scan(const ScanRequestPB* req,
     if (!LookupRunningTabletReplicaOrRespond(server_->tablet_manager(), scan_pb.tablet_id(), resp,
                                              context, &replica)) {
       return;
+    }
+
+    if (scan_pb.has_read_consistency_mode() &&
+        scan_pb.read_consistency_mode() == ReadConsistencyMode::STRONG_CONSISTENCY) {
+      OpId latest_committed_opid;
+      Status s = replica->consensus()->GetLeaderLatestCommittedOpId(&latest_committed_opid);
+      if (!s.ok()) {
+        SetupErrorAndRespond(resp->mutable_error(), s, error_code, context);
+        return;
+      }
+      s = replica->consensus()->WaitCommittedOpId(latest_committed_opid);
+      if (!s.ok()) {
+        SetupErrorAndRespond(resp->mutable_error(), s, error_code, context);
+        return;
+      }
     }
     string scanner_id;
     Timestamp scan_timestamp;

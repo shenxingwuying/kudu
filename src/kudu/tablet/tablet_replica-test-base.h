@@ -83,6 +83,7 @@ class TabletReplicaTestBase : public KuduTabletTest {
   std::unique_ptr<ThreadPool> prepare_pool_;
   std::unique_ptr<ThreadPool> apply_pool_;
   std::unique_ptr<ThreadPool> raft_pool_;
+  std::unique_ptr<ThreadPool> scheduler_pool_;
   std::unique_ptr<DnsResolver> dns_resolver_;
 
   scoped_refptr<consensus::ConsensusMetadataManager> cmeta_manager_;

@@ -56,11 +56,14 @@
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/gutil/walltime.h"
 #include "kudu/rpc/periodic.h"
+#include "kudu/rpc/rpc_controller.h"
 #include "kudu/util/async_util.h"
+#include "kudu/util/countdown_latch.h"
 #include "kudu/util/debug/trace_event.h"
 #include "kudu/util/flag_tags.h"
 #include "kudu/util/logging.h"
 #include "kudu/util/metrics.h"
+#include "kudu/util/monotime.h"
 #include "kudu/util/pb_util.h"
 #include "kudu/util/process_memory.h"
 #include "kudu/util/random.h"
@@ -124,6 +127,14 @@ DEFINE_bool(raft_enable_tombstoned_voting, true,
             "When enabled, tombstoned tablets may vote in elections.");
 TAG_FLAG(raft_enable_tombstoned_voting, experimental);
 TAG_FLAG(raft_enable_tombstoned_voting, runtime);
+
+DEFINE_int32(get_latest_opid_interval_ms, 50,
+             "Delay a period time to get local latest opid, unit: ms");
+TAG_FLAG(get_latest_opid_interval_ms, runtime);
+
+DEFINE_int32(wait_latest_opid_timeout_ms, 2000,
+            "The timeout of follower wait the leader's opid, lag too much may cause timeout");
+TAG_FLAG(wait_latest_opid_timeout_ms, runtime);
 
 // Enable improved re-replication (KUDU-1097).
 DEFINE_bool(raft_prepare_replacement_before_eviction, true,
@@ -263,6 +274,8 @@ Status RaftConsensus::Start(const ConsensusBootstrapInfo& info,
   // for destroying the token.
   ThreadPool* raft_pool = server_ctx_.raft_pool;
   raft_pool_token_ = raft_pool->NewToken(ThreadPool::ExecutionMode::CONCURRENT);
+  ThreadPool* scheduler_pool = server_ctx_.scheduler_pool;
+  scheduler_pool_token_ = scheduler_pool->NewToken(ThreadPool::ExecutionMode::SERIAL);
 
   // The message queue that keeps track of which operations need to be replicated
   // where.
@@ -560,6 +573,63 @@ Status RaftConsensus::WaitUntilLeader(const MonoDelta& timeout) {
     SleepFor(MonoDelta::FromMilliseconds(10));
   }
   return Status::OK();
+}
+
+Status RaftConsensus::GetLeaderLatestCommittedOpId(OpId* latest_committed_opid) {
+  consensus::GetLastOpIdRequestPB request;
+  std::unique_ptr<PeerProxy> proxy;
+  {
+    LockGuard l(lock_);
+    if (cmeta_->active_role() == RaftPeerPB::LEADER) {
+      return Status::OK();
+    }
+    string leader_uuid = cmeta_->leader_uuid();
+    for (const auto& peer : cmeta_->ActiveConfig().peers()) {
+      if (peer.permanent_uuid() == leader_uuid) {
+        peer_proxy_factory_->NewProxy(peer, &proxy);
+        break;
+      }
+    }
+  }
+  request.set_tablet_id(tablet_id());
+  request.set_dest_uuid(cmeta_->leader_uuid());
+  request.set_opid_type(consensus::COMMITTED_OPID);
+
+  consensus::GetLastOpIdResponsePB response;
+  rpc::RpcController controller;
+  controller.set_timeout(MonoDelta::FromMilliseconds(500));
+  // @TODO(duyuqi)
+  // Sync request is not good enough, should change to async request and
+  // should fix the response processing.
+  proxy->GetLastOpId(request, &response, &controller);
+  *latest_committed_opid = response.opid();
+  return Status::OK();
+}
+
+Status RaftConsensus::WaitCommittedOpId(const OpId& latest_committed_opid) {
+  CountDownLatch latch(1);
+  std::function<void()> GetLocalLatestOpId =
+      [this, &latest_committed_opid, &latch, &GetLocalLatestOpId]() {
+        optional<OpId> last_op_id = GetLastOpId(OpIdType::COMMITTED_OPID);
+        if (latest_committed_opid.index() <= last_op_id->index()) {
+          latch.CountDown();
+          return;
+        }
+        WARN_NOT_OK(
+            scheduler_pool_token_->Schedule(GetLocalLatestOpId,
+                                   FLAGS_get_latest_opid_interval_ms),
+            "scheduler_pool_token_ schedule failed");
+      };
+  RETURN_NOT_OK(scheduler_pool_token_->Submit(GetLocalLatestOpId));
+
+  // TODO(duyuqi).
+  // The better way is yield the reactor thread and schedule the task.
+  // Now yield the thread is easy, but continue doing the task is a little hard,
+  // should have some task context infomations.
+  if (latch.WaitFor(MonoDelta::FromMilliseconds(FLAGS_wait_latest_opid_timeout_ms))) {
+    return Status::OK();
+  }
+  return Status::Incomplete("maybe lag too much");
 }
 
 Status RaftConsensus::StepDown(LeaderStepDownResponsePB* resp) {

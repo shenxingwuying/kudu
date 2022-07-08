@@ -111,6 +111,12 @@ class RaftConsensusQuorumTest : public KuduTest {
     options_.tablet_id = kTestTablet;
     FLAGS_enable_leader_failure_detection = false;
     CHECK_OK(ThreadPoolBuilder("raft").Build(&raft_pool_));
+    CHECK_OK(ThreadPoolBuilder("scheduler")
+                 .set_enable_scheduler()
+                 .set_min_threads(1)
+                 .set_max_threads(1)
+                 .set_schedule_period_ms(10)
+                 .Build(&scheduler_pool_));
   }
 
 
@@ -192,7 +198,8 @@ class RaftConsensusQuorumTest : public KuduTest {
       shared_ptr<RaftConsensus> peer;
       ServerContext ctx({ /*quiescing*/nullptr,
                           /*num_leaders*/nullptr,
-                          raft_pool_.get() });
+                          raft_pool_.get(),
+                          scheduler_pool_.get() });
       RETURN_NOT_OK(RaftConsensus::Create(options_,
                                           config_.peers(i),
                                           std::move(cmeta_manager),
@@ -580,6 +587,7 @@ class RaftConsensusQuorumTest : public KuduTest {
   vector<unique_ptr<FsManager>> fs_managers_;
   vector<scoped_refptr<Log> > logs_;
   unique_ptr<ThreadPool> raft_pool_;
+  unique_ptr<ThreadPool> scheduler_pool_;
   unique_ptr<TestPeerMapManager> peers_;
   vector<unique_ptr<TestOpFactory>> op_factories_;
   clock::LogicalClock clock_;

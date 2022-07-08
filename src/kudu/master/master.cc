@@ -412,6 +412,9 @@ void Master::ShutdownImpl() {
     LOG(INFO) << "Master@" << name << " shutting down...";
     state_ = kStopping;
 
+    // Shutdown ‘scheduler_pool_’
+    scheduler_pool_->Shutdown();
+
     // 1. Stop accepting new RPCs.
     UnregisterAllServices();
 

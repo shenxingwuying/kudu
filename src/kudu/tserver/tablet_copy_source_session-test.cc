@@ -116,6 +116,12 @@ class TabletCopyTest : public KuduTabletTest,
     CHECK_OK(ThreadPoolBuilder("prepare").Build(&prepare_pool_));
     CHECK_OK(ThreadPoolBuilder("apply").Build(&apply_pool_));
     CHECK_OK(ThreadPoolBuilder("raft").Build(&raft_pool_));
+    CHECK_OK(ThreadPoolBuilder("scheduler")
+                 .set_enable_scheduler()
+                 .set_min_threads(1)
+                 .set_max_threads(1)
+                 .set_schedule_period_ms(10)
+                 .Build(&scheduler_pool_));
   }
 
   void SetUp() override {
@@ -172,7 +178,8 @@ class TabletCopyTest : public KuduTabletTest,
                           }));
     ASSERT_OK(tablet_replica_->Init({ /*quiescing*/nullptr,
                                       /*num_leaders*/nullptr,
-                                      raft_pool_.get() }));
+                                      raft_pool_.get(),
+                                      scheduler_pool_.get() }));
 
     shared_ptr<Messenger> messenger;
     MessengerBuilder mbuilder(CURRENT_TEST_NAME());
@@ -278,6 +285,7 @@ class TabletCopyTest : public KuduTabletTest,
   unique_ptr<ThreadPool> prepare_pool_;
   unique_ptr<ThreadPool> apply_pool_;
   unique_ptr<ThreadPool> raft_pool_;
+  unique_ptr<ThreadPool> scheduler_pool_;
   unique_ptr<DnsResolver> dns_resolver_;
   scoped_refptr<TabletReplica> tablet_replica_;
   scoped_refptr<TabletCopySourceSession> session_;

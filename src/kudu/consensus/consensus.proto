@@ -487,6 +487,12 @@ enum OpIdType {
   COMMITTED_OPID = 2;
 }
 
+enum LimitType {
+  UNKNOWN_TYPE = 0;
+  ONLY_LEADER = 1;
+  NO_LIMIT = 2;
+}
+
 message GetLastOpIdRequestPB {
   // UUID of server this request is addressed to.
   optional bytes dest_uuid = 2;
@@ -496,6 +502,9 @@ message GetLastOpIdRequestPB {
 
   // Whether to return the last-received or last-committed OpId.
   optional OpIdType opid_type = 3 [ default = RECEIVED_OPID ];
+
+  // Whether check the dest uuid' role.
+  optional LimitType limit_type = 4 [ default = NO_LIMIT ];
 }
 
 message GetLastOpIdResponsePB {

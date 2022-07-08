@@ -286,6 +286,12 @@ enum ReadMode {
   READ_YOUR_WRITES = 3;
 }
 
+enum ReadConsistencyMode {
+  UNKNOWN_CONSISTENCY_MODE = 0;
+  STRONG_CONSISTENCY = 1;
+  WEAK_CONSISTENCY = 2;
+}
+
 // The possible order modes for clients.
 // Clients specify these in new scan requests.
 // Ordered scans are fault-tolerant, and can be retried elsewhere in the case
