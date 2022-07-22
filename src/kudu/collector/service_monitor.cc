@@ -44,8 +44,8 @@
 #include "kudu/gutil/strings/split.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/gutil/walltime.h"
-#include "kudu/tools/tool_test_util.h"
 #include "kudu/util/status.h"
+#include "kudu/util/subprocess.h"
 #include "kudu/util/thread.h"
 #include "kudu/util/trace.h"
 
@@ -311,6 +311,7 @@ Status ServiceMonitor::CheckMonitorTable() {
 
 Status ServiceMonitor::RebalanceMonitorTable() {
   vector<string> args = {
+    "kudu",
     "cluster",
     "rebalance",
     FLAGS_collector_master_addrs,
@@ -318,7 +319,7 @@ Status ServiceMonitor::RebalanceMonitorTable() {
   };
   string tool_stdout;
   string tool_stderr;
-  RETURN_NOT_OK_PREPEND(tools::RunKuduTool(args, &tool_stdout, &tool_stderr),
+  RETURN_NOT_OK_PREPEND(Subprocess::Call(args, "", &tool_stdout, &tool_stderr),
                         Substitute("out: $0, err: $1", tool_stdout, tool_stderr));
   LOG(INFO) << std::endl
             << tool_stdout;
@@ -377,6 +378,7 @@ Status ServiceMonitor::GetTabletServers(vector<KuduTabletServer*>* servers) {
 Status ServiceMonitor::CallLeaderStepDown(const string& tablet_id,
                                           const string& new_leader_ts_uuid) {
   vector<string> args = {
+    "kudu",
     "tablet",
     "leader_step_down",
     FLAGS_collector_master_addrs,
@@ -384,7 +386,7 @@ Status ServiceMonitor::CallLeaderStepDown(const string& tablet_id,
     "--new_leader_uuid=" + new_leader_ts_uuid};
   string tool_stdout;
   string tool_stderr;
-  RETURN_NOT_OK_PREPEND(tools::RunKuduTool(args, &tool_stdout, &tool_stderr),
+  RETURN_NOT_OK_PREPEND(Subprocess::Call(args, "", &tool_stdout, &tool_stderr),
                         Substitute("out: $0, err: $1", tool_stdout, tool_stderr));
   LOG(INFO) << std::endl
             << tool_stdout;
