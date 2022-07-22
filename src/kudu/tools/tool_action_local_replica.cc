@@ -70,7 +70,6 @@
 #include "kudu/gutil/strings/util.h"
 #include "kudu/master/sys_catalog.h"
 #include "kudu/rpc/messenger.h"
-#include "kudu/rpc/rpc_controller.h"
 #include "kudu/tablet/diskrowset.h"
 #include "kudu/tablet/metadata.pb.h"
 #include "kudu/tablet/rowset.h"
@@ -87,6 +86,7 @@
 #include "kudu/tserver/ts_tablet_manager.h"
 #include "kudu/tserver/tserver.pb.h"
 #include "kudu/tserver/tserver_service.proxy.h"
+#include "kudu/util/countdown_latch.h"
 #include "kudu/util/env.h"
 #include "kudu/util/env_util.h"
 #include "kudu/util/faststring.h"
@@ -97,7 +97,13 @@
 #include "kudu/util/net/net_util.h"
 #include "kudu/util/pb_util.h"
 #include "kudu/util/status.h"
+#include "kudu/util/thread.h"
 #include "kudu/util/threadpool.h"
+namespace kudu {
+namespace rpc {
+class RpcController;
+}  // namespace rpc
+}  // namespace kudu
 
 DEFINE_bool(dump_all_columns, true,
             "If true, dumped rows include all of the columns in the rowset. If "

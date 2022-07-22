@@ -266,8 +266,9 @@ def parse_args():
 
 
 def set_progress_stage_1(new_master_fs_wal_dir, new_master_fs_data_dirs_list,
-                         new_tserver_list, new_tserver_fs_wal_dir, new_tserver_fs_data_dirs, pwd):
-    progress = {'stage': 1, 'dest_cluster': {}, 'password': {}}
+                         new_tserver_list, new_tserver_fs_wal_dir,
+                         new_tserver_fs_data_dirs, pwd, host_uuid_map):
+    progress = {'stage': 1, 'dest_cluster': {}, 'password': {}, 'uuids': {}}
     progress['dest_cluster']['master'] = {}
     progress['dest_cluster']['master']['fs_wal_dir'] = new_master_fs_wal_dir
     progress['dest_cluster']['master']['fs_data_dirs'] = new_master_fs_data_dirs_list
@@ -277,6 +278,8 @@ def set_progress_stage_1(new_master_fs_wal_dir, new_master_fs_data_dirs_list,
     progress['dest_cluster']['tserver']['fs_data_dirs'] = new_tserver_fs_data_dirs
     for key in pwd:
         progress['password'][key] = pwd[key]
+    for key in host_uuid_map:
+        progress['uuids'][key] = host_uuid_map[key]
     return progress
 
 
@@ -397,9 +400,13 @@ def main():
                 print("can't parse parameter --passwords, it should be in json format")
                 return
 
+        # 为目标集群TServer生成uuid
+        host_uuid_map = gen_uuids(new_tserver_hosts)
+
         # 更新进度
         progress = set_progress_stage_1(new_master_fs_wal_dir, new_master_fs_data_dirs_list,
-                                        new_tserver_list, new_tserver_fs_wal_dir, new_tserver_fs_data_dirs, pwd)
+                                        new_tserver_list, new_tserver_fs_wal_dir,
+                                        new_tserver_fs_data_dirs, pwd, host_uuid_map)
         with open(progress_file, 'w+') as f:
             yaml.dump(progress, f)
     else:
@@ -492,7 +499,7 @@ def main():
         # 创建目标集群的tserver目录
         print("3.2-----创建目标集群的tserver目录")
         for new_tserver_host in new_tserver_hosts:
-            cmd = 'sudo sp_kudu fs format -fs_data_dirs=%s -fs_wal_dir=%s' % (','.join(new_tserver_fs_data_dirs), new_tserver_fs_wal_dir)
+            cmd = 'sudo sp_kudu fs format -fs_data_dirs=%s -fs_wal_dir=%s -uuid=%s' % (','.join(new_tserver_fs_data_dirs), new_tserver_fs_wal_dir, host_uuid_map[new_tserver_host])
             run_ssh_cmd_with_password(cmd, new_tserver_host, args.ssh_port, _user_sa, pwd[new_tserver_host])
             chown_dirs(new_tserver_host, args.ssh_port,
                        new_tserver_fs_wal_dir, new_tserver_fs_data_dirs, 'kudu:sa_group', pwd)
@@ -642,7 +649,7 @@ def main():
                 die('progress_file.yaml is error.')
         all_task_finished_flag = True
         for task_name in progress['task']:
-            if progress['task'][task_name]['clone_stage'] != 3:
+            if progress['task'][task_name]['clone_stage'] != 4:
                 all_task_finished_flag = False
                 break
         if all_task_finished_flag:
@@ -659,8 +666,8 @@ def main():
     print('已完成,总耗时：%s, 请手动启动目标集群' % (stage6_time - start_time))
 
 
-def ksck(master_addr):
-    ksck_cmd = '%s cluster ksck %s -ksck_format=json_compact -sections=TABLET_SUMMARIES' % (_config_kudu_tool, master_addr)
+def ksck(master_addr, sections="TABLET_SUMMARIES"):
+    ksck_cmd = '%s cluster ksck %s -ksck_format=json_compact -sections=%s' % (_config_kudu_tool, master_addr, sections)
     # 无法使用云平台的接口，因为含有特殊字符，云平台的接口解析不了
     p = subprocess.Popen([ksck_cmd], stdout=subprocess.PIPE, shell=True)
     stdout, _ = p.communicate()
@@ -688,22 +695,20 @@ def get_leader_tablet_and_addr(master_addr):
 def clone_data(task, task_name, progress_file, progress):
     ssh_port = task['ssh_port']
     from_tserver = task['from_tserver']
-    to_tserver = task['to_tserver']
-    from_master = task['from_master']
-    tablet_id = task['tablet_id']
+    to_tserver_host = task['to_tserver']
+    to_tserver_port = task['to_tserver_port']
+    tablet_ids = task['tablet_id']
     to_tserver_fs_data_dirs = task['to_tserver_fs_data_dirs']
     to_tserver_fs_wal_dir = task['to_tserver_fs_wal_dir']
     parallel = task['parallel']
-    to_tserver_port = task['to_tserver_port']
     pwd = progress['password']
-    user_sa = _user_sa
-    tmp_kudu_tool_path = _tmp_kudu_tool_path
+    host_uuid_map = progress['uuids']
+    kudu_tool = _tmp_kudu_tool_path
     # 1. clone tserver 数据
-    print("task:%s clone tserver data, to_tserver:%s" % (task_name, to_tserver))
+    print("task:%s clone tserver data, to_tserver:%s" % (task_name, to_tserver_host))
     if progress['task'][task_name]['clone_stage'] < 1:
-        cmd = 'sudo sh -c "%s local_replica clone %s %s -fs_data_dirs=%s -fs_wal_dir=%s -num_max_threads=%s -target_port=%s -tablets=%s -rewrite_config=true"' \
-            % (tmp_kudu_tool_path, from_tserver, from_master, ','.join(to_tserver_fs_data_dirs), to_tserver_fs_wal_dir, parallel, to_tserver_port, tablet_id)
-        run_ssh_cmd_with_password(cmd, to_tserver, ssh_port, user_sa, pwd[to_tserver])
+        copy_from_remote(tablet_ids, from_tserver, ','.join(to_tserver_fs_data_dirs),
+                         to_tserver_fs_wal_dir, to_tserver_host, pwd, ssh_port, parallel, kudu_tool)
         _lock.acquire()
         # 先读出来，再修改，再写进去
         with open(progress_file, 'r') as f:
@@ -715,12 +720,15 @@ def clone_data(task, task_name, progress_file, progress):
             yaml.dump(progress, f)
         _lock.release()
     else:
-        print("task:%s skip clone stage 1")
-    # 2. 修改wal_dir权限
-    print("task:%s chown -R wal dir" % task_name)
+        print("task:%s skip clone stage 1" % task_name)
+
+    # 2. rewrite Raft config
     if progress['task'][task_name]['clone_stage'] < 2:
-        cmd = 'sudo chown -R kudu:sa_group `dirname %s`' % to_tserver_fs_wal_dir
-        run_ssh_cmd_with_password(cmd, to_tserver, ssh_port, user_sa, pwd[to_tserver])
+        to_tserver_hp = "%s:%s" % (to_tserver_host, to_tserver_port)
+        raft_peers = "%s:%s" % (host_uuid_map[to_tserver_host], to_tserver_hp)
+        rewrite_raft_config(tablet_ids, raft_peers, ','.join(to_tserver_fs_data_dirs),
+                            to_tserver_fs_wal_dir,
+                            to_tserver_host, ssh_port, pwd, kudu_tool)
         _lock.acquire()
         # 先读出来，再修改，再写进去
         with open(progress_file, 'r') as f:
@@ -732,12 +740,12 @@ def clone_data(task, task_name, progress_file, progress):
             yaml.dump(progress, f)
         _lock.release()
     else:
-        print("task:%s skip clone stage 2")
-    # 3. 修改data_dir权限
-    print("task:%s chown data dir" % task_name)
+        print("task:%s skip clone stage 2" % task_name)
+    # 3. 修改wal_dir权限
+    print("task:%s chown wal dir" % task_name)
     if progress['task'][task_name]['clone_stage'] < 3:
-        cmd = 'sudo chown -R kudu:sa_group `dirname %s`' % ' '.join(to_tserver_fs_data_dirs)
-        run_ssh_cmd_with_password(cmd, to_tserver, ssh_port, user_sa, pwd[to_tserver])
+        cmd = 'sudo chown -R kudu:sa_group `dirname %s`' % to_tserver_fs_wal_dir
+        run_ssh_cmd_with_password(cmd, to_tserver_host, ssh_port, _user_sa, pwd[to_tserver_host])
         _lock.acquire()
         # 先读出来，再修改，再写进去
         with open(progress_file, 'r') as f:
@@ -749,8 +757,52 @@ def clone_data(task, task_name, progress_file, progress):
             yaml.dump(progress, f)
         _lock.release()
     else:
-        print("task:%s skip clone stage 3")
+        print("task:%s skip clone stage 3" % task_name)
+
+    # 4. 修改data_dir权限
+    print("task:%s chown data dir" % task_name)
+    if progress['task'][task_name]['clone_stage'] < 4:
+        cmd = 'sudo chown -R kudu:sa_group `dirname %s`' % ' '.join(to_tserver_fs_data_dirs)
+        run_ssh_cmd_with_password(cmd, to_tserver_host, ssh_port, _user_sa, pwd[to_tserver_host])
+        _lock.acquire()
+        # 先读出来，再修改，再写进去
+        with open(progress_file, 'r') as f:
+            progress = yaml.load(f)
+            if not progress:
+                die('progress_file.yaml is error.')
+        set_progress_stage_clone_stage(progress, 4, task_name)
+        with open(progress_file, 'w+') as f:
+            yaml.dump(progress, f)
+        _lock.release()
+    else:
+        print("task:%s skip clone stage 4" % task_name)
     return 0
+
+
+def copy_from_remote(tablet_ids, from_tserver_hp, fs_data_dirs,
+                     fs_wal_dir, to_tserver_host, pwd, ssh_port, parallel, kudu_tool):
+    cmd = "%s local_replica copy_from_remote %s %s -fs_data_dirs=%s -fs_wal_dir=%s -num_max_threads=%s" \
+          % (kudu_tool, tablet_ids, from_tserver_hp, fs_data_dirs, fs_wal_dir, parallel)
+    cmd = "sudo sh -c '%s'" % cmd
+    return run_ssh_cmd_with_password(cmd, to_tserver_host, ssh_port, _user_sa,
+                                       pwd[to_tserver_host])
+
+
+def rewrite_raft_config(tablet_ids, raft_peers, fs_data_dirs, fs_wal_dir,
+                        to_tserver_host, ssh_port, pwd, kudu_tool):
+    cmd = "%s local_replica cmeta rewrite_raft_config %s %s -fs_data_dirs=%s -fs_wal_dir=%s" % \
+          (kudu_tool, tablet_ids, raft_peers, fs_data_dirs, fs_wal_dir)
+    cmd = "sudo sh -c '%s'" % cmd
+    return run_ssh_cmd_with_password(cmd, to_tserver_host, ssh_port, _user_sa,
+                                     pwd[to_tserver_host])
+
+
+def gen_uuids(hosts):
+    host_uuid_map = {}
+    for host in hosts:
+        new_uuid = uuid.uuid4().hex
+        host_uuid_map[host] = new_uuid
+    return host_uuid_map
 
 
 if __name__ == '__main__':
