@@ -33,11 +33,11 @@
 #include "kudu/collector/collector_util.h"
 #include "kudu/collector/prometheus_reporter.h"
 #include "kudu/gutil/strings/substitute.h"
+#include "kudu/tools/tool_test_util.h"
 #include "kudu/util/jsonreader.h"
 #include "kudu/util/locks.h"
 #include "kudu/util/monotime.h"
 #include "kudu/util/status.h"
-#include "kudu/util/subprocess.h"
 #include "kudu/util/thread.h"
 #include "kudu/util/trace.h"
 
@@ -169,7 +169,6 @@ Status NodesChecker::UpdateNodes() {
 Status NodesChecker::UpdateServers(const string& role) {
   DCHECK(role == kTserver || role == kMaster);
   vector<string> args = {
-    "kudu",
     role,
     "list",
     FLAGS_collector_master_addrs,
@@ -179,7 +178,7 @@ Status NodesChecker::UpdateServers(const string& role) {
   };
   string tool_stdout;
   string tool_stderr;
-  RETURN_NOT_OK_PREPEND(Subprocess::Call(args, "", &tool_stdout, &tool_stderr),
+  RETURN_NOT_OK_PREPEND(tools::RunKuduTool(args, &tool_stdout, &tool_stderr),
                         Substitute("out: $0, err: $1", tool_stdout, tool_stderr));
   TRACE(Substitute("'$0 list' done", role));
 
@@ -214,7 +213,6 @@ Status NodesChecker::UpdateServers(const string& role) {
 
 Status NodesChecker::CheckNodes() {
   vector<string> args = {
-    "kudu",
     "cluster",
     "ksck",
     FLAGS_collector_master_addrs,
@@ -226,7 +224,7 @@ Status NodesChecker::CheckNodes() {
   };
   string tool_stdout;
   string tool_stderr;
-  WARN_NOT_OK(Subprocess::Call(args, "", &tool_stdout, &tool_stderr),
+  WARN_NOT_OK(tools::RunKuduTool(args, &tool_stdout, &tool_stderr),
               Substitute("out: $0, err: $1", tool_stdout, tool_stderr));
 
   TRACE("'cluster ksck' done");

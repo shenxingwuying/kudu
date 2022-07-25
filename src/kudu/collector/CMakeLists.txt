@@ -45,6 +45,7 @@ else()
     ${SANITIZER_OPTIONS_OVERRIDE}
     kudu_client
     kudu_curl_util
+    kudu_tools_test_util
     log
     prometheus-cpp-core
     prometheus-cpp-pull
