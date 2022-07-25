@@ -47,3 +47,15 @@ build_modules:
           - ["RUN", "sh build.sh"]
           - ["COPY", "/opt/kudu/installed/bin/kudu", "./"]
           - ["COPY", "/opt/kudu/installed/bin/kudu", "./sp_kudu"]
+
+  kudu_guidance:
+    variants:
+      - os_distro: el6
+      - os_distro: el7
+    types:
+      - type: dragon
+        add_cmds:
+          # 这里需要执行build的原因是整个编译不会按build.yml的顺序来保证执行顺序
+          - ["RUN", "sh build.sh"]
+          - ["COPY", "./guidance/*", "./" ]
+          - ["COPY", "/opt/kudu/installed/bin/kudu", "./kudu/command"]

@@ -1,0 +1,208 @@
+api_version: v1
+kind: ms_modules
+metadata:
+  name: soku
+spec:
+  source_type:
+    kudu:
+      shim_dir: kudu_shim
+      guidance_dir: kudu_guidance
+      binary_dir: kudu
+      script_path: MOTHERSHIP_PYTHON
+      roles: # 支持的角色
+        kudu_master:
+          deploy:
+            available_in_cluster: True  # True表示集群(非单机)需要部署
+            available_in_simplified_cluster: True  # True表示单机需要部署, 可部署则不考虑 replicas
+          support_command:
+            - START
+            - STOP
+            - STATUS
+            - INSTALL
+        kudu_tserver:
+          deploy:
+            available_in_cluster: True  # True表示集群(非单机)需要部署
+            available_in_simplified_cluster: True  # True表示单机需要部署, 可部署则不考虑 replicas
+          dependency_roles:
+            - kudu_master
+          support_command:
+            - START
+            - STOP
+            - STATUS
+            - INSTALL
+          scale_up:
+            support: True  # 必填，表示该 role 支持扩容
+            callbacks:
+              - callback: PRE_SCALE_UP_CHECK
+                target_node: single_node  # 可填 all_node || single_node || scale_node，填写 single_node 表示在符合部署的机器上随机一台机器执行               - callback: PRE_SCALE_UP_START
+              - callback: POST_SCALE_UP_START
+                target_node: single_node  # 可填 all_node || single_node || scale_node，填写 single_node 表示在符合部署的机器上随机一台机器执行
+              - callback: POST_SCALE_UP_CHECK
+                target_node: single_node  # 可填 all_node || single_node || scale_node，填写 single_node 表示在符合部署的机器上随机一台机器执行
+          scale_down:
+            support: True  # 表示该 role 支持缩容
+            callbacks:
+              - callback: PRE_SCALE_DOWN_CHECK                 
+                target_node: single_node  # 可填 all_node || single_node || scale_node，填写 single_node 表示在符合部署的机器上随机一台机器执行
+              - callback: DECOMMISSION_CALLBACK
+                target_role: kudu_tserver  # target_role 可不填表示所有机器上均可执行，当填写时需指定角色，表示只在部署该角色的机器上执行
+                target_node: scale_node  # 可填 all_node || single_node || scale_node，scale_node 表示在所有扩缩容机器上执行
+              - callback: DECOMMISSION_COMPLETE_INSPECTION
+                target_role: kudu_tserver  # target_role 可不填表示所有机器上均可执行，当填写时需指定角色，表示只在部署该角色的机器上执行
+                target_node: scale_node  # 可填 all_node || single_node || scale_node，scale_node 表示在所有扩缩容机器上执行
+              - callback: POST_SCALE_DOWN_STOP
+                target_node: single_node  # 可填 all_node || single_node || scale_node，填写 single_node 表示在符合部署的机器上随机一台机器执行
+              - callback: POST_SCALE_DOWN_CHECK
+                target_node: single_node  # 可填 all_node || single_node || scale_node，填写 single_node 表示在符合部署的机器上随机一台机器执行
+        kudu_collector:
+          deploy:
+            available_in_cluster: True  # True表示集群(非单机)需要部署
+            available_in_simplified_cluster: True  # True表示单机需要部署, 可部署则不考虑 replicas
+          dependency_roles:
+            - kudu_master
+            - kudu_tserver
+          support_command:
+            - START
+            - STOP
+            - STATUS
+  modules:
+    kudu:
+      source_type: kudu
+      user: sa_cluster
+      user_groups:
+        - sa_group
+      captain_module_conf:
+        containerized: false
+        strategy:
+          detached: false  # 是否 captain 监控
+      roles:
+        kudu_master: # source_type 中 roles 的子集
+          role_group: meta
+          hardware_requirements:
+            - meta_dir
+          # 是否支持缩容
+          support_scale_down: false
+          # 是否跟随机器扩容自动进行扩容
+          auto_scale_up_by_host_scale_up: false
+          ports:
+            service_port:
+              port: 7051
+              description: 'kudu_master service local port'
+            webserver_port:
+              port: 8051
+              description: 'kudu_master webserver port'
+          captain_role_conf:
+            strategy:
+              detached: false
+              repairable: true  # 是否自动恢复
+              restart_all_role: false
+              restart_module: false
+              replicas: -1  # 实例数量
+              rolling: -1  # 重启是否滚动，-1 是不滚动
+              service_continuouse_level: true
+              liveness_probe:
+                method:
+                  exec:
+                    port: 7051
+                period: 60 # 探活间隔
+                retry_interval: 0
+                timeout: 10
+                retry_times: 3
+              start:
+                # cmd: 'sh start_role.sh' 动态生成
+                retry_interval: 0
+                retry_times: 3
+                timeout: 60
+              stop:
+                # cmd: 'sh stop_role.sh' 动态生成
+                retry_interval: 0
+                retry_times: 3
+                timeout: 60
+            deploy:
+              stateful: true       # 有状态服务
+              mutual_role: false   # 是否和其他 role 互斥，互斥的 role 不能部署在同一台机器上
+        kudu_tserver:
+          role_group: store
+          hardware_requirements:
+            - random_dir
+          # 是否支持缩容
+          support_scale_down: false   # TODO:后续需要支持
+          # 是否跟随机器扩容自动进行扩容
+          auto_scale_up_by_host_scale_up: false
+          ports:
+            service_port:
+              port: 7050
+              description: 'kudu_tserver service local port'
+            webserver_port:
+              port: 8050
+              description: 'kudu_tserver webserver port'
+          captain_role_conf:
+            strategy:
+              detached: false
+              repairable: true  # 是否自动恢复
+              restart_all_role: false
+              restart_module: false
+              replicas: -1  # 实例数量
+              rolling: -1  # 重启是否滚动，-1 是不滚动
+              service_continuouse_level: true
+              liveness_probe:
+                method:
+                  exec:
+                    port: 7050
+                period: 60 # 探活间隔
+                retry_interval: 0
+                timeout: 10
+                retry_times: 3
+              start:
+                # cmd: 'sh start_role.sh' 动态生成
+                retry_interval: 0
+                retry_times: 3
+                timeout: 60
+              stop:
+                # cmd: 'sh stop_role.sh' 动态生成
+                retry_interval: 0
+                retry_times: 3
+                timeout: 60
+            deploy:
+              stateful: true      # 有状态服务
+              mutual_role: false  # 是否和其他 role 互斥，互斥的 role 不能部署在同一台机器上
+        kudu_collector:
+          role_group: service
+          # 是否支持缩容
+          support_scale_down: false
+          # 是否跟随机器扩容自动进行扩容
+          auto_scale_up_by_host_scale_up: false
+          ports:
+            webserver_port:
+              port: 9050
+              description: 'kudu_collector webserver port'
+          captain_role_conf:
+            strategy:
+              detached: false
+              repairable: true  # 是否自动恢复
+              restart_all_role: false
+              restart_module: false
+              replicas: 1  # 实例数量
+              rolling: -1  # 重启是否滚动，-1 是不滚动
+              service_continuouse_level: true
+              liveness_probe:
+                method:
+                  exec:
+                    port: 9050
+                period: 60 # 探活间隔
+                retry_interval: 0
+                timeout: 10
+                retry_times: 3
+              start:
+                # cmd: 'sh start_role.sh' 动态生成
+                retry_interval: 0
+                retry_times: 3
+                timeout: 60
+              stop:
+                # cmd: 'sh stop_role.sh' 动态生成
+                retry_interval: 0
+                retry_times: 3
+                timeout: 60
+            deploy:
+              stateful: false     # 有状态服务
+              mutual_role: false  # 是否和其他 role 互斥，互斥的 role 不能部署在同一台机器上

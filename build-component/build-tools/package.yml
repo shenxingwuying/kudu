@@ -29,6 +29,22 @@ package_modules:
     pub:
       - type: dragon
 
+  kudu_shim:
+    source: local
+    version: "1.14.2"
+    pub:
+      - type: dragon
+
+  kudu_guidance:
+    source: pre_pub
+    search_policy: aligned
+    variants:
+      - os_distro: el6
+      - os_distro: el7
+    version: "1.14.2"
+    pub:
+      - type: dragon
+
   kudu:
     source: pre_pub
     search_policy: aligned

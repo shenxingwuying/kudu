@@ -1,0 +1,357 @@
+api_version: v1
+kind: ms_configurations
+metadata:
+  name: soku
+spec:
+  modules:
+    kudu:
+      config:
+        cluster_info:
+          meta_dir:
+            default_value: ''
+            tag: ''
+            desc: 'Meta data dictionary.'
+            type: str
+          random_dirs:
+            default_value: ''
+            tag: ''
+            desc: 'Random dictionary.'
+            type: str
+        kudu_master:
+          allow_unsafe_replication_factor:
+            default_value: 'true'
+            tag: ''
+            desc: 'Allow creating tables with even replication factor.'
+            type: str
+          disable_core_dumps:
+            default_value: 'true'
+            tag: ''
+            desc: 'Disable core dumps when this process crashes.'
+            type: str
+          kudu_user:
+            default_value: 'sa_cluster'
+            tag: ''
+            desc: 'Allows operating against a Kudu cluster using an identity which differs from the local Unix user on the client.'
+            type: str
+          log_force_fsync_all:
+            default_value: 'false'
+            tag: ''
+            desc: 'Whether the Log/WAL should explicitly call fsync() after each write.'
+            type: str
+          logbuflevel:
+            default_value: '0'
+            tag: ''
+            desc: 'The lowest level of cache log, - 1 means no cache, and 0 means only Google:: info is cached.'
+            type: int
+          max_clock_sync_error_usec:
+            default_value: '100000000'
+            tag: ''
+            desc: 'Maximum allowed clock synchronization error as reported by NTP before the server will abort.'
+            type: int
+          max_cell_size_bytes:
+            default_value: '262144'
+            tag: ''
+            desc: 'The maximum size of any individual cell in a table. Attempting to store string or binary columns with a size greater than this will result in errors.'
+            type: int
+          max_log_size:
+            default_value: '20'
+            tag: ''
+            desc: 'Maximum log size (MB).'
+            type: int
+          max_num_columns:
+            default_value: '3000'
+            tag: ''
+            desc: 'Maximum number of columns that may be in a table.'
+            type: int
+          minloglevel:
+            default_value: '0'
+            tag: ''
+            desc: 'Min logging level for print.'
+            type: int
+          raft_get_node_instance_timeout_ms:
+            default_value: '300000'
+            tag: ''
+            desc: 'Timeout for retrieving node instance data over RPC.'
+            type: int
+          rpc_authentication:
+            default_value: 'disabled'
+            tag: ''
+            desc: 'Whether to require RPC connections to authenticate.'
+            type: str
+          rpc_encryption:
+            default_value: 'disabled'
+            tag: ''
+            desc: 'Whether to require RPC connections to be encrypted.'
+            type: str
+          rpc_service_queue_length:
+            default_value: '300'
+            tag: ''
+            desc: 'Default length of queue for incoming RPC requests.'
+            type: int
+          superuser_acl:
+            default_value: 'root,sa_cluster,kudu'
+            tag: ''
+            desc: 'The list of usernames to allow as super users, comma-separated.'
+            type: str
+          trusted_subnets:
+            default_value: '0.0.0.0/0'
+            tag: ''
+            desc: 'A trusted subnet whitelist.'
+            type: str
+          unlock_experimental_flags:
+            default_value: 'true'
+            tag: ''
+            desc: 'Unlock flags marked as experimental.'
+            type: str
+          unlock_unsafe_flags:
+            default_value: 'true'
+            tag: ''
+            desc: 'Unlock flags marked as unsafe. These flags are not guaranteed to be maintained across releases of Kudu, and enable features or behavior known to be unsafe.'
+            type: str
+          user_acl:
+            default_value: '*'
+            tag: ''
+            desc: 'The list of usernames who may access the cluster, comma-separated. A * entry indicates that all authenticated users are allowed.'
+            type: str
+          v:
+            default_value: '0'
+            tag: ''
+            desc: 'Record the custom log of M < = in all vlog (m).'
+            type: int
+          webserver_certificate_file:
+            default_value: ''
+            tag: ''
+            desc: 'The location of the embedded webserver TLS/SSL certificate file, in PEM format.'
+            type: str
+          webserver_private_key_file:
+            default_value: ''
+            tag: ''
+            desc: 'The full path to the private key used as a counterpart to the public key contained in --webserver_certificate_file.'
+            type: str
+          webserver_private_key_password_cmd:
+            default_value: ''
+            tag: ''
+            desc: 'A Unix command whose output returns the password to decrypt the private key of the webserver certificate pointed to by the --webserver_private_key_file flag.'
+            type: str
+        kudu_tserver:
+          block_cache_capacity_mb:
+            default_value: '512'
+            tag: ''
+            desc: 'Block cache capacity in MB.'
+            type: int
+          disable_core_dumps:
+            default_value: 'true'
+            tag: ''
+            desc: 'Disable core dumps when this process crashes.'
+            type: str
+          kudu_user:
+            default_value: 'sa_cluster'
+            tag: ''
+            desc: 'Allows operating against a Kudu cluster using an identity which differs from the local Unix user on the client.'
+            type: str
+          logbuflevel:
+            default_value: '0'
+            tag: ''
+            desc: 'The lowest level of cache log, - 1 means no cache, and 0 means only Google:: info is cached.'
+            type: int
+          log_force_fsync_all:
+            default_value: 'false'
+            tag: ''
+            desc: 'Whether the Log/WAL should explicitly call fsync() after each write.'
+            type: str
+          max_cell_size_bytes:
+            default_value: '262144'
+            tag: ''
+            desc: 'The maximum size of any individual cell in a table. Attempting to store string or binary columns with a size greater than this will result in errors.'
+            type: int
+          max_clock_sync_error_usec:
+            default_value: '100000000'
+            tag: ''
+            desc: 'Maximum allowed clock synchronization error as reported by NTP before the server will abort.'
+            type: int
+          max_log_size:
+            default_value: '20'
+            tag: ''
+            desc: 'Maximum log size (MB).'
+            type: int
+          memory_limit_hard_bytes:
+            default_value: '6442450944'
+            tag: ''
+            desc: 'Maximum amount of memory this daemon should use, in bytes.'
+            type: int
+          minloglevel:
+            default_value: '0'
+            tag: ''
+            desc: 'Min logging level for print.'
+            type: int
+          rpc_authentication:
+            default_value: 'disabled'
+            tag: 'Whether to require RPC connections to authenticate.'
+            desc: ''
+            type: str
+          rpc_encryption:
+            default_value: 'disabled'
+            tag: ''
+            desc: 'Whether to require RPC connections to be encrypted.'
+            type:
+          rpc_service_queue_length:
+            default_value: '300'
+            tag: ''
+            desc: 'Default length of queue for incoming RPC requests.'
+            type: int
+          superuser_acl:
+            default_value: 'root,sa_cluster,kudu'
+            tag: ''
+            desc: 'The list of usernames to allow as super users, comma-separated.'
+            type: str
+          trusted_subnets:
+            default_value: '0.0.0.0/0'
+            tag: ''
+            desc: 'A trusted subnet whitelist.'
+            type: str
+          unlock_experimental_flags:
+            default_value: 'true'
+            tag: ''
+            desc: 'Unlock flags marked as experimental.'
+            type: str
+          unlock_unsafe_flags:
+            default_value: 'true'
+            tag: ''
+            desc: 'Unlock flags marked as unsafe. These flags are not guaranteed to be maintained across releases of Kudu, and enable features or behavior known to be unsafe.'
+            type: str
+          user_acl:
+            default_value: '*'
+            tag: ''
+            desc: 'The list of usernames who may access the cluster, comma-separated. A * entry indicates that all authenticated users are allowed.'
+            type: str
+          v:
+            default_value: '0'
+            tag: ''
+            desc: 'Record the custom log of M < = in all vlog (m).'
+            type: int
+          webserver_certificate_file:
+            default_value: ''
+            tag: ''
+            desc: 'The location of the embedded webserver TLS/SSL certificate file, in PEM format.'
+            type: str
+          webserver_private_key_file:
+            default_value: ''
+            tag: ''
+            desc: 'The full path to the private key used as a counterpart to the public key contained in --webserver_certificate_file.'
+            type: str
+          webserver_private_key_password_cmd:
+            default_value: ''
+            tag: ''
+            desc: 'A Unix command whose output returns the password to decrypt the private key of the webserver certificate pointed to by the --webserver_private_key_file flag.'
+            type: str
+        kudu_collector:
+          allow_unsafe_replication_factor:
+            default_value: 'true'
+            tag: ''
+            desc: 'Allow creating tables with even replication factor.'
+            type: str
+          collector_monitor_avg_record_count_per_tablet:
+            default_value: '100'
+            tag: ''
+            desc: 'Average record count for each tablet.'
+            type: int
+          collector_monitor_avg_tablets_count_per_node:
+            default_value: '3'
+            tag: ''
+            desc: 'Number of tablets of monitor table on each tablet server.'
+            type: int
+          collector_report_method:
+            default_value: 'prometheus'
+            tag: ''
+            desc: 'Which monitor system the metrics reported to. Now supported system: once, prometheus.'
+            type: str
+          collector_simplify_hostname:
+            default_value: 'true'
+            tag: ''
+            desc: 'Whether to use simplify hostname, i.e. the first section of hostname.'
+            type: str
+          disable_core_dumps:
+            default_value: 'true'
+            tag: ''
+            desc: 'Disable core dumps when this process crashes.'
+            type: str
+          kudu_user:
+            default_value: 'sa_cluster'
+            tag: ''
+            desc: 'Allows operating against a Kudu cluster using an identity which differs from the local Unix user on the client.'
+            type: str
+          log_force_fsync_all:
+            default_value: 'false'
+            tag: ''
+            desc: 'Whether the Log/WAL should explicitly call fsync() after each write.'
+            type: str
+          logbuflevel:
+            default_value: '0'
+            tag: ''
+            desc: 'The lowest level of cache log, - 1 means no cache, and 0 means only Google:: info is cached.'
+            type: int
+          max_clock_sync_error_usec:
+            default_value: '100000000'
+            tag: ''
+            desc: 'Maximum allowed clock synchronization error as reported by NTP before the server will abort.'
+            type: int
+          max_log_size:
+            default_value: '20'
+            tag: ''
+            desc: 'Maximum log size (MB).'
+            type: int
+          max_cell_size_bytes:
+            default_value: '262144'
+            tag: ''
+            desc: 'The maximum size of any individual cell in a table. Attempting to store string or binary columns with a size greater than this will result in errors.'
+            type: int
+          minloglevel:
+            default_value: '0'
+            tag: ''
+            desc: 'Min logging level for print.'
+            type: int
+          rpc_authentication:
+            default_value: 'disabled'
+            tag: ''
+            desc: 'Whether to require RPC connections to authenticate.'
+            type: str
+          rpc_encryption:
+            default_value: 'disabled'
+            tag: ''
+            desc: 'Whether to require RPC connections to be encrypted.'
+            type: str
+          superuser_acl:
+            default_value: 'root,sa_cluster,kudu'
+            tag: ''
+            desc: 'The list of usernames to allow as super users, comma-separated.'
+            type: str
+          unlock_unsafe_flags:
+            default_value: 'true'
+            tag: ''
+            desc: 'Unlock flags marked as unsafe. These flags are not guaranteed to be maintained across releases of Kudu, and enable features or behavior known to be unsafe.'
+            type: str
+          user_acl:
+            default_value: '*'
+            tag: ''
+            desc: 'The list of usernames who may access the cluster, comma-separated. A * entry indicates that all authenticated users are allowed.'
+            type: str
+          v:
+            default_value: '0' 
+            tag: ''
+            desc: 'Record the custom log of M < = in all vlog (m).'
+            type: int
+          webserver_certificate_file:
+            default_value: ''
+            tag: ''
+            desc: 'The location of the embedded webserver TLS/SSL certificate file, in PEM format.'
+            type: str
+          webserver_private_key_file:
+            default_value: ''
+            tag: ''
+            desc: 'The full path to the private key used as a counterpart to the public key contained in --webserver_certificate_file.'
+            type: str
+          webserver_private_key_password_cmd:
+            default_value: ''
+            tag: ''
+            desc: 'A Unix command whose output returns the password to decrypt the private key of the webserver certificate pointed to by the --webserver_private_key_file flag.'
+            type: str

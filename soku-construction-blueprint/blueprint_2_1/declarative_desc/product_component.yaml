@@ -1,0 +1,10 @@
+api_version: v1
+kind: platform_component
+metadata:
+  name: soku
+spec:
+  version: 1.0.0.0
+  modules: {}
+  platform_component_artifacts:
+    kudu:
+      version: 1.0.0.0

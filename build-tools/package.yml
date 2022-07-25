@@ -34,3 +34,12 @@ package_modules:
     version: "1.14.2"
     pub:
       - type: dragon
+
+  kudu_guidance:
+    source: local
+    variants:
+      - os_distro: el6
+      - os_distro: el7
+    version: "1.14.2"
+    pub:
+      - type: dragon

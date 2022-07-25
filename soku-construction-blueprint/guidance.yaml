@@ -1,0 +1,13 @@
+api_version: v1
+kind: ms_guidance # 这个种类是mothership guidance的意思，固定不用改
+metadata:
+  name: soku     # 这个是属性标识，固定后也不需要修改
+spec:
+  modules:
+    kudu:
+      command_in_environment:
+        - kudu   # 环境中调用的命令形式
+      connection_info:
+        master_address:
+          desc: 'kudu master 部署信息'
+          type: list
