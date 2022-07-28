@@ -10,6 +10,7 @@ import datetime
 import time
 import traceback
 import socket
+import copy
 from cdh_config_common import CdhConfigCommon
 
 sys.path.append(os.path.join(os.environ['SENSORS_PLATFORM_HOME'], '..', 'armada', 'hyperion'))
@@ -60,16 +61,41 @@ class KuduConfigTool:
                                cloudera_client_conf['cloudera_manager_password'],
                                self.logger)
 
-    def update_config(self, role, key, value, old_common_config_dict, old_role_config_dict, old_role_assign_config_dict):
-        if key in old_role_config_dict or key in old_common_config_dict or key in old_role_assign_config_dict:
-            return False, old_role_config_dict
+    def update_config(self, key, value, old_role_config_dict, old_all_assign_config_dict, config_modified_group_set):
+        '''# 此方法在具体的 role 更新配置时会用到
+params:
+    key: 待更新的key
+    value: 待更新的value
+    old_role_config_dict: 当前配置组角色已存在的配置字典, 非默认值, 也是传出参数, 用于保存待更新的配置
+    old_all_assign_config_dict: 所有配置组(包括 common 和 role) 已存在的配置
+    config_modified_group_set: 用于标志当前相互影响的配置,如果已存在的value非默认值, 则会将此组加到set中, 下次就不用遍历整个list'''
+        if key in old_all_assign_config_dict:
+            return False, old_role_config_dict, config_modified_group_set
+        modified, config_modified_group_set = self.check_mutual_config_need_update(key, old_all_assign_config_dict, config_modified_group_set)
+        if not modified:
+            return False, old_role_config_dict, config_modified_group_set
         old_role_config_dict[key] = value
-        return True, old_role_config_dict
+        return True, old_role_config_dict, config_modified_group_set
+
+    # 有些配置之间是相互存在限制的, 比如 block_cache_capacity_mb 不能超过 memory_limit_hard_bytes * memory_limit_hard_bytes
+    # 把这些相互影响的配置放在一个list里，这里检查一下如果其中一个不是使用的默认值，则不对整个 list 涉及到的配置进行变更
+    def check_mutual_config_need_update(self, check_key, old_all_assign_config_dict, config_modified_group_set):
+        for group, config_list in config_common.MUTUAL_RESTRICT_CONFIG.items():
+            if check_key in config_list:
+                if group in config_modified_group_set:
+                    return False, config_modified_group_set
+                for key in config_list:
+                    if key in old_all_assign_config_dict:
+                        config_modified_group_set.add(group)
+                        return False, config_modified_group_set
+        return True, config_modified_group_set
 
     def check_and_change_cmd_args(self, role, new_config_dict, old_common_config_dict, cloudera_config_setter):
         need_update = False
         setter_path = SETTER_ROLE_PATH[role]
         setter_name = SETTER_ROLE_NAME[role]
+        config_modified_group_set = set()
+        old_common_config_dict_cache = copy.deepcopy(old_common_config_dict)
         if 'KUDU_COMMON' == role:
             old_master_config_dict = self.get_role_config_dict(cloudera_config_setter, 'KUDU_MASTER')
             old_tserver_config_dict = self.get_role_config_dict(cloudera_config_setter, 'KUDU_TSERVER')
@@ -77,11 +103,14 @@ class KuduConfigTool:
                 if key in old_master_config_dict or key in old_tserver_config_dict:
                     self.logger.info('%s: the conf item [ %s ] already exists in role conf, no update'
                                      % (role, key))
+                    continue
                 if len(value) == 0:
                     value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster, self.tserver_random_dirs_count, self.tserver_mem_gb)
                 if key not in old_common_config_dict:
-                    need_update = True
-                    old_common_config_dict[key] = value
+                    flag, config_modified_group_set = self.check_mutual_config_need_update(key, old_common_config_dict_cache, config_modified_group_set)
+                    if flag:
+                        need_update = True
+                        old_common_config_dict[key] = value
                 elif value == old_common_config_dict[key]:
                     self.logger.info('%s: conf (%s: %s) already exists, and the value is the same, no update'
                                      % (role, key, value))
@@ -101,13 +130,17 @@ class KuduConfigTool:
                 if old_role_assign_config_dict.get(setter_name) is not None:
                     del old_role_assign_config_dict[setter_name]
 
-                # 判断配置本身是否存在冲突, 有冲突直接报错, 有相同的删除 group 中的
+                old_all_assign_config_dict = dict(old_role_assign_config_dict, **old_role_config_dict)
+                old_all_assign_config_dict.update(old_common_config_dict_cache)
+
+                # 判断配置本身是否存在冲突, 有冲突打warn日志, 有相同的删除 group 中的
                 old_role_config_dict, need_update = self.check_old_config(role, old_common_config_dict, old_role_config_dict)
                 for (key, value) in new_config_dict.items():
                     if len(value) == 0:
                         value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster, self.tserver_random_dirs_count, self.tserver_mem_gb)
                     # 检查配置项是否已经存在设置过, 设置过则不更新
-                    need_update_value, old_role_config_dict = self.update_config(role, key, value, old_common_config_dict, old_role_config_dict, old_role_assign_config_dict)
+                    need_update_value, old_role_config_dict, config_modified_group_set = self.update_config(
+                        key, value, old_role_config_dict, old_all_assign_config_dict, config_modified_group_set)
                     need_update = need_update_value or need_update
                 if need_update:
                     new_common_configs = '\n'.join('--' + key + '=' + value for key, value in old_role_config_dict.items())

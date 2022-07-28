@@ -30,6 +30,8 @@ class MothershipKuduConfigTool:
         self.is_simplified_cluster = DeployInfo().get_simplified_cluster()
         self.tserver_random_dirs_count = config_common.get_role_random_dirs_count(self.mothership_api, 'kudu_tserver')
         self.tserver_mem_gb = config_common.get_role_mem_gb(self.mothership_api, 'kudu_tserver')
+        # 用来保存会产生相互影响的配置, 标志此组不可更改
+        self.config_modified_group_set = set()
 
     def _check_and_canonicalize_module_name(self, module_name):
         if not module_name:
@@ -39,6 +41,19 @@ class MothershipKuduConfigTool:
         if module_name not in all_module_list:
             raise Exception('invalid module[%s], should be one of %s' % (module_name, all_module_list))
         return module_name
+
+    def check_mutual_config_need_update(self, module, role, check_key):
+        config_tool = MothershipConfigTool(self.mothership_api)
+        for group, config_list in config_common.MUTUAL_RESTRICT_CONFIG.items():
+            if group in self.config_modified_group_set:
+                return False
+            if check_key in config_list:
+                for key in config_list:
+                    for _, _ in config_tool.get_config_from_all_config_group(module, role, key):
+                        self.logger.info('%s config [%s] and [%s] restrict each other, no update')
+                        self.config_modified_group_set.add(group)
+                        return False
+        return True
 
     def _check_and_change_cmd_args(self, role_type, key, value):
         if 'KUDU_MASTER' == role_type:
@@ -64,10 +79,11 @@ class MothershipKuduConfigTool:
             break
         # 配置项需要更新配置
         if need_update:
-            self.logger.info('%s: config (%s) not exist, set to %s' % (role_type, key, value))
-            shell_utils.check_call(
-                'spadmin mothership config set -m kudu -c {} -g {} -n {} -v {}'
-                ' --comment \"update config\" '.format(role, config_group_name, key, value))
+            if self.check_mutual_config_need_update(module, role, key):
+                self.logger.info('%s: config (%s) not exist, set to %s' % (role_type, key, value))
+                shell_utils.check_call(
+                    'spadmin mothership config set -m kudu -c {} -g {} -n {} -v {}'
+                    ' --comment \"update config\" '.format(role, config_group_name, key, value))
         else:
             self.logger.info('%s: config (%s) is conform, no need to reset' % (role_type, key))
 

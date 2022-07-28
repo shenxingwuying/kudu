@@ -118,3 +118,7 @@ MOTHERSHIP_UPDATE_CONFIG = {
     'KUDU_MASTER': MOTHERSHIP_MASTER_CONFIG,
     'KUDU_TSERVER': MOTHERSHIP_TSERVER_CONFIG
 }
+
+MUTUAL_RESTRICT_CONFIG = {
+    'group_0': ['block_cache_capacity_mb', 'memory_limit_hard_bytes'],
+}
