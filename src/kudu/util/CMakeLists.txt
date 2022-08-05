@@ -225,6 +225,7 @@ set(UTIL_SRCS
   rolling_log.cc
   rw_mutex.cc
   rwc_lock.cc
+  seda.cc
   ${SEMAPHORE_CC}
   signal.cc
   slice.cc
@@ -525,6 +526,7 @@ ADD_KUDU_TEST(striped64-test RUN_SERIAL true)
 ADD_KUDU_TEST(subprocess-test)
 ADD_KUDU_TEST(thread-test)
 ADD_KUDU_TEST(threadpool-test)
+ADD_KUDU_TEST(seda-test)
 ADD_KUDU_TEST(throttler-test)
 ADD_KUDU_TEST(trace-test PROCESSORS 4)
 ADD_KUDU_TEST(ttl_cache-test)
