@@ -59,6 +59,7 @@ class KuduServer : public server::ServerBase {
   ThreadPool* tablet_prepare_pool() { return tablet_prepare_pool_.get(); }
   ThreadPool* tablet_apply_pool() { return tablet_apply_pool_.get(); }
   ThreadPool* raft_pool() { return raft_pool_.get(); }
+  ThreadPool* scan_pool() { return scan_pool_.get(); }
   scoped_refptr<AtomicGauge<int32_t>> num_raft_leaders() { return num_raft_leaders_; }
 
  private:
@@ -73,6 +74,9 @@ class KuduServer : public server::ServerBase {
 
   // Thread pool for Raft-related operations, shared between all tablets.
   std::unique_ptr<ThreadPool> raft_pool_;
+
+  // Thread pool for scan, split scan requests from write requests in rpc service threads.
+  std::unique_ptr<ThreadPool> scan_pool_;
 
   // Gauge counting the number of Raft instances that in leaders mode.
   scoped_refptr<AtomicGauge<int32_t>> num_raft_leaders_;

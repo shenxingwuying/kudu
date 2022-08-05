@@ -34,6 +34,7 @@
 #include <boost/intrusive/list_hook.hpp>
 #include <gtest/gtest_prod.h>
 
+#include "kudu/util/seda.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/port.h"
 #include "kudu/gutil/ref_counted.h"
@@ -225,6 +226,7 @@ private:
   std::multimap<MonoTime, SchedulerTask> future_tasks_;
 };
 
+class ThreadPoolToken;
 // Thread pool with a variable number of threads.
 //
 // Tasks submitted directly to the thread pool enter a FIFO queue and are
@@ -270,8 +272,11 @@ class ThreadPool {
   //       require an explicit "abort" notification to exit from the run loop.
   void Shutdown();
 
+  Status Execute(seda::AsyncContext* context);
+
   // Submits a new task.
   Status Submit(std::function<void()> f) WARN_UNUSED_RESULT;
+
 
   // Waits until all the tasks are completed.
   void Wait();
@@ -621,6 +626,7 @@ class ThreadPool {
   DISALLOW_COPY_AND_ASSIGN(ThreadPool);
 };
 
+
 // Entry point for token-based task submission and blocking for a particular
 // thread pool. Tokens can only be created via ThreadPool::NewToken().
 //
@@ -640,6 +646,15 @@ class ThreadPoolToken {
   // Submit a task, execute the task after delay_ms later.
   Status Schedule(std::function<void()> f, int64_t delay_ms) WARN_UNUSED_RESULT;
 
+  static void ThreadFunction(seda::AsyncContext* context) {
+    const std::shared_ptr<seda::AsyncClient>& client = context->client;
+    client->OnStagedEventDriven(context);
+  }
+
+  Status Execute(seda::AsyncContext* context) {
+    // return Submit([&context]() { ThreadFunction(context); });
+    return Submit(std::bind(&ThreadPoolToken::ThreadFunction, context));
+  }
   // Marks the token as unusable for future submissions. Any queued tasks not
   // yet running are destroyed. If tasks are in flight, Shutdown() will wait
   // on their completion before returning.

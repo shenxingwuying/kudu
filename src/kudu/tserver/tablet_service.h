@@ -29,6 +29,7 @@
 #include "kudu/tserver/tserver_service.service.h"
 #include "kudu/util/metrics.h"
 #include "kudu/util/random.h"
+#include "kudu/util/threadpool.h"
 
 namespace google {
 namespace protobuf {
@@ -154,6 +155,8 @@ class TabletServiceImpl : public TabletServerServiceIf {
   virtual void Shutdown() OVERRIDE;
 
  private:
+  friend class AsyncScanner;
+
   Status HandleNewScanRequest(tablet::TabletReplica* tablet_replica,
                               const ScanRequestPB* req,
                               const rpc::RpcContext* rpc_context,
@@ -194,6 +197,8 @@ class TabletServiceImpl : public TabletServerServiceIf {
                                 Timestamp* snap_timestamp);
 
   TabletServer* server_;
+
+  std::unique_ptr<ThreadPoolToken> scan_token_;
 
   // Random generator used to make a decision on the admission of write
   // operations when the apply queue is overloaded.

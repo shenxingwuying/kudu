@@ -40,12 +40,14 @@
 #include "kudu/util/status.h"
 #include "kudu/util/threadpool.h"
 
+DECLARE_int32(rpc_num_service_threads);
 DEFINE_int32(server_thread_pool_max_thread_count, -1,
              "Maximum number of threads to allow in each server-wide thread "
              "pool. If -1, Kudu will automatically calculate this value. It "
              "is an error to use a value of 0.");
 TAG_FLAG(server_thread_pool_max_thread_count, advanced);
 TAG_FLAG(server_thread_pool_max_thread_count, evolving);
+DECLARE_int32(rpc_service_queue_length);
 
 static bool ValidateThreadPoolThreadLimit(const char* /*flagname*/, int32_t value) {
   if (value == 0 || value < -1) {
@@ -169,6 +171,12 @@ Status KuduServer::Init() {
                 .set_trace_metric_prefix("raft")
                 .set_max_threads(server_wide_pool_limit)
                 .Build(&raft_pool_));
+  int scan_thread_num = std::max(1, FLAGS_rpc_num_service_threads / 2 );
+  RETURN_NOT_OK(ThreadPoolBuilder("scan")
+                .set_max_queue_size(scan_thread_num)
+                .set_min_threads(scan_thread_num)
+                .set_max_threads(scan_thread_num)
+                .Build(&scan_pool_));
 
   num_raft_leaders_ = metric_entity_->FindOrCreateGauge(&METRIC_num_raft_leaders, 0);
 
@@ -203,6 +211,9 @@ void KuduServer::Shutdown() {
   }
   if (tablet_prepare_pool_) {
     tablet_prepare_pool_->Shutdown();
+  }
+  if (scan_pool_) {
+    scan_pool_->Shutdown();
   }
   ServerBase::Shutdown();
 }

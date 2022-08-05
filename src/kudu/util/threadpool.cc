@@ -521,6 +521,10 @@ void ThreadPool::ReleaseToken(ThreadPoolToken* t) {
   CHECK_EQ(1, tokens_.erase(t));
 }
 
+Status ThreadPool::Execute(seda::AsyncContext* context) {
+  return tokenless_->Execute(context);
+}
+
 Status ThreadPool::Submit(std::function<void()> f) {
   return DoSubmit(std::move(f), tokenless_.get());
 }
@@ -696,6 +700,7 @@ void ThreadPool::DispatchThread() {
   IdleThread me(&lock_);
 
   while (true) {
+    VLOG(0) << "while true start";
     // Note: Status::Aborted() is used to indicate normal shutdown.
     if (!pool_status_.ok()) {
       VLOG(2) << "DispatchThread exiting: " << pool_status_.ToString();
@@ -703,6 +708,7 @@ void ThreadPool::DispatchThread() {
     }
 
     if (queue_.empty()) {
+      VLOG(0) << "queue_.empty() 1";
       // There's no work to do, let's go idle.
       //
       // Note: if FIFO behavior is desired, it's as simple as changing this to push_back().
@@ -717,9 +723,13 @@ void ThreadPool::DispatchThread() {
         }
       });
       if (permanent) {
+        VLOG(0) << "permanent before";
         me.not_empty.Wait();
+        VLOG(0) << "permanent after";
       } else {
+        VLOG(0) << "permanent else";
         if (!me.not_empty.WaitFor(idle_timeout_)) {
+          VLOG(0) << "permanent else 2";
           // After much investigation, it appears that pthread condition variables have
           // a weird behavior in which they can return ETIMEDOUT from timed_wait even if
           // another thread did in fact signal. Apparently after a timeout there is some
@@ -736,6 +746,7 @@ void ThreadPool::DispatchThread() {
       continue;
     }
 
+    VLOG(0) << "token front start";
     // Get the next token and task to execute.
     ThreadPoolToken* token = queue_.front();
     queue_.pop_front();
@@ -752,7 +763,7 @@ void ThreadPool::DispatchThread() {
     NotifyLoadMeterUnlocked(queue_time);
 
     unique_lock.Unlock();
-
+    VLOG(0) << "unique_lock.Unlock()";
     // Release the reference which was held by the queued item.
     ADOPT_TRACE(task.trace);
     if (task.trace) {
@@ -774,6 +785,7 @@ void ThreadPool::DispatchThread() {
       MicrosecondsInt64 start_wall_us = GetMonoTimeMicros();
       MicrosecondsInt64 start_cpu_us = GetThreadCpuTimeMicros();
 
+      TRACE(Substitute("func queue_time: $0", queue_time.ToString()));
       task.func();
 
       int64_t wall_us = GetMonoTimeMicros() - start_wall_us;

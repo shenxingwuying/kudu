@@ -104,6 +104,7 @@ ADD_EXPORTABLE_LIBRARY(tserver_service_proto
 #########################################
 
 set(TSERVER_SRCS
+  async_scanner.cc
   heartbeater.cc
   mini_tablet_server.cc
   scanner_metrics.cc
