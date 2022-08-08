@@ -70,6 +70,10 @@ class Messenger;
 class ResultTracker;
 } // namespace rpc
 
+namespace tools {
+class TabletCopier;
+} // namespace tools
+
 namespace tablet {
 class AlterSchemaOpState;
 class OpDriver;
@@ -322,6 +326,7 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   }
 
  private:
+  friend class kudu::tools::TabletCopier;
   friend class kudu::AlterTableTest;
   friend class RefCountedThreadSafe<TabletReplica>;
   friend class TabletReplicaTest;
@@ -329,6 +334,8 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   FRIEND_TEST(TabletReplicaTest, TestMRSAnchorPreventsLogGC);
   FRIEND_TEST(TabletReplicaTest, TestDMSAnchorPreventsLogGC);
   FRIEND_TEST(TabletReplicaTest, TestActiveOpPreventsLogGC);
+
+  TabletReplica();
 
   ~TabletReplica();
 

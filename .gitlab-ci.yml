@@ -26,7 +26,7 @@ job ilint:
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
     - make ilint -j32
   tags:
-    - docker
+    - skv-kudu-docker
   only:
     - merge_requests
 
@@ -38,7 +38,7 @@ job tidy:
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
     - make tidy -j32
   tags:
-    - docker
+    - skv-kudu-docker
   only:
     - merge_requests
 
@@ -50,7 +50,7 @@ job iwyu:
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
     - make iwyu -j32
   tags:
-    - docker
+    - skv-kudu-docker
   only:
     - merge_requests
 
@@ -65,7 +65,7 @@ job asan:
     - cd ../..
     - bash check_test.sh
   tags:
-    - docker
+    - skv-kudu-docker
   only:
     - merge_requests
 
@@ -80,7 +80,7 @@ job debug:
     - cd ../..
     - bash check_test.sh
   tags:
-    - docker
+    - skv-kudu-docker
   only:
     - merge_requests
 
@@ -95,7 +95,7 @@ job tsan:
     - cd ../..
     - bash -x check_test.sh
   tags:
-    - docker
+    - skv-kudu-docker
   only:
     - merge_requests
 
