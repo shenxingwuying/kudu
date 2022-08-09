@@ -54,7 +54,7 @@ ScanConfiguration::ScanConfiguration(KuduTable* table)
       client_projection_(KuduSchema::FromSchema(*table->schema().schema_)),
       has_batch_size_bytes_(false),
       batch_size_bytes_(0),
-      selection_(KuduClient::CLOSEST_REPLICA),
+      selection_(KuduClient::LEADER_ONLY),
       read_mode_(KuduScanner::READ_LATEST),
       is_fault_tolerant_(false),
       start_timestamp_(kNoTimestamp),
