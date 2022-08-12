@@ -46,6 +46,7 @@
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/port.h"
 #include "kudu/gutil/stl_util.h"
+#include "kudu/gutil/strings/numbers.h"
 #include "kudu/gutil/strings/split.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/util/bitmap.h"
@@ -88,6 +89,8 @@ DECLARE_string(columns);
 DEFINE_int32(create_table_replication_factor, -1,
              "The replication factor of the destination table if the table will be created. "
              "By default, the replication factor of source table will be used.");
+DEFINE_string(create_table_hash_bucket_nums, "",
+              "The number of hash buckets in each hash dimension seperated by comma");
 DEFINE_bool(fill_cache, true,
             "Whether to fill block cache when scanning.");
 DECLARE_int32(num_threads);
@@ -393,12 +396,53 @@ Status CreateDstTableIfNeeded(const client::sp::shared_ptr<KuduTable>& src_table
       .schema(&dst_table_schema)
       .num_replicas(num_replicas);
 
-  // Add hash partition schemas.
-  for (const auto& hash_partition_schema : partition_schema.hash_partition_schemas()) {
-    auto hash_columns = convert_column_ids_to_names(hash_partition_schema.column_ids);
+  // Add hash partition schema.
+  vector<int> hash_bucket_nums;
+  if (!partition_schema.hash_partition_schemas().empty()) {
+    vector<string> hash_bucket_nums_str = Split(FLAGS_create_table_hash_bucket_nums,
+                                                ",", strings::SkipEmpty());
+    // FLAGS_create_table_hash_bucket_nums is not defined, set it to -1 defaultly.
+    if (hash_bucket_nums_str.empty()) {
+      for (int i = 0; i < partition_schema.hash_partition_schemas().size(); i++) {
+        hash_bucket_nums.push_back(-1);
+      }
+    } else {
+      // If the --create_table_hash_bucket_nums flag is set, the number
+      // of comma-separated elements must be equal to the number of hash schema dimensions.
+      if (partition_schema.hash_partition_schemas().size() != hash_bucket_nums_str.size()) {
+        return Status::InvalidArgument("The count of hash bucket numbers must be equal to the "
+                                       "number of hash schema dimensions.");
+      }
+      for (int i = 0; i < hash_bucket_nums_str.size(); i++) {
+        int bucket_num = 0;
+        bool is_number = safe_strto32(hash_bucket_nums_str[i], &bucket_num);
+        if (!is_number) {
+          return Status::InvalidArgument(Substitute("'$0': cannot parse the number "
+                                                    "of hash buckets.",
+                                                    hash_bucket_nums_str[i]));
+        }
+        if (bucket_num < 2) {
+          return Status::InvalidArgument("The number of hash buckets must not be less than 2.");
+        }
+        hash_bucket_nums.push_back(bucket_num);
+      }
+    }
+  }
+
+  if (partition_schema.hash_partition_schemas().empty() &&
+      !FLAGS_create_table_hash_bucket_nums.empty()) {
+    return Status::InvalidArgument("There are no hash partitions defined in this table.");
+  }
+
+  int i = 0;
+  for (const auto& hash_dimension : partition_schema.hash_partition_schemas()) {
+    int num_buckets = hash_bucket_nums[i] != -1 ? hash_bucket_nums[i] :
+                                                  hash_dimension.num_buckets;
+    auto hash_columns = convert_column_ids_to_names(hash_dimension.column_ids);
     table_creator->add_hash_partitions(hash_columns,
-                                       hash_partition_schema.num_buckets,
-                                       hash_partition_schema.seed);
+                                       num_buckets,
+                                       hash_dimension.seed);
+    i++;
   }
 
   // Add range partition schema.
