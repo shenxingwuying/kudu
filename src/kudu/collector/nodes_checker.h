@@ -54,6 +54,14 @@ class NodesChecker : public RefCounted<NodesChecker> {
   std::string GetFirstMaster();
   std::string GetFirstTServer();
 
+  enum class TableReplicationFactorHealthStatus {
+    // The table replication factor is healthy.
+    HEALTHY,
+
+    // The table replication factor is unhealthy.
+    UNHEALTHY,
+  };
+
  private:
   friend class RefCounted<NodesChecker>;
 

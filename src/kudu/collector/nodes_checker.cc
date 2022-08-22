@@ -17,6 +17,8 @@
 
 #include "kudu/collector/nodes_checker.h"
 
+#include <stddef.h>
+
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -211,6 +213,19 @@ Status NodesChecker::UpdateServers(const string& role) {
   return Status::OK();
 }
 
+static const size_t kSingleNodeClusterTserverNodeNum = 1;
+static const size_t kSingleNodeClusterTabletDefaultReplicaNum = 1;
+// 集群版 replication_factor >=3 都是合理的
+static const size_t kMutilNodeClusterTabletDefaultReplicaNum = 3;
+
+static size_t GetDefaultTabletReplicaNum(const uint32_t tserver_num) {
+  bool is_single_node_cluster = tserver_num == kSingleNodeClusterTserverNodeNum;
+  size_t min_tablet_replica_num = is_single_node_cluster ?
+      kSingleNodeClusterTabletDefaultReplicaNum : kMutilNodeClusterTabletDefaultReplicaNum;
+
+  return min_tablet_replica_num;
+}
+
 Status NodesChecker::CheckNodes() {
   vector<string> args = {
     "cluster",
@@ -280,6 +295,7 @@ Status NodesChecker::ReportNodesMetrics(const string& data) {
 
   // Tables health info.
   uint32_t health_table_count = 0;
+  uint32_t health_replication_factor_table_count = 0;
   vector<const Value*> tables;
   s = r.ExtractObjectArray(ksck, "table_summaries", &tables);
   CHECK(s.ok() || s.IsNotFound());
@@ -289,6 +305,12 @@ Status NodesChecker::ReportNodesMetrics(const string& data) {
             "(0: HEALTHY, 1: RECOVERING, 2: UNDER_REPLICATED, "
             "3: UNAVAILABLE, 4: CONSENSUS_MISMATCH)")
       .Register(PrometheusReporter::instance()->registry());
+  auto& table_replication_factor_health = prometheus::BuildGauge()
+      .Name("table_replication_factor_health")
+      .Help("Kudu table replication factor health status "
+            "(0: HEALTHY, 1: UNHEALTHY)")
+      .Register(PrometheusReporter::instance()->registry());
+  size_t default_tablet_replica_num = GetDefaultTabletReplicaNum(tservers.size());
   if (s.ok()) {
     for (const Value* table : tables) {
       string name;
@@ -302,6 +324,21 @@ Status NodesChecker::ReportNodesMetrics(const string& data) {
 
       if (health_status == HealthCheckResult::HEALTHY) {
         health_table_count += 1;
+      }
+
+      int32_t replication_factor = 0;
+      CHECK_OK(r.ExtractInt32(table, "replication_factor", &replication_factor));
+
+      TableReplicationFactorHealthStatus replication_health =
+          replication_factor >= default_tablet_replica_num ?
+          TableReplicationFactorHealthStatus::HEALTHY :
+          TableReplicationFactorHealthStatus::UNHEALTHY;
+
+      auto& metric_replica = table_replication_factor_health.Add({{"table_replication", name}});
+      metric_replica.Set(static_cast<int64_t>(replication_health));
+
+      if (replication_health == TableReplicationFactorHealthStatus::HEALTHY) {
+        health_replication_factor_table_count += 1;
       }
     }
     TRACE(Substitute("Tables health info reported, count $0", tables.size()));
@@ -318,6 +355,19 @@ Status NodesChecker::ReportNodesMetrics(const string& data) {
     metric.Set(static_cast<double>(health_table_count) / tables.size());
 
     TRACE("Healthy table ratio reported");
+  }
+
+  // Healthy table replication proportion.
+  if (!tables.empty()) {
+    auto& table_replication_factor_health = prometheus::BuildGauge()
+        .Name("kudu_healthy_table_replication_factor_proportion")
+        .Help("Kudu health table replication factor proportion, range in [0.0, 1.0]")
+        .Register(PrometheusReporter::instance()->registry());
+
+    auto& metric = table_replication_factor_health.Add({});
+    metric.Set(static_cast<double>(health_replication_factor_table_count) / tables.size());
+
+    TRACE("Healthy tablet ratio reported");
   }
 
   // Count summaries.
