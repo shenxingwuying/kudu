@@ -272,7 +272,7 @@ def pre_scale_down_check(context):
             raise Exception('after handle, kudu alive tservers num will littler than 3!')
         check_kudu_table_rf(context, ksck_output)
         status = check_host_decomission(context)
-        if status != DECOMMISSION_SUCCESS:
+        if status == DECOMMISSION_IN_PROGRESS:
             raise Exception('please decommission tserver %s first! current status %s' % (hosts, status))
     return f'{logger} {info}'
 

@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include <stdlib.h>
-
 #include <algorithm>
 #include <cstdint>
 #include <functional>
@@ -40,11 +38,11 @@
 
 #include "kudu/client/client.h"
 #include "kudu/client/replica_controller-internal.h"
-#include "kudu/client/table_alterer-internal.h"
 #include "kudu/client/scan_batch.h"
 #include "kudu/client/scan_predicate.h"
 #include "kudu/client/schema.h"
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
+#include "kudu/client/table_alterer-internal.h"
 #include "kudu/client/value.h"
 #include "kudu/common/partial_row.h"
 #include "kudu/common/partition.h"

@@ -172,7 +172,7 @@ class KuduBase(Script):
         if not os.path.exists(self._pid_file()):
             Logger.info("no such pid file, kudu-{role}".format(role=self.role))
             raise ComponentIsNotRunning()
-        durability_pid = sudo.read_file(self._pid_file())
+        durability_pid = sudo.read_file(self._pid_file()).strip()
         shell_cmd = "ps -A -o pid,cmd | awk '{if(NF>=2)print $1,$2}'"
         t_result = subprocess.Popen(shell_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         result = t_result.stdout.read().rstrip()

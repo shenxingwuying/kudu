@@ -47,8 +47,6 @@
 #include "kudu/master/master_runner.h"
 #include "kudu/rpc/response_callback.h"
 #include "kudu/rpc/rpc_controller.h"
-#include "kudu/tools/ksck.h"
-#include "kudu/tools/ksck_remote.h"
 #include "kudu/tools/master_rebuilder.h"
 #include "kudu/tools/tool_action.h"
 #include "kudu/tools/tool_action_common.h"
