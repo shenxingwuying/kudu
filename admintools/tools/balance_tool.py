@@ -8,6 +8,7 @@ import os
 import sys
 import subprocess
 import time
+import threading
 
 from collections import defaultdict
 
@@ -128,11 +129,18 @@ soku_tool banlance start # 开始balance
             else:
                 self.logger.info('ts %s behinds %f' % (tserver, skew_value))
 
-    def dfs(self, tablet_tuple_list, ops, leader_map, index):
+    def dfs(self, tablet_tuple_list, ops, leader_map, index, cur_score):
+        # 搜索任务超时，需要结束当前任务
+        global timeout_signal
+        if timeout_signal == 1:
+            return
         if self.reached:
             return
         if index >= len(tablet_tuple_list):
             score = self.eval_score(leader_map)
+            # 不能比当前拓扑结构的分数还高
+            if score >= cur_score:
+                return
             if score < self.best_op[0]:
                 self.best_op[0], self.best_op[1], self.best_op[2] = score, ops[::], copy.deepcopy(leader_map)
                 if score < 1:
@@ -143,7 +151,7 @@ soku_tool banlance start # 开始balance
             leader_map[ts].append(tablet_id)
             if leader != ts:
                 ops.append((tablet_id, leader, ts))
-            self.dfs(tablet_tuple_list, ops[::], leader_map, index + 1)
+            self.dfs(tablet_tuple_list, ops[::], leader_map, index + 1, cur_score)
             if leader != ts:
                 ops.pop()
             leader_map[ts].remove(tablet_id)
@@ -162,8 +170,14 @@ soku_tool banlance start # 开始balance
         leader_map = defaultdict(list)
         for tserver in tserver_leader_tablets_map.keys():
             leader_map[tserver]
-        self.dfs(tablet_tuple_list, [], leader_map, 0)
-
+        self.reached = False
+        self.dfs(tablet_tuple_list, [], leader_map, 0, score)
+        # 搜索任务执行完，需要取消计时器任务
+        global timeout_signal
+        timeout_signal = 2
+        if len(self.best_op[1]) <= 0:
+            self.logger.info("Can not found a solution.")
+            return 0
         self.logger.info("Migrate solution is as follow:")
         for op in self.best_op[1]:
             tablet, from_tserver, to_tserver = op
@@ -195,3 +209,48 @@ soku_tool banlance start # 开始balance
         except Exception:
             self.logger.info('cluster not rebalance done, waiting')
             return False
+
+def timeout_thread():
+    global timeout_signal
+    i = 0
+    while i < 600:
+        time.sleep(1)
+        if timeout_signal == 2:
+            return
+        i = i + 1
+    timeout_signal = 1
+    return
+
+def run(master_address, table_str):
+    BalanceTool().solution(master_address, table_str)
+    global timeout_signal
+    timeout_signal = 2
+    return
+
+def balance_table(master_addr, table):
+    threads = []
+    threads.append(threading.Thread(target=timeout_thread))
+    threads.append(threading.Thread(target=run, args=[master_addr, table]))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return
+
+if __name__ == '__main__':
+    # 获取master地址
+    master_addresses = ConfigManager().get_client_conf("sp", "kudu")['master_address']
+    # 获取所有的表
+    cmd = 'sp_kudu table list {master_addresses}'.format(master_addresses=master_addresses)
+    res = BalanceTool().run_cmd(cmd)
+    tables_list = res['stdout'].strip().split('\n')
+    for table in tables_list:
+        print("Begin to rebalance table: %s" % table)
+        # 用于线程间通信：
+        # 0表示没有超时，搜索任务可以继续执行，
+        # 1表示超时，搜索任务需要取消，
+        # 2表示搜索任务完成，计时器任务需要关闭
+        global timeout_signal
+        timeout_signal = 0
+        balance_table(master_addresses, table)
+    sys.exit(1)
