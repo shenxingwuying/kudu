@@ -318,6 +318,8 @@ class WritablePBContainerFile {
   // Get current offset of underlying file.
   uint64_t Offset() const;
 
+  void SetOffset(uint64_t offset);
+
   // Closes the container.
   //
   // Not thread-safe.
@@ -438,6 +440,8 @@ class ReadablePBContainerFile {
   // Return current read offset.
   // File must be open.
   uint64_t offset() const;
+
+  void SetOffset(uint64_t offset);
 
  private:
   FileState state_;

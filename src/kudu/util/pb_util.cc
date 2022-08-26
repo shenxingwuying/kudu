@@ -777,6 +777,12 @@ uint64_t WritablePBContainerFile::Offset() const {
   return offset_;
 }
 
+void WritablePBContainerFile::SetOffset(uint64_t offset) {
+  DCHECK_EQ(FileState::OPEN, state_);
+  DCHECK_LE(offset_, offset);
+  offset_ = offset;
+}
+
 Status WritablePBContainerFile::Close() {
   if (state_ != FileState::CLOSED) {
     state_ = FileState::CLOSED;
@@ -1040,6 +1046,12 @@ int ReadablePBContainerFile::version() const {
 uint64_t ReadablePBContainerFile::offset() const {
   DCHECK_EQ(FileState::OPEN, state_);
   return offset_;
+}
+
+void ReadablePBContainerFile::SetOffset(uint64_t offset) {
+  DCHECK_EQ(FileState::OPEN, state_);
+  DCHECK_LE(offset_, offset);
+  offset_ = offset;
 }
 
 Status ReadPBContainerFromPath(Env* env, const std::string& path, Message* msg) {

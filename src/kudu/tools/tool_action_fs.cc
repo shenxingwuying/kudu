@@ -18,12 +18,15 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -32,6 +35,7 @@
 #include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
+#include <rapidjson/document.h>
 
 #include "kudu/cfile/cfile.pb.h"
 #include "kudu/cfile/cfile_reader.h"
@@ -49,6 +53,7 @@
 #include "kudu/fs/fs.pb.h"
 #include "kudu/fs/fs_manager.h"
 #include "kudu/fs/fs_report.h"
+#include "kudu/fs/log_block_manager.h"
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/human_readable.h"
@@ -70,18 +75,23 @@
 #include "kudu/util/compression/compression.pb.h"
 #include "kudu/util/env.h"
 #include "kudu/util/faststring.h"
+#include "kudu/util/jsonreader.h"
 #include "kudu/util/memory/arena.h"
 #include "kudu/util/pb_util.h"
+#include "kudu/util/scoped_cleanup.h"
 #include "kudu/util/slice.h"
 #include "kudu/util/status.h"
 #include "kudu/util/stopwatch.h"
 #include "kudu/util/string_case.h"
+#include "kudu/util/subprocess.h"
+#include "kudu/util/threadpool.h"
 
 DECLARE_bool(force);
 DECLARE_bool(print_meta);
 DECLARE_int32(log_container_sample_count);
 DECLARE_string(columns);
 DECLARE_string(format);
+DECLARE_int32(num_threads);
 
 DEFINE_bool(print_rows, true,
             "Print each row in the CFile");
@@ -96,6 +106,15 @@ DEFINE_string(table_id, "",
 DECLARE_string(table_name);
 DEFINE_string(tablet_id, "",
               "Restrict output to a specific tablet");
+DEFINE_string(metadata_op_type, "print",
+              "Operation type of metadata. The possible value is: print, compact, merge");
+static bool ValidateMetadataOpType(const char* /*flagname*/, const std::string& value) {
+  if (value == "print" || value == "compact" || value == "merge") {
+    return true;
+  }
+  return false;
+}
+DEFINE_validator(metadata_op_type, &ValidateMetadataOpType);
 DEFINE_int64(rowset_id, -1,
              "Restrict output to a specific rowset");
 DEFINE_int32(column_id, -1,
@@ -127,15 +146,21 @@ using cfile::CFileIterator;
 using cfile::CFileReader;
 using cfile::ReaderOptions;
 using fs::BlockDeletionTransaction;
+using fs::Dir;
 using fs::UpdateInstanceBehavior;
 using fs::FsReport;
+using fs::LogBlockManager;
 using fs::ReadableBlock;
+using rapidjson::Value;
+using std::atomic;
 using std::cout;
 using std::endl;
+using std::set;
 using std::shared_ptr;
 using std::string;
 using std::unique_ptr;
 using std::unordered_map;
+using std::unordered_set;
 using std::vector;
 using strings::Substitute;
 using tablet::RowSetMetadata;
@@ -143,6 +168,10 @@ using tablet::TabletDataState;
 using tablet::TabletMetadata;
 
 namespace {
+
+const char* kMetadataCompactOp = "compact";
+const char* kMetadataMergeOp = "merge";
+const char* kMetadataPrintOp = "print";
 
 Status Check(const RunnerContext& /*context*/) {
   FsManagerOpts fs_opts;
@@ -940,6 +969,131 @@ Status List(const RunnerContext& /*context*/) {
   }
   return table.PrintTo(cout);
 }
+
+Status CompactMetaData(const RunnerContext& context) {
+  if (FLAGS_metadata_op_type != kMetadataMergeOp) {
+    // 判断当前kudu tool的版本，版本必须不高于 1.12.
+    const string cmd = "kudu tserver get_flags localhost:7050 "
+                       "-flags=log_container_metadata_runtime_compact --format=json";
+    vector<string> argv = strings::Split(cmd, " ", strings::SkipEmpty());
+    string stderr, stdout;
+    RETURN_NOT_OK(Subprocess::Call(argv, "" /* stdin */, &stdout, &stderr));
+    JsonReader r(stdout);
+    RETURN_NOT_OK(r.Init());
+    vector<const Value*> entities;
+    RETURN_NOT_OK(r.ExtractObjectArray(r.root(), nullptr, &entities));
+    if (entities.size() >= 1) {
+      return Status::RuntimeError("Kudu in this version can compact medatada in runtime.");
+    }
+  }
+  // 通过文件锁的方式，实现多进程安全.
+  Env* env = Env::Default();
+  const string& filename = "/tmp/kudu_tserver-lbm-metadata-instance.lock";
+  FileLock* file_lock;
+  RETURN_NOT_OK(env->LockFile(filename, &file_lock));
+  KUDU_RETURN_NOT_OK_PREPEND(env->LockFile(filename, &file_lock),
+                             "Could not lock instance file. Make sure that "
+                             "this tool is not already running.");
+  auto unlock = MakeScopedCleanup([&]() {
+    env->UnlockFile(file_lock);
+  });
+
+  // 只读模式打开fs manager.
+  FsManagerOpts fs_opts;
+  if (FLAGS_metadata_op_type == kMetadataMergeOp) {
+    fs_opts.read_only = false;
+  } else {
+    fs_opts.read_only = true;
+  }
+  fs_opts.skip_block_manager = true;
+  fs_opts.block_manager_type = "log";
+  fs_opts.update_instances = fs::UpdateInstanceBehavior::DONT_UPDATE;
+  FsManager fs_manager(env, std::move(fs_opts));
+  RETURN_NOT_OK(fs_manager.Open());
+
+  // Create a thread pool to compact or merge containers.
+  unique_ptr<ThreadPool> pool;
+  RETURN_NOT_OK(ThreadPoolBuilder("metadata-compact-pool")
+                .set_max_threads(FLAGS_num_threads)
+                .Build(&pool));
+
+  atomic<uint64_t> total_blocks = 0;
+  atomic<uint64_t> total_live_blocks = 0;
+  uint64_t total_containers = 0;
+  atomic<bool> seen_fatal_error = false;
+
+  // 遍历所有的container，分别对每个container的metadata进行compact.
+  for (const unique_ptr<Dir>& dd : fs_manager.dd_manager()->dirs()) {
+    if (seen_fatal_error.load()) {
+      break;
+    }
+    unordered_set<string> container_names;
+    Status s = LogBlockManager::GetContainerNames(env, dd.get()->dir(), &container_names);
+    if (!s.ok()) {
+      WARN_NOT_OK(s, Substitute("Can not fetch container names of disk $0", dd->dir()));
+      continue;
+    }
+    total_containers += container_names.size();
+    for (const string& container_name : container_names) {
+      if (seen_fatal_error.load()) {
+        break;
+      }
+      RETURN_NOT_OK(pool->Submit([container_name, &total_blocks, &total_live_blocks,
+                                  &seen_fatal_error, &dd, &env]() {
+        if (seen_fatal_error.load()) {
+          return;
+        }
+        uint64_t live_block_num = 0;
+        Status s;
+        if (FLAGS_metadata_op_type == kMetadataMergeOp) {
+          s = LogBlockManager::MergeLowBlockContainer(env,
+                                                      dd.get(),
+                                                      container_name);
+          LOG(INFO) << "Finish to merge container: " << container_name
+                    << ", result: " << s.ToString();
+        } else if (FLAGS_metadata_op_type == kMetadataCompactOp) {
+          s = LogBlockManager::CompactLowBlockContainer(env, dd.get(),
+                                                        container_name,
+                                                        &live_block_num);
+          LOG(INFO) << "Finish to compact container: " << container_name
+                    << ", live block count: " << live_block_num
+                    << ", result: " << s.ToString();
+        } else {
+          DCHECK_EQ(kMetadataPrintOp, FLAGS_metadata_op_type);
+          uint64_t total_block_num = 0;
+          s = LogBlockManager::PrintLowBlockContainer(env, dd.get(),
+                                                      container_name,
+                                                      &live_block_num,
+                                                      &total_block_num);
+          LOG(INFO) << "Finish to print container: " << container_name
+                    << ", live block count: " << live_block_num
+                    << ", total block count: " << total_block_num
+                    << ", result: " << s.ToString();
+          total_blocks.fetch_add(total_block_num);
+          total_live_blocks.fetch_add(live_block_num);
+        }
+        if (!s.ok()) {
+          WARN_NOT_OK(s, "Container handle failed");
+          bool expected_value = false;
+          seen_fatal_error.compare_exchange_strong(expected_value, true);
+        }
+      }));
+    }
+  }
+  pool->Wait();
+  if (FLAGS_metadata_op_type == kMetadataPrintOp) {
+    LOG(INFO) << "Total containers: " << total_containers
+              << ", total blocks: " << total_blocks
+              << ", total live blocks: " << total_live_blocks;
+  }
+  if (seen_fatal_error.load()) {
+    LOG(INFO) << "Operation finished, some tasks failed.";
+  } else {
+    LOG(INFO) << "Operation finished, all tasks succeed.";
+  }
+
+  return Status::OK();
+}
 } // anonymous namespace
 
 static unique_ptr<Mode> BuildFsDumpMode() {
@@ -1079,6 +1233,16 @@ unique_ptr<Mode> BuildFsMode() {
       .AddOptionalParameter("h")
       .Build();
 
+  unique_ptr<Action> compact_metadata =
+      ActionBuilder("compact_metadata", &CompactMetaData)
+      .Description("Compact the metadata file of all log block containers")
+      .AddOptionalParameter("fs_data_dirs")
+      .AddOptionalParameter("fs_metadata_dir")
+      .AddOptionalParameter("fs_wal_dir")
+      .AddOptionalParameter("metadata_op_type")
+      .AddOptionalParameter("num_threads")
+      .Build();
+
   return ModeBuilder("fs")
       .Description("Operate on a local Kudu filesystem")
       .AddMode(BuildFsDumpMode())
@@ -1087,6 +1251,7 @@ unique_ptr<Mode> BuildFsMode() {
       .AddAction(std::move(list))
       .AddAction(std::move(sample))
       .AddAction(std::move(update))
+      .AddAction(std::move(compact_metadata))
       .Build();
 }
 

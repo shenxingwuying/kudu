@@ -184,6 +184,9 @@ class LogBlockManager : public BlockManager {
  public:
   static const char* kContainerMetadataFileSuffix;
   static const char* kContainerDataFileSuffix;
+  static const char* kContainerCompactedFileSuffix;
+  static const char* kContainerOffsetFileSuffix;
+  static const char* kContainerBackupFileSuffix;
 
   // Note: all objects passed as pointers should remain alive for the lifetime
   // of the block manager.
@@ -215,6 +218,22 @@ class LogBlockManager : public BlockManager {
 
   FsErrorManager* error_manager() override { return error_manager_; }
 
+  DataDirManager* dd_manager() { return dd_manager_; }
+
+  static Status GetContainerNames(Env* env, const std::string& data_path,
+                                  std::unordered_set<std::string>* container_names);
+
+  static Status CompactLowBlockContainer(Env* env, Dir* dir,
+                                         const std::string& container_name,
+                                         uint64_t* live_block_num);
+  static Status PrintLowBlockContainer(Env* env, Dir* dir,
+                                       const std::string& container_name,
+                                       uint64_t* live_block_num,
+                                       uint64_t* total_block_num);
+
+  static Status MergeLowBlockContainer(Env* env, Dir* dir,
+                                       const std::string& container_name);
+
  private:
   FRIEND_TEST(LogBlockManagerTest, TestAbortBlock);
   FRIEND_TEST(LogBlockManagerTest, TestCloseFinalizedBlock);
@@ -227,6 +246,7 @@ class LogBlockManager : public BlockManager {
   FRIEND_TEST(LogBlockManagerTest, TestBumpBlockIds);
   FRIEND_TEST(LogBlockManagerTest, TestReuseBlockIds);
   FRIEND_TEST(LogBlockManagerTest, TestFailMultipleTransactionsPerContainer);
+  FRIEND_TEST(LogBlockManagerTest, TestCompactMetadata);
 
   friend class internal::LogBlockContainer;
   friend class internal::LogBlockDeletionTransaction;
@@ -363,6 +383,12 @@ class LogBlockManager : public BlockManager {
   Status RewriteMetadataFile(const internal::LogBlockContainer& container,
                              const std::vector<BlockRecordPB>& records,
                              int64_t* file_bytes_delta);
+  static Status GenerateCompactedFile(Env* env, Dir* dir,
+                                      const std::string& container_name,
+                                      const std::vector<BlockRecordPB>& records);
+  static Status GenerateOffsetFile(Env* env, Dir* dir,
+                                   const std::string& container_name,
+                                   uint64_t offset);
 
   // Opens a particular data directory belonging to the block manager. The
   // results of consistency checking are written to 'results'.

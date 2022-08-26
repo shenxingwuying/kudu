@@ -1245,6 +1245,74 @@ TEST_F(LogBlockManagerTest, TestContainerBlockLimitingByMetadataSize) {
   NO_FATALS(AssertNumContainers(4));
 }
 
+TEST_F(LogBlockManagerTest, TestCompactMetadata) {
+  const int kNumBlocks = 2000;
+  const double kLiveBlockRatio = 0.1;
+
+  // Creates and deletes some blocks.
+  auto create_and_delete_blocks = [&]() {
+    vector<BlockId> ids;
+    // Creates 'kNumBlocks' blocks.
+    for (int i = 0; i < kNumBlocks; i++) {
+      unique_ptr<WritableBlock> block;
+      RETURN_NOT_OK(bm_->CreateBlock(test_block_opts_, &block));
+      RETURN_NOT_OK(block->Append("aaaa"));
+      RETURN_NOT_OK(block->Close());
+      ids.push_back(block->id());
+    }
+
+    // Deletes 'kNumBlocks * (1 - kLiveBlockRatio)' blocks.
+    shared_ptr<BlockDeletionTransaction> deletion_transaction =
+        bm_->NewDeletionTransaction();
+    std::mt19937 gen(SeedRandom());
+    std::shuffle(ids.begin(), ids.end(), gen);
+    int i = 0;
+    for (const auto& id : ids) {
+      i++;
+      if (i <= kNumBlocks * kLiveBlockRatio) {
+        continue;
+      }
+      deletion_transaction->AddDeletedBlock(id);
+    }
+    vector<BlockId> deleted;
+    RETURN_NOT_OK(deletion_transaction->CommitDeletedBlocks(&deleted));
+
+    return Status::OK();
+  };
+
+  FLAGS_log_container_metadata_runtime_compact = false;
+  FLAGS_log_container_metadata_max_size = 1024 * 1024;
+  NO_FATALS(create_and_delete_blocks());
+  string container_name;
+  GetOnlyContainer(&container_name);
+  string container_id;
+  ASSERT_OK(ReopenBlockManager());
+  ASSERT_EQ(1, bm_->dd_manager()->dirs().size());
+  const unique_ptr<Dir>& dir = bm_->dd_manager()->dirs()[0];
+  TryStripPrefixString(
+        container_name, dir->dir()+"/", &container_id);
+  uint64_t live_block_num = 0;
+  LogBlockManager::CompactLowBlockContainer(bm_->env(), dir.get(),
+                                            container_id, &live_block_num);
+  ASSERT_EQ(kNumBlocks * kLiveBlockRatio, live_block_num);
+  string compacted_file = container_name + LogBlockManager::kContainerCompactedFileSuffix;
+  string offset_file = container_name + LogBlockManager::kContainerOffsetFileSuffix;
+  ASSERT_TRUE(bm_->env()->FileExists(compacted_file));
+  ASSERT_TRUE(bm_->env()->FileExists(offset_file));
+
+  NO_FATALS(create_and_delete_blocks());
+  LogBlockManager::MergeLowBlockContainer(bm_->env(), dir.get(), container_id);
+  string backup_file = container_name + LogBlockManager::kContainerMetadataFileSuffix
+                       + LogBlockManager::kContainerBackupFileSuffix;
+
+  ASSERT_TRUE(bm_->env()->FileExists(backup_file));
+  ASSERT_TRUE(!bm_->env()->FileExists(compacted_file));
+  ASSERT_TRUE(!bm_->env()->FileExists(offset_file));
+  FsReport report;
+  ASSERT_OK(ReopenBlockManager(nullptr, &report));
+  ASSERT_EQ(2*live_block_num, report.stats.live_block_count);
+}
+
 TEST_F(LogBlockManagerTest, TestContainerBlockLimitingByMetadataSizeWithCompaction) {
   const int kNumBlocks = 2000;
   const int kNumThreads = 10;

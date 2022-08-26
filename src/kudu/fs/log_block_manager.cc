@@ -47,6 +47,7 @@
 #include "kudu/fs/fs.pb.h"
 #include "kudu/fs/fs_report.h"
 #include "kudu/gutil/casts.h"
+#include "kudu/gutil/integral_types.h"
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/port.h"
 #include "kudu/gutil/strings/numbers.h"
@@ -58,6 +59,7 @@
 #include "kudu/util/alignment.h"
 #include "kudu/util/array_view.h"
 #include "kudu/util/env.h"
+#include "kudu/util/faststring.h"
 #include "kudu/util/fault_injection.h"
 #include "kudu/util/file_cache.h"
 #include "kudu/util/flag_tags.h"
@@ -195,6 +197,7 @@ namespace fs {
 
 using internal::LogBlock;
 using internal::LogBlockContainer;
+using internal::LogBlockContainerLoadResult;
 using internal::LogBlockDeletionTransaction;
 using internal::LogWritableBlock;
 using pb_util::ReadablePBContainerFile;
@@ -530,6 +533,13 @@ class LogBlockContainer: public RefCountedThreadSafe<LogBlockContainer> {
       uint64_t* max_block_id,
       ProcessRecordType type);
 
+  static Status ProcessRecordsAndGetOffset(
+      Env* env,
+      const string& metadata_path,
+      LogBlockManager::BlockRecordMap* live_block_records,
+      uint64_t* total_blocks,
+      uint64_t* offset);
+
   // Updates internal bookkeeping state to reflect the creation of a block.
   void BlockCreated(const LogBlockRefPtr& block);
 
@@ -706,6 +716,11 @@ class LogBlockContainer: public RefCountedThreadSafe<LogBlockContainer> {
       uint64_t* data_file_size,
       uint64_t* max_block_id,
       ProcessRecordType type);
+
+  static Status ProcessRecord(
+              BlockRecordPB* record,
+              LogBlockManager::BlockRecordMap* live_block_records,
+              uint64_t* total_blocks);
 
   // Updates this container data file's position based on the offset and length
   // of a block, marking this container as full if needed. Should only be called
@@ -1045,7 +1060,6 @@ Status LogBlockContainer::CheckContainerFiles(LogBlockManager* block_manager,
     s_meta = s_meta.CloneAndPrepend("unable to determine metadata file size");
     RETURN_NOT_OK_CONTAINER_DISK_FAILURE(s_meta);
   }
-
   // Check that both the metadata and data files exist and have valid lengths.
   // This covers a commonly seen case at startup, where the previous incarnation
   // of the server crashed due to "too many open files" just as it was trying
@@ -1162,6 +1176,39 @@ Status LogBlockContainer::ProcessRecords(
   return read_status;
 }
 
+Status LogBlockContainer::ProcessRecordsAndGetOffset(
+    Env* env,
+    const string& metadata_path,
+    LogBlockManager::BlockRecordMap* live_block_records,
+    uint64_t* total_blocks,
+    uint64_t* offset) {
+  // 打开metadata file.
+  unique_ptr<RandomAccessFile> metadata_reader;
+  RETURN_NOT_OK(env->NewRandomAccessFile(
+      metadata_path, &metadata_reader));
+  ReadablePBContainerFile pb_reader(std::move(metadata_reader));
+  RETURN_NOT_OK_PREPEND(pb_reader.Open(), "open metadata file failed");
+
+  Status read_status;
+  while (true) {
+    BlockRecordPB record;
+    read_status = pb_reader.ReadNextPB(&record);
+    if (!read_status.ok()) {
+      break;
+    }
+    RETURN_NOT_OK(ProcessRecord(&record, live_block_records, total_blocks));
+  }
+  if (offset != nullptr) {
+    *offset = pb_reader.offset();
+  }
+  // NOTE: 'read_status' will never be OK here.
+  if (PREDICT_TRUE(read_status.IsEndOfFile()) || read_status.IsIncomplete()) {
+    // We've reached the end of the file without any problems.
+    return Status::OK();
+  }
+  return read_status;
+}
+
 Status LogBlockContainer::ProcessRecord(
     BlockRecordPB* record,
     FsReport* report,
@@ -1253,6 +1300,34 @@ Status LogBlockContainer::ProcessRecord(
       //
       // TODO(adar): treat as a different kind of inconsistency?
       report->malformed_record_check->entries.emplace_back(ToString(), record);
+      break;
+  }
+  return Status::OK();
+}
+
+Status LogBlockContainer::ProcessRecord(
+    BlockRecordPB* record,
+    LogBlockManager::BlockRecordMap* live_block_records,
+    uint64_t* total_blocks) {
+  const BlockId block_id(BlockId::FromPB(record->block_id()));
+  LogBlockRefPtr lb;
+  switch (record->op_type()) {
+    case CREATE:
+      // First verify that the record's offset/length aren't wildly incorrect.
+      if (PREDICT_FALSE(!record->has_offset() ||
+                        !record->has_length() ||
+                        record->offset() < 0  ||
+                        record->length() < 0)) {
+        break;
+      }
+
+      (*live_block_records)[block_id].Swap(record);
+      (*total_blocks)++;
+      break;
+    case DELETE:
+      CHECK_EQ(1, live_block_records->erase(block_id));
+      break;
+    default:
       break;
   }
   return Status::OK();
@@ -2128,6 +2203,9 @@ static const uint64_t kBlockMapChunk = 1 << 4;
 static const uint64_t kBlockMapMask = kBlockMapChunk - 1;
 const char* LogBlockManager::kContainerMetadataFileSuffix = ".metadata";
 const char* LogBlockManager::kContainerDataFileSuffix = ".data";
+const char* LogBlockManager::kContainerCompactedFileSuffix = ".compacted";
+const char* LogBlockManager::kContainerOffsetFileSuffix = ".offset";
+const char* LogBlockManager::kContainerBackupFileSuffix = ".backup";
 
 // These values were arrived at via experimentation. See commit 4923a74 for
 // more details.
@@ -2946,6 +3024,157 @@ void LogBlockManager::LoadContainer(Dir* dir,
   }
 }
 
+Status LogBlockManager::CompactLowBlockContainer(Env* env, Dir* dir,
+                                                 const string& container_name,
+                                                 uint64_t* live_block_num) {
+  BlockRecordMap live_block_records;
+  uint64_t offset = 0;
+  uint64_t total_blocks = 0;
+  string metadata_path = Substitute("$0/$1$2", dir->dir(),
+                                    container_name, kContainerMetadataFileSuffix);
+  // 处理metadata file记录的被删除或者创建的block.
+  RETURN_NOT_OK(LogBlockContainer::ProcessRecordsAndGetOffset(
+                                env,
+                                metadata_path,
+                                &live_block_records,
+                                &total_blocks,
+                                &offset));
+  *live_block_num = live_block_records.size();
+  // 如果total_block为0，live_block_records肯定size为0，这里对除0进行保护.
+  total_blocks = total_blocks == 0 ? 1 : total_blocks;
+  if (static_cast<double>(live_block_records.size()) /
+        total_blocks <= FLAGS_log_container_live_metadata_before_compact_ratio) {
+    LOG(INFO) << "Compact low block container: " << container_name
+              << ", live_blocks: " << live_block_records.size()
+              << ", total_blocks: " << total_blocks
+              << ", offset: " << offset;
+    vector<BlockRecordPB> records = LogBlockContainer::SortRecords(
+                                                            std::move(live_block_records));
+    // 生成新的metadata file
+    RETURN_NOT_OK(GenerateCompactedFile(env, dir, container_name, records));
+    // 保存offset
+    RETURN_NOT_OK(GenerateOffsetFile(env, dir, container_name, offset));
+  }
+  return Status::OK();
+}
+
+Status LogBlockManager::PrintLowBlockContainer(Env* env, Dir* dir,
+                                               const string& container_name,
+                                               uint64_t* live_block_num,
+                                               uint64_t* total_block_num) {
+  BlockRecordMap live_block_records;
+  string metadata_path = Substitute("$0/$1$2", dir->dir(),
+                                    container_name, kContainerMetadataFileSuffix);
+  // 处理metadata file记录的被删除或者创建的block.
+  RETURN_NOT_OK(LogBlockContainer::ProcessRecordsAndGetOffset(
+                                env,
+                                metadata_path,
+                                &live_block_records,
+                                total_block_num,
+                                nullptr));
+  *live_block_num = live_block_records.size();
+  return Status::OK();
+}
+
+Status LogBlockManager::MergeLowBlockContainer(Env* env, Dir* dir,
+                                               const string& container_name) {
+  // 首先判断compacted文件和offset文件是否同时存在.
+  const string compacted_file = Substitute("$0/$1$2", dir->dir(),
+                                     container_name, kContainerCompactedFileSuffix);
+  const string offset_file = Substitute("$0/$1$2", dir->dir(),
+                                  container_name, kContainerOffsetFileSuffix);
+  if (!env->FileExists(compacted_file) || !env->FileExists(offset_file)) {
+    return Status::OK();
+  }
+
+  const string old_metadata_file = Substitute("$0/$1$2", dir->dir(),
+                                     container_name, kContainerMetadataFileSuffix);
+  string backup_metadata_file = StrCat(old_metadata_file, kContainerBackupFileSuffix);
+  // 删除存在的备份文件.
+  if (env->FileExists(backup_metadata_file)) {
+    RETURN_NOT_OK_PREPEND(env->DeleteFile(backup_metadata_file), "delete backup file failed");
+  }
+
+  // 从offset文件中读取offset.
+  unique_ptr<RandomAccessFile> offset_file_reader;
+  RETURN_NOT_OK(env->NewRandomAccessFile(offset_file, &offset_file_reader));
+  uint64_t file_size;
+  RETURN_NOT_OK(offset_file_reader->Size(&file_size));
+  if (file_size > 4 * 1024) {
+    return Status::RuntimeError("Offset file is too big, that is abnormal.");
+  }
+  faststring fs;
+  fs.resize(file_size);
+  Slice slice(fs.data(), file_size);
+  RETURN_NOT_OK(offset_file_reader->Read(0, slice));
+  int64 offset = 0;
+  LOG(INFO) << "Read container: " << container_name << " offset: " << slice;
+  if (!safe_strto64(slice.ToString(), &offset)) {
+    return Status::RuntimeError("Offset is not a number.");
+  }
+
+  // 以写的方式打开compacted文件.
+  const string compacted_metadata_file = Substitute("$0/$1$2", dir->dir(),
+                                     container_name, kContainerCompactedFileSuffix);
+  unique_ptr<RWFile> compacted_metadata_writer;
+  RWFileOptions rw_opts;
+  // 必须设置模式MUST_EXIST，否则打开时compacted_metadata_file会被删除重建.
+  rw_opts.mode = Env::OpenMode::MUST_EXIST;
+  RETURN_NOT_OK(env->NewRWFile(rw_opts,
+                compacted_metadata_file, &compacted_metadata_writer));
+  WritablePBContainerFile compacted_pb_writer(std::move(compacted_metadata_writer));
+  uint64_t compacted_file_size = 0;
+  env->GetFileSize(compacted_metadata_file, &compacted_file_size);
+  RETURN_NOT_OK_PREPEND(compacted_pb_writer.OpenExisting(),
+                        "open old compacted file failed.");
+
+  // 以读的方式打开旧的metadata file.
+  const string old_metadata_path = Substitute("$0/$1$2", dir->dir(),
+                                     container_name, kContainerMetadataFileSuffix);
+  unique_ptr<RandomAccessFile> old_metadata_reader;
+  RETURN_NOT_OK(env->NewRandomAccessFile(
+                old_metadata_path, &old_metadata_reader));
+  ReadablePBContainerFile old_metadata_pb_reader(std::move(old_metadata_reader));
+  RETURN_NOT_OK_PREPEND(old_metadata_pb_reader.Open(),
+                        "open old metadata file failed.");
+  // 从offset处开始读.
+  old_metadata_pb_reader.SetOffset(offset);
+  // 从末尾开始写.
+  compacted_pb_writer.SetOffset(compacted_file_size);
+  // 读旧的metadata file，写入到compacted文件中.
+  Status read_status;
+  BlockRecordPB record;
+  while (true) {
+    read_status = old_metadata_pb_reader.ReadNextPB(&record);
+    if (!read_status.ok()) {
+      break;
+    }
+    RETURN_NOT_OK(compacted_pb_writer.Append(record));
+  }
+  if (!PREDICT_TRUE(read_status.IsEndOfFile())
+      && !PREDICT_TRUE(read_status.IsIncomplete())) {
+    return read_status;
+  }
+  RETURN_NOT_OK_PREPEND(compacted_pb_writer.Sync(),
+                        "sync compacted file failed.");
+  RETURN_NOT_OK_PREPEND(compacted_pb_writer.Close(),
+                        "close compacted file failed.");
+  RETURN_NOT_OK_PREPEND(old_metadata_pb_reader.Close(),
+                        "close old metadata file failed.");
+  // 备份 old metadata file.
+  RETURN_NOT_OK_PREPEND(env->RenameFile(old_metadata_file,
+                                         backup_metadata_file),
+                        "backup metadata file failed.");
+  // 重命名compacted为metadata file.
+  RETURN_NOT_OK_PREPEND(env->RenameFile(compacted_metadata_file,
+                                         old_metadata_file),
+                        "rename compacted metadata file failed.");
+  // 删除offset文件.
+  RETURN_NOT_OK_PREPEND(env->DeleteFile(offset_file),
+                        "delete offset file failed.");
+  return Status::OK();
+}
+
 void LogBlockManager::RepairTask(Dir* dir, internal::LogBlockContainerLoadResult* result) {
   result->status = Repair(dir,
                           &result->report,
@@ -3202,6 +3431,80 @@ Status LogBlockManager::Repair(
   return Status::OK();
 }
 
+Status LogBlockManager::GenerateOffsetFile(Env* env, Dir* dir,
+                                           const string& container_name,
+                                           uint64_t offset) {
+  unique_ptr<WritableFile> file;
+  const string file_name = Substitute("$0/$1$2", dir->dir(), container_name,
+                                      kContainerOffsetFileSuffix);
+  if (env->FileExists(file_name)) {
+    RETURN_NOT_OK_PREPEND(env->DeleteFile(file_name),
+                          "delete old offset file failed");
+  }
+
+  string tmpl = file_name + kTmpInfix + ".XXXXXX";
+  unique_ptr<RWFile> tmp_file;
+  string tmp_file_name;
+  RETURN_NOT_OK_PREPEND(env->NewTempRWFile(RWFileOptions(), tmpl,
+                                           &tmp_file_name, &tmp_file),
+                        "could not create temporary metadata file");
+  auto tmp_deleter = MakeScopedCleanup([&]() {
+    WARN_NOT_OK(env->DeleteFile(tmp_file_name),
+                "Could not delete file " + tmp_file_name);
+
+  });
+  tmp_file->Write(0, Substitute("$0", offset));
+  RETURN_NOT_OK_PREPEND(tmp_file->Sync(),
+                        "sync offset file failed");
+  RETURN_NOT_OK_PREPEND(tmp_file->Close(),
+                        "close offset file failed");
+  RETURN_NOT_OK_PREPEND(env->RenameFile(tmp_file_name, file_name),
+                        "could not rename temporary metadata file");
+  tmp_deleter.cancel();
+  LOG(INFO) << "Generate offset file: " << file_name;
+  return Status::OK();
+}
+
+Status LogBlockManager::GenerateCompactedFile(Env* env, Dir* dir, const string& container_name,
+                                              const std::vector<BlockRecordPB>& records) {
+  const string file_name = Substitute("$0/$1$2", dir->dir(), container_name,
+                                      kContainerCompactedFileSuffix);
+  // 检查文件是否已经存在，存在则删除.
+  if (env->FileExists(file_name)) {
+    RETURN_NOT_OK_PREPEND(env->DeleteFile(file_name),
+                                          "delete compacted metadata file failed");
+  }
+
+  string tmpl = file_name + kTmpInfix + ".XXXXXX";
+  unique_ptr<RWFile> tmp_file;
+  string tmp_file_name;
+  RETURN_NOT_OK_PREPEND(env->NewTempRWFile(RWFileOptions(), tmpl,
+                                           &tmp_file_name, &tmp_file),
+                        "could not create temporary metadata file");
+  auto tmp_deleter = MakeScopedCleanup([&]() {
+    WARN_NOT_OK(env->DeleteFile(tmp_file_name),
+                "Could not delete file " + tmp_file_name);
+
+  });
+
+  WritablePBContainerFile pb_file(std::move(tmp_file));
+  RETURN_NOT_OK_PREPEND(pb_file.CreateNew(BlockRecordPB()),
+                        "could not initialize temporary metadata file");
+  for (const auto& r : records) {
+    RETURN_NOT_OK_PREPEND(pb_file.Append(r),
+                          "could not append to temporary metadata file");
+  }
+  RETURN_NOT_OK_PREPEND(pb_file.Sync(),
+                        "could not sync temporary metadata file");
+  RETURN_NOT_OK_PREPEND(pb_file.Close(),
+                        "could not close temporary metadata file");
+  RETURN_NOT_OK_PREPEND(env->RenameFile(tmp_file_name, file_name),
+                        "could not rename temporary metadata file");
+  tmp_deleter.cancel();
+  LOG(INFO) << "Generate compact file: " << file_name;
+  return Status::OK();
+}
+
 Status LogBlockManager::RewriteMetadataFile(const LogBlockContainer& container,
                                             const vector<BlockRecordPB>& records,
                                             int64_t* file_bytes_delta) {
@@ -3292,6 +3595,23 @@ int64_t LogBlockManager::LookupBlockLimit(int64_t fs_block_size) {
   // Block size must have been less than the very first key. Return the
   // first recorded entry and hope for the best.
   return kPerFsBlockSizeBlockLimits.begin()->second;
+}
+
+Status LogBlockManager::GetContainerNames(Env* env, const string& data_path,
+                                          unordered_set<string>* container_names) {
+  vector<string> children;
+  RETURN_NOT_OK(env->GetChildren(data_path, &children));
+  for (const string& child : children) {
+    string container_name;
+    if (!TryStripSuffixString(
+            child, LogBlockManager::kContainerDataFileSuffix, &container_name) &&
+        !TryStripSuffixString(
+            child, LogBlockManager::kContainerMetadataFileSuffix, &container_name)) {
+      continue;
+    }
+    InsertIfNotPresent(container_names, container_name);
+  }
+  return Status::OK();
 }
 
 } // namespace fs
