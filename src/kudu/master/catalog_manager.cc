@@ -154,6 +154,14 @@ DEFINE_int32(master_ts_rpc_timeout_ms, 30 * 1000, // 30 sec
 TAG_FLAG(master_ts_rpc_timeout_ms, advanced);
 TAG_FLAG(master_ts_rpc_timeout_ms, runtime);
 
+DEFINE_int32(scheduler_period_ms,
+             100,
+             "Every scheduler_period_ms the scheduler checks for tasks to run.");
+
+DEFINE_int32(scheduler_pool_max_thread_num,
+             2,
+             "Maximum number of threads in the scheduler thread pool");
+
 DEFINE_int32(tablet_creation_timeout_ms, 30 * 1000, // 30 sec
              "Timeout used by the master when attempting to create tablet "
              "replicas during table creation.");
@@ -346,6 +354,7 @@ DEFINE_bool(auto_rebalancing_enabled, false,
             "Whether auto-rebalancing is enabled.");
 TAG_FLAG(auto_rebalancing_enabled, advanced);
 TAG_FLAG(auto_rebalancing_enabled, experimental);
+TAG_FLAG(auto_rebalancing_enabled, runtime);
 
 DEFINE_uint32(table_locations_cache_capacity_mb, 0,
               "Capacity for the table locations cache (in MiB); a value "
@@ -990,12 +999,19 @@ CatalogManager::CatalogManager(Master* master)
   } else {
     authz_provider_.reset(new DefaultAuthzProvider);
   }
+  CHECK_OK(ThreadPoolBuilder("scheduler")
+               .set_min_threads(1)
+               .set_max_threads(FLAGS_scheduler_pool_max_thread_num)
+               .set_enable_scheduler()
+               .set_schedule_period_ms(FLAGS_scheduler_period_ms)
+               .Build(&scheduler_pool_));
+
   CHECK_OK(ThreadPoolBuilder("leader-initialization")
-           // Presently, this thread pool must contain only a single thread
-           // (to correctly serialize invocations of ElectedAsLeaderCb upon
-           // closely timed consecutive elections).
-           .set_max_threads(1)
-           .Build(&leader_election_pool_));
+               // Presently, this thread pool must contain only a single thread
+               // (to correctly serialize invocations of ElectedAsLeaderCb upon
+               // closely timed consecutive elections).
+               .set_max_threads(1)
+               .Build(&leader_election_pool_));
   ResetTableLocationsCache();
 }
 
@@ -1021,12 +1037,9 @@ Status CatalogManager::Init(bool is_first_run) {
   RETURN_NOT_OK_PREPEND(sys_catalog_->WaitUntilRunning(),
                         "Failed waiting for the catalog tablet to run");
 
-  if (FLAGS_auto_rebalancing_enabled) {
-    unique_ptr<AutoRebalancerTask> task(
-        new AutoRebalancerTask(this, master_->ts_manager()));
-    RETURN_NOT_OK_PREPEND(task->Init(), "failed to initialize auto-rebalancing task");
-    auto_rebalancer_ = std::move(task);
-  }
+  unique_ptr<AutoRebalancerTask> task(new AutoRebalancerTask(this, master_->ts_manager()));
+  RETURN_NOT_OK_PREPEND(task->Init(), "failed to initialize auto-rebalancing task");
+  auto_rebalancer_ = std::move(task);
 
   vector<HostPort> master_addresses;
   RETURN_NOT_OK(master_->GetMasterHostPorts(&master_addresses));
@@ -1646,6 +1659,10 @@ void CatalogManager::Shutdown() {
   if (hms_catalog_) {
     hms_notification_log_listener_->Shutdown();
     hms_catalog_->Stop();
+  }
+
+  if (scheduler_pool_) {
+    scheduler_pool_->Shutdown();
   }
 
   if (auto_rebalancer_) {

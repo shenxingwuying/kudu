@@ -25,7 +25,6 @@
 #include <vector>
 
 #include "kudu/gutil/port.h"
-#include "kudu/gutil/ref_counted.h"
 #include "kudu/rebalance/rebalancer.h"
 #include "kudu/util/countdown_latch.h"
 #include "kudu/util/status.h"
@@ -33,7 +32,7 @@
 namespace kudu {
 
 class HostPort;
-class Thread;
+class ThreadPoolToken;
 
 namespace rebalance {
 class RebalancingAlgo;
@@ -79,8 +78,16 @@ class AutoRebalancerTask {
 
   friend class AutoRebalancerTest;
 
-  // Runs the main loop of the auto-rebalancing thread.
-  void RunLoop();
+  // Schedule 'Run()' Task asynchronously.
+  Status ScheduleRebalance();
+
+  // Run the auto-rebalancing tasks.
+  // Leader master invokes 'DoReplicaRebalance()' when FLAGS_auto_rebalancing_enabled
+  // is set to 'true'.
+  void Run();
+
+  // Move replicas if replicas is not balanced.
+  Status DoReplicaRebalance();
 
   // Collects information about the cluster at the location specified by the
   // 'location' parameter. If there is no location specified (and the parameter
@@ -167,8 +174,8 @@ class AutoRebalancerTask {
   // The associated TS manager.
   TSManager* ts_manager_;
 
-  // The auto-rebalancing thread.
-  scoped_refptr<kudu::Thread> thread_;
+  // The token where AutoRebalancerTasks will be submitted to.
+  std::unique_ptr<kudu::ThreadPoolToken> scheduler_pool_token_;
 
   // Latch used to indicate that the thread is shutting down.
   CountDownLatch shutdown_;

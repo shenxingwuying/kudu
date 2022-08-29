@@ -879,6 +879,8 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
     return auto_rebalancer_.get();
   }
 
+  ThreadPool* scheduler_pool() { return scheduler_pool_.get(); }
+
   // Returns the normalized form of the provided table name.
   //
   // If the HMS integration is configured and the table name is a valid HMS
@@ -1346,6 +1348,9 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
 
   // Singleton pool that serializes invocations of ElectedAsLeaderCb().
   std::unique_ptr<ThreadPool> leader_election_pool_;
+
+  // Auto-rebalancer schedules periodic tasks on this thread pool.
+  std::unique_ptr<ThreadPool> scheduler_pool_;
 
   // This field is updated when a node becomes leader master,
   // waits for all outstanding uncommitted metadata (table and tablet metadata)

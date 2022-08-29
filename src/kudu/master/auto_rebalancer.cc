@@ -24,6 +24,7 @@
 #include <ostream>
 #include <random>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -58,7 +59,7 @@
 #include "kudu/util/net/sockaddr.h"
 #include "kudu/util/pb_util.h"
 #include "kudu/util/status.h"
-#include "kudu/util/thread.h"
+#include "kudu/util/threadpool.h"
 
 using kudu::cluster_summary::HealthCheckResult;
 using kudu::cluster_summary::ReplicaSummary;
@@ -135,6 +136,8 @@ DEFINE_uint32(auto_rebalancing_wait_for_replica_moves_seconds, 1,
               "How long to wait before checking to see if the scheduled replica movement "
               "in this iteration of auto-rebalancing has completed.");
 
+DECLARE_bool(auto_rebalancing_enabled);
+
 namespace kudu {
 
 namespace master {
@@ -164,101 +167,109 @@ AutoRebalancerTask::AutoRebalancerTask(CatalogManager* catalog_manager,
       moves_scheduled_this_round_for_test_(0) {
 }
 
-AutoRebalancerTask::~AutoRebalancerTask() {
-  if (thread_) {
-    Shutdown();
-  }
-}
+AutoRebalancerTask::~AutoRebalancerTask() { Shutdown(); }
 
 Status AutoRebalancerTask::Init() {
-  DCHECK(!thread_) << "AutoRebalancerTask is already initialized";
+  DCHECK(catalog_manager_->scheduler_pool()) << "scheduler pool is not initialized";
   RETURN_NOT_OK(MessengerBuilder("auto-rebalancer").Build(&messenger_));
-  return Thread::Create("catalog manager", "auto-rebalancer",
-                        [this]() { this->RunLoop(); }, &thread_);
+  DCHECK(!scheduler_pool_token_) << "scheduler_pool_token_ is initialized";
+  scheduler_pool_token_ =
+      catalog_manager_->scheduler_pool()->NewToken(ThreadPool::ExecutionMode::SERIAL);
+  return ScheduleRebalance();
 }
 
 void AutoRebalancerTask::Shutdown() {
-  CHECK(thread_) << "AutoRebalancerTask is not initialized";
   if (!shutdown_.CountDown()) {
     return;
   }
-  CHECK_OK(ThreadJoiner(thread_.get()).Join());
-  thread_.reset();
+  scheduler_pool_token_.reset();
 }
 
-void AutoRebalancerTask::RunLoop() {
-  vector<Rebalancer::ReplicaMove> replica_moves;
-  while (!shutdown_.WaitFor(
-      MonoDelta::FromSeconds(FLAGS_auto_rebalancing_interval_seconds))) {
+Status AutoRebalancerTask::ScheduleRebalance() {
+  if (scheduler_pool_token_) {
+    return scheduler_pool_token_->Schedule([this]() { this->Run(); },
+                                           1000 * FLAGS_auto_rebalancing_interval_seconds);
+  }
+  return Status::IllegalState("scheduler pool token is shutdown");
+}
 
+void AutoRebalancerTask::Run() {
+  if (FLAGS_auto_rebalancing_enabled) {
     // If catalog manager isn't initialized or isn't the leader, don't do rebalancing.
     // Putting the auto-rebalancer to sleep shouldn't affect the master's ability
     // to become the leader. When the thread wakes up and discovers it is now
     // the leader, then it can begin auto-rebalancing.
+    bool is_leader_master = false;
     {
       CatalogManager::ScopedLeaderSharedLock l(catalog_manager_);
-      if (!l.first_failed_status().ok()) {
-        moves_scheduled_this_round_for_test_ = 0;
-        continue;
-      }
+      is_leader_master = l.first_failed_status().ok();
     }
-
-    number_of_loop_iterations_for_test_++;
-
-    // Structs to hold information about the cluster's status.
-    ClusterRawInfo raw_info;
-    ClusterInfo cluster_info;
-    TabletsPlacementInfo placement_info;
-    Status s = BuildClusterRawInfo(/*location*/nullopt, &raw_info);
-    if (!s.ok()) {
-      LOG(WARNING) << Substitute("Could not retrieve cluster info: $0", s.ToString());
-      continue;
+    if (is_leader_master) {
+      Status status = DoReplicaRebalance();
+      LOG_IF(WARNING, !status.ok()) << Substitute("ReplicaRebalance failed, $0", status.ToString());
+    } else {
+      moves_scheduled_this_round_for_test_ = 0;
     }
-
-    // NOTE: There should be no moves in progress, because this loop waits for
-    // scheduled moves to complete before continuing to the next iteration.
-    s = rebalancer_.BuildClusterInfo(raw_info, Rebalancer::MovesInProgress(), &cluster_info);
-    if (!s.ok()) {
-      LOG(WARNING) << Substitute("Could not build cluster info: $0", s.ToString());
-      continue;
-    }
-    if (config_.run_policy_fixer) {
-      s = BuildTabletsPlacementInfo(raw_info, Rebalancer::MovesInProgress(), &placement_info);
-      if (!s.ok()) {
-        LOG(WARNING) << Substitute("Could not build tablet placement info: $0", s.ToString());
-        continue;
-      }
-    }
-
-    DCHECK(replica_moves.empty());
-    s = GetMoves(raw_info, cluster_info.locality, placement_info, &replica_moves);
-    if (!s.ok()) {
-      LOG(WARNING) << Substitute("could not retrieve auto-rebalancing replica moves: $0",
-                                 s.ToString());
-      continue;
-    }
-    WARN_NOT_OK(ExecuteMoves(replica_moves),
-                "failed to send replica move request");
-    moves_scheduled_this_round_for_test_ = replica_moves.size();
-
-    // Wait for all of the moves from this iteration to complete.
-    do {
-      if (shutdown_.WaitFor(MonoDelta::FromSeconds(
-            FLAGS_auto_rebalancing_wait_for_replica_moves_seconds))) {
-        return;
-      }
-      WARN_NOT_OK(CheckReplicaMovesCompleted(&replica_moves),
-                  "scheduled replica move failed to complete");
-    } while (!replica_moves.empty());
   }
+
+  ScheduleRebalance();
 }
 
-Status AutoRebalancerTask::GetMoves(
-    const ClusterRawInfo& raw_info,
-    const ClusterLocalityInfo& locality,
-    const TabletsPlacementInfo& placement_info,
-    vector<Rebalancer::ReplicaMove>* replica_moves) {
+Status AutoRebalancerTask::DoReplicaRebalance() {
+  vector<Rebalancer::ReplicaMove> replica_moves;
+  number_of_loop_iterations_for_test_++;
 
+  // Structs to hold information about the cluster's status.
+  ClusterRawInfo raw_info;
+  ClusterInfo cluster_info;
+  TabletsPlacementInfo placement_info;
+  Status s = BuildClusterRawInfo(/*location*/ nullopt, &raw_info);
+  if (!s.ok()) {
+    LOG(WARNING) << Substitute("Could not retrieve cluster info: $0", s.ToString());
+    return s;
+  }
+
+  // NOTE: There should be no moves in progress, because this loop waits for
+  // scheduled moves to complete before continuing to the next iteration.
+  s = rebalancer_.BuildClusterInfo(raw_info, Rebalancer::MovesInProgress(), &cluster_info);
+  if (!s.ok()) {
+    LOG(WARNING) << Substitute("Could not build cluster info: $0", s.ToString());
+    return s;
+  }
+  if (config_.run_policy_fixer) {
+    s = BuildTabletsPlacementInfo(raw_info, Rebalancer::MovesInProgress(), &placement_info);
+    if (!s.ok()) {
+      LOG(WARNING) << Substitute("Could not build tablet placement info: $0", s.ToString());
+      return s;
+    }
+  }
+
+  DCHECK(replica_moves.empty());
+  s = GetMoves(raw_info, cluster_info.locality, placement_info, &replica_moves);
+  if (!s.ok()) {
+    LOG(WARNING) << Substitute("could not retrieve auto-rebalancing replica moves: $0",
+                               s.ToString());
+    return s;
+  }
+  WARN_NOT_OK(ExecuteMoves(replica_moves), "failed to send replica move request");
+  moves_scheduled_this_round_for_test_ = replica_moves.size();
+
+  // Wait for all of the moves from this iteration to complete.
+  do {
+    if (shutdown_.WaitFor(
+            MonoDelta::FromSeconds(FLAGS_auto_rebalancing_wait_for_replica_moves_seconds))) {
+      break;
+    }
+    WARN_NOT_OK(CheckReplicaMovesCompleted(&replica_moves),
+                "scheduled replica move failed to complete");
+  } while (!replica_moves.empty());
+  return Status::OK();
+}
+
+Status AutoRebalancerTask::GetMoves(const ClusterRawInfo& raw_info,
+                                    const ClusterLocalityInfo& locality,
+                                    const TabletsPlacementInfo& placement_info,
+                                    vector<Rebalancer::ReplicaMove>* replica_moves) {
   const auto& ts_id_by_location = locality.servers_by_location;
   vector<Rebalancer::ReplicaMove> rep_moves;
 
