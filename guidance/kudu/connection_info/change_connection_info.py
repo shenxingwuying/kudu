@@ -16,5 +16,6 @@ def change(params):
     for master_host in kudu_master_hosts:
         tserver_master_addrs.append(master_host + ':' + str(master_port))
     return {
-        'master_address': tserver_master_addrs
+        'master_address': tserver_master_addrs,
+        'table_namespace' : ''
     }

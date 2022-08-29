@@ -11,3 +11,6 @@ spec:
         master_address:
           desc: 'kudu master 部署信息'
           type: list
+        table_namespace:
+          desc: '混部场景下公司内部 kudu 表前缀'
+          type: str
