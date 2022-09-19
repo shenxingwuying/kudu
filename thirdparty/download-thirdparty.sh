@@ -479,5 +479,20 @@ fetch_with_url_and_patch \
  $PROMETHEUS_PATCHLEVEL \
  "--header PRIVATE-TOKEN:YS4i1t8kt-87_2JaGmYV http://gitlab.sensorsdata.cn/api/v4/projects/2781/repository"
 
+# TODO(duyuqi)
+# Using 'fetch_with_url_and_patch'.
+if [ ! -d $LIBRDKAFKA_NAME ]; then
+    rm -rf $LIBRDKAFKA_NAME.tar.gz
+    wget $LIBRDKAFKA_URL -O $LIBRDKAFKA_NAME.tar.gz
+    tar xzvf $LIBRDKAFKA_NAME.tar.gz
+fi
+# TODO(duyuqi)
+# Using 'fetch_with_url_and_patch'.
+if [ ! -d $CPPKAFKA_NAME ]; then
+    rm -rf $CPPKAFKA_NAME.tar.gz
+    wget $CPPKAFKA_URL -O $CPPKAFKA_NAME.tar.gz
+    tar xzvf $CPPKAFKA_NAME.tar.gz
+fi
+
 echo "---------------"
 echo "Thirdparty dependencies downloaded successfully"
