@@ -403,6 +403,7 @@ void ConsensusMetadata::UpdateActiveRole() {
   DFAKE_SCOPED_RECURSIVE_LOCK(fake_lock_);
   active_role_ = GetConsensusRole(peer_uuid_, leader_uuid_, ActiveConfig());
   UpdateRoleAndTermCache();
+  UpdateDuplicators(ActiveConfig());
   VLOG_WITH_PREFIX(1) << "Updating active role to " << RaftPeerPB::Role_Name(active_role_)
                       << ". Consensus state: "
                       << pb_util::SecureShortDebugString(ToConsensusStatePB());
@@ -419,6 +420,29 @@ Status ConsensusMetadata::UpdateOnDiskSize() {
   uint64_t on_disk_size;
   RETURN_NOT_OK(fs_manager_->GetEnv()->GetFileSize(path, &on_disk_size));
   on_disk_size_ = on_disk_size;
+  return Status::OK();
+}
+
+Status ConsensusMetadata::UpdateDuplicators(const RaftConfigPB& config) {
+  std::lock_guard<Mutex> l_lock(mutex_);
+  duplication_info_pb_ = std::nullopt;
+  for (const RaftPeerPB& peer : config.peers()) {
+    if (IsDuplicator(peer)) {
+      // support only 1 duplicator.
+      CHECK(peer.has_dup_info());
+      consensus::DownstreamType type = peer.dup_info().type();
+      if (type != consensus::KAFKA) {
+        string msg =
+            Substitute("Not supported duplicator downstream type: $0", DownstreamType_Name(type));
+        LOG(ERROR) << msg;
+        return Status::NotSupported(msg);
+      }
+      CHECK(peer.dup_info().has_uri());
+      duplication_info_pb_ = peer.dup_info();
+      break;
+    }
+  }
+
   return Status::OK();
 }
 

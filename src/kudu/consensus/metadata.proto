@@ -64,6 +64,41 @@ message HealthReportPB {
   optional HealthStatus overall_health = 1;
 }
 
+enum DownstreamType {
+    INVALID_MAX_SYSTEM = 999;
+    KAFKA = 0;
+    // TODO(duyuqi), support below.
+    KUDU_BACKUP = 1;
+    KUDU_GLOBAL_INDEX = 2;
+    KUDU_LOCAL_INDEX = 3;
+}
+
+message DuplicationInfoPB {
+  // Dup name, can be add or delete by alter. 
+  // If kafka, name is topic name. 
+  // If kudu, name is table name.
+  // (name, type, uri) should be an unique key.
+  required string name = 1;
+  required DownstreamType type = 2;
+
+  // Thirdparty storage master addresses, called uri, eg: host1:port1,...
+  // 'uri' should be normalized.
+  optional string uri = 3;
+
+  // More informations for the duplication.
+  // Using string of json format.
+  optional string options = 4;
+
+  // support kerberos, using kafka for example, detail in
+  // https://github.com/edenhill/librdkafka/wiki/Using-SASL-with-librdkafka, the page's the 5th
+  // part: 5.Configure Kafka client on client host
+  optional KerberosOptions kerberos_options = 5;
+
+  // TODO(duyuqi)
+  // Filters, only focus some columns of all.
+  // optional string filters = 6;
+}
+
 // A peer in a configuration.
 message RaftPeerPB {
   // The possible roles for peers.
@@ -88,12 +123,19 @@ message RaftPeerPB {
     // participate in elections or majorities. This is usually the role of a node
     // that leaves the configuration.
     NON_PARTICIPANT = 3;
+
+    // DUP_LEARNER is a special LEARNER which cann't promote to VOTER,
+    // and just do wal duplication.
+    DUP_LEARNER = 19;
   };
 
   enum MemberType {
     UNKNOWN_MEMBER_TYPE = 999;
     NON_VOTER = 0;
     VOTER = 1;
+    // DUPLICATOR is a special NON_VOTER which cann't promote to VOTER,
+    // the raft role is LEARNER
+    DUPLICATOR = 19;
   };
 
   // Permanent uuid is optional: RaftPeerPB/RaftConfigPB instances may
@@ -110,6 +152,9 @@ message RaftPeerPB {
   // Replica's health report, as seen by the leader. This is a run-time
   // only field, it should not be persisted or read from the persistent storage.
   optional HealthReportPB health_report = 5;
+
+  // If member_type is DUPLICATOR, duplicator should be valid.
+  optional DuplicationInfoPB dup_info = 100;
 }
 
 // A set of peers, serving a single tablet.

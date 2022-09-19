@@ -30,6 +30,9 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.kudu.client.ExternalConsistencyMode.CLIENT_PROPAGATED;
 import static org.apache.kudu.rpc.RpcHeader.ErrorStatusPB.RpcErrorCodePB.ERROR_INVALID_REQUEST;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.security.cert.CertificateException;
@@ -74,8 +77,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.kudu.Common;
+import org.apache.kudu.DuplicationDownstreamType;
 import org.apache.kudu.Schema;
 import org.apache.kudu.client.Client.AuthenticationCredentialsPB;
+import org.apache.kudu.consensus.Metadata;
 import org.apache.kudu.master.Master;
 import org.apache.kudu.master.Master.GetTableLocationsResponsePB;
 import org.apache.kudu.master.Master.TSInfoPB;
@@ -2441,6 +2446,18 @@ public class AsyncKuduClient implements AutoCloseable {
   }
 
   /**
+   * list duplications for this kudu cluster.
+   * @return
+   */
+
+  Deferred<ListTablesResponse> listDuplications() {
+    checkIsClosed();
+    ListTablesRequest rpc = new ListTablesRequest(this.masterTable,
+        null, false, timer, defaultAdminOperationTimeoutMs, true);
+    return sendRpcToTablet(rpc);
+  }
+
+  /**
    * Makes discovered tablet locations visible in the client's caches.
    * @param table the table which the locations belong to
    * @param requestPartitionKey the partition key of the table locations request
@@ -2822,12 +2839,33 @@ public class AsyncKuduClient implements AutoCloseable {
   public Deferred<Boolean> supportsIgnoreOperations() {
     PingRequest ping = PingRequest.makeMasterPingRequest(
         this.masterTable, timer, defaultAdminOperationTimeoutMs);
-    ping.addRequiredFeature(Master.MasterFeatures.IGNORE_OPERATIONS_VALUE);
+    int feature = Master.MasterFeatures.IGNORE_OPERATIONS_VALUE;
+    ping.addRequiredFeature(feature);
     Deferred<PingResponse> response = sendRpcToTablet(ping);
-    return AsyncUtil.addBoth(response, new PingSupportsFeatureCallback());
+    return AsyncUtil.addBoth(response, new PingSupportsFeatureCallback(feature));
+  }
+
+  /**
+   * Sends a request to the master to check if the cluster supports duplication operations.
+   * @return true if the cluster supports ignore operations
+   */
+  @InterfaceAudience.Private
+  public Deferred<Boolean> supportsDuplication() {
+    PingRequest ping = PingRequest.makeMasterPingRequest(
+        this.masterTable, timer, defaultAdminOperationTimeoutMs);
+    int feature = Master.MasterFeatures.DUPLICATION_VALUE;
+    ping.addRequiredFeature(feature);
+    Deferred<PingResponse> response = sendRpcToTablet(ping);
+    return AsyncUtil.addBoth(response, new PingSupportsFeatureCallback(feature));
   }
 
   private static final class PingSupportsFeatureCallback implements Callback<Boolean, Object> {
+    int feature;
+
+    public PingSupportsFeatureCallback(int feature) {
+      this.feature = feature;
+    }
+
     @Override
     public Boolean call(final Object resp) {
       if (resp instanceof Exception) {
@@ -2846,7 +2884,7 @@ public class AsyncKuduClient implements AutoCloseable {
 
     @Override
     public String toString() {
-      return "ping supports ignore operations";
+      return "ping supports " + Master.MasterFeatures.forNumber(feature);
     }
   }
 

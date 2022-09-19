@@ -125,6 +125,11 @@ TAG_FLAG(master_support_auto_incrementing_column, unsafe);
 TAG_FLAG(master_support_auto_incrementing_column, experimental);
 TAG_FLAG(master_support_auto_incrementing_column, runtime);
 
+DEFINE_bool(cluster_support_duplication, true,
+            "Whether the cluster support duplication.");
+TAG_FLAG(cluster_support_duplication, hidden);
+TAG_FLAG(cluster_support_duplication, runtime);
+
 using google::protobuf::Message;
 using kudu::consensus::ReplicaManagementInfoPB;
 using kudu::pb_util::SecureDebugString;
@@ -987,6 +992,8 @@ bool MasterServiceImpl::SupportsFeature(uint32_t feature) const {
       return FLAGS_master_support_immutable_column_attribute;
     case MasterFeatures::AUTO_INCREMENTING_COLUMN:
       return FLAGS_master_support_auto_incrementing_column;
+    case MasterFeatures::DUPLICATION:
+      return FLAGS_cluster_support_duplication;
     default:
       return false;
   }

@@ -57,6 +57,7 @@ class AlterTableTest;
 class AuthzTokenTest;
 class ClientStressTest_TestUniqueClientIds_Test;
 class DisableWriteWhenExceedingQuotaTest;
+class KerberosOptions;
 class KuduPartialRow;
 class MetaCacheLookupStressTest_PerfSynthetic_Test;
 class MonoDelta;
@@ -1178,6 +1179,9 @@ class KUDU_EXPORT KuduReplica {
   /// any time.
   bool is_leader() const;
 
+  /// @return Whether or not this replica is a duplicator.
+  bool is_duplicator() const;
+
   /// @return The tablet server hosting this remote replica.
   const KuduTabletServer& ts() const;
 
@@ -1224,6 +1228,22 @@ class KUDU_EXPORT KuduTablet {
   Data* data_;
 
   DISALLOW_COPY_AND_ASSIGN(KuduTablet);
+};
+
+enum KUDU_EXPORT DuplicationDownstream {
+  KAFKA = 0,
+  UNKNOWN = 999,
+};
+
+struct KUDU_EXPORT DuplicationInfo {
+  std::string name;
+  DuplicationDownstream type;
+  std::string uri;
+  std::string options;
+  // no kerberos if 0/NULL/nullptr, kerberos enabled otherwise.
+  // std::optional is ok, but this file should be compatible C++98.
+  // So initialize kerberos_options to 0/NULL/nullptr, if no kerberos.
+  kudu::KerberosOptions* kerberos_options;
 };
 
 /// @brief A helper class to create a new table with the desired options.
@@ -1431,6 +1451,17 @@ class KUDU_EXPORT KuduTableCreator {
   ///   The table's extra configuration properties.
   /// @return Reference to the modified table creator.
   KuduTableCreator& extra_configs(const std::map<std::string, std::string>& extra_configs);
+
+
+  /// With one or more duplicators for tablet of table
+  ///
+  /// If the value of the kv pair is empty, the property will be ignored.
+  ///
+  /// @param [in] extra_configs
+  ///   The table's extra configuration properties.
+  /// @return Reference to the modified table creator.
+  KuduTableCreator& duplication(const DuplicationInfo& dup_info);
+
 
   /// Set the timeout for the table creation operation.
   ///
@@ -2082,6 +2113,11 @@ class KUDU_EXPORT KuduTableAlterer {
       KuduPartialRow* upper_bound,
       KuduTableCreator::RangePartitionBound lower_bound_type = KuduTableCreator::INCLUSIVE_BOUND,
       KuduTableCreator::RangePartitionBound upper_bound_type = KuduTableCreator::EXCLUSIVE_BOUND);
+
+
+  KuduTableAlterer* AddDuplicationInfo(const DuplicationInfo& info);
+
+  KuduTableAlterer* DropDuplicationInfo(const DuplicationInfo& info);
 
   /// Change the table's extra configuration properties.
   ///

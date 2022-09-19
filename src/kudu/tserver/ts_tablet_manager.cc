@@ -55,6 +55,7 @@
 #include "kudu/rpc/result_tracker.h"
 #include "kudu/server/rpc_server.h"
 #include "kudu/tablet/metadata.pb.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet_bootstrap.h"
 #include "kudu/tablet/tablet_metadata.h"
 #include "kudu/tablet/tablet_replica.h"
@@ -72,6 +73,7 @@
 #include "kudu/util/net/net_util.h"
 #include "kudu/util/scoped_cleanup.h"
 #include "kudu/util/stopwatch.h"
+#include "kudu/util/thread.h"
 #include "kudu/util/threadpool.h"
 #include "kudu/util/timer.h"
 #include "kudu/util/trace.h"
@@ -119,6 +121,14 @@ DEFINE_int32(txn_participant_registration_pool_num_threads, 10,
              "in the context of multi-row transactions");
 TAG_FLAG(txn_participant_registration_pool_num_threads, advanced);
 TAG_FLAG(txn_participant_registration_pool_num_threads, experimental);
+
+DEFINE_int32(duplication_thread_num, 12,
+             "Number of threads for duplication. They write ops to thirdparty storage system.");
+TAG_FLAG(duplication_thread_num, advanced);
+
+DEFINE_int32(duplication_replay_thread_num, 12,
+             "Number of threads for replay wal duplication when needed.");
+TAG_FLAG(duplication_replay_thread_num, advanced);
 
 DEFINE_int32(tablet_start_warn_threshold_ms, 500,
              "If a tablet takes more than this number of millis to start, issue "
@@ -198,6 +208,10 @@ TAG_FLAG(tablet_bootstrap_skip_opening_tablet_for_testing, hidden);
 
 DECLARE_bool(raft_prepare_replacement_before_eviction);
 DECLARE_uint32(txn_staleness_tracker_interval_ms);
+
+DEFINE_uint32(switch_to_leader_checker_internal_ms, 1000,
+              "Interval time in milliseconds of periodic tasks for the tablet replicas who"
+              "switch to leaders, start duplicators.");
 
 METRIC_DEFINE_gauge_int32(server, tablets_num_not_initialized,
                           "Number of Not Initialized Tablets",
@@ -322,14 +336,17 @@ bool ValidateUpdateTabletStatsInterval() {
 
 GROUP_FLAG_VALIDATOR(update_tablet_stats_interval_ms, ValidateUpdateTabletStatsInterval);
 
-TSTabletManager::TSTabletManager(TabletServer* server)
-  : fs_manager_(server->fs_manager()),
-    cmeta_manager_(new ConsensusMetadataManager(fs_manager_)),
-    server_(server),
-    shutdown_latch_(1),
-    metric_registry_(server->metric_registry()),
-    tablet_copy_metrics_(server->metric_entity()),
-    state_(MANAGER_INITIALIZING) {
+TSTabletManager::TSTabletManager(TabletServer* server,
+                                 duplicator::ConnectorManager* connector_manager)
+    : fs_manager_(server->fs_manager()),
+      cmeta_manager_(new ConsensusMetadataManager(fs_manager_)),
+      server_(server),
+      shutdown_latch_(1),
+      switch_to_leader_latch_(1),
+      metric_registry_(server->metric_registry()),
+      tablet_copy_metrics_(server->metric_entity()),
+      state_(MANAGER_INITIALIZING),
+      connector_manager_(connector_manager) {
   // A heartbeat msg without statistics will be considered to be from an old
   // version, thus it's necessary to trigger updating stats as soon as possible.
   next_update_time_ = MonoTime::Now();
@@ -419,6 +436,9 @@ protected:
 
 TSTabletManager::~TSTabletManager() {
   Shutdown();
+  if (switch_to_leader_thread_) {
+    switch_to_leader_thread_->Join();
+  }
 }
 
 Status TSTabletManager::Init(Timer* start_tablets,
@@ -487,6 +507,27 @@ Status TSTabletManager::Init(Timer* start_tablets,
   }));
 
   start_tablets->Start();
+  {
+    // @TODO(duyuqi), review the thread num and Add Option Flags.
+    // The two pools are used for duplication.
+    RETURN_NOT_OK(ThreadPoolBuilder("duplicate")
+                  .set_trace_metric_prefix("duplicate")
+                  .set_min_threads(FLAGS_duplication_thread_num)
+                  .set_max_threads(FLAGS_duplication_thread_num)
+                  .Build(&duplication_pool_));
+
+    RETURN_NOT_OK(ThreadPoolBuilder("replay")
+                  .set_trace_metric_prefix("replay")
+                  .set_min_threads(FLAGS_duplication_replay_thread_num)
+                  .set_max_threads(FLAGS_duplication_replay_thread_num)
+                  .Build(&duplication_replay_pool_));
+  }
+
+  RETURN_NOT_OK(Thread::Create(
+      "switchrole",
+      "leader",
+      [this]() { this->DoDuplicationWhenSwitchToLeader(); },
+      &switch_to_leader_thread_));
 
   // Search for tablets in the metadata dir.
   vector<string> tablet_ids;
@@ -1013,10 +1054,13 @@ Status TSTabletManager::CreateAndRegisterTabletReplica(
                         &tsm_factory,
                         [this, tablet_id](const string& reason) {
                           this->MarkTabletDirty(tablet_id, reason);
-                        }));
+                        }, connector_manager_));
+  CHECK(duplication_replay_pool_);
   Status s = replica->Init({ server_->mutable_quiescing(),
                              server_->num_raft_leaders(),
-                             server_->raft_pool() });
+                             server_->raft_pool(),
+                             duplication_pool_.get(),
+                             duplication_replay_pool_.get() });
   if (PREDICT_FALSE(!s.ok())) {
     replica->SetError(s);
     replica->Shutdown();
@@ -1502,6 +1546,17 @@ void TSTabletManager::Shutdown() {
     // Shut down the pool running the dedicated TxnStatusManager-related task.
     txn_status_manager_pool_->Shutdown();
   }
+
+  if (duplication_pool_) {
+    duplication_pool_->Shutdown();
+  }
+  if (duplication_replay_pool_) {
+    duplication_replay_pool_->Shutdown();
+  }
+
+  cmeta_manager_->ShutdownNewLeaderQueue();
+
+  switch_to_leader_latch_.CountDown();
 
   // Take a snapshot of the replicas list -- that way we don't have to hold
   // on to the lock while shutting them down, which might cause a lock
@@ -2086,6 +2141,46 @@ Status TSTabletManager::ScheduleAbortTxn(int64_t txn_id, const string& user) {
 void TSTabletManager::SetNextUpdateTimeForTests() {
   std::lock_guard<rw_spinlock> l(lock_update_);
   next_update_time_ = MonoTime::Now();
+}
+
+void TSTabletManager::DoDuplicationWhenSwitchToLeader() {
+  while (!switch_to_leader_latch_.WaitFor(
+    MonoDelta::FromMicroseconds(FLAGS_switch_to_leader_checker_internal_ms))) {
+    // Wait for a notification on shutdown or a timeout expiration.
+    vector<string> leader_tablet_ids = cmeta_manager_->DrainToNewLeaders();
+    if (leader_tablet_ids.empty()) {
+      continue;
+    }
+    for (const string& tablet_id : leader_tablet_ids) {
+      scoped_refptr<tablet::TabletReplica> replica;
+      if (!LookupTablet(tablet_id, &replica) || !replica->CheckRunning().ok() ||
+          !replica->consensus()->HasDuplicator()) {
+        continue;
+      }
+      if (replica->consensus()->role() == consensus::RaftPeerPB::LEADER) {
+        Status status = replica->StartDuplicator();
+        if (!status.ok()) {
+          // TODO(duyuqi)
+          // Provide a method to check the duplicator's health status.
+          //
+          // If duplicator start failed, retry it again until is succeed or replica is gone.
+          // eg: The uri/topic doesn't not exist.
+          LOG(ERROR) << Substitute(
+              "start duplicator failed status: $0, would retry, tablet id: $1, peer uuid: $2",
+              status.ToString(),
+              replica->tablet_id(),
+              replica->permanent_uuid());
+          if (replica->consensus()->HasDuplicator()) {
+            cmeta_manager_->AppendNewLeaders(tablet_id);
+          }
+        }
+      } else if (replica->consensus()->role() == consensus::RaftPeerPB::FOLLOWER) {
+        // TODO(duyuqi)
+        // Considering the scenarios leader switch to follower?
+        replica->ShutdownDuplicator();
+      }
+    }
+  }
 }
 
 TransitionInProgressDeleter::TransitionInProgressDeleter(

@@ -495,3 +495,23 @@ enum TableTypePB {
   // The table stores transaction status management metadata.
   TXN_STATUS_TABLE = 1;
 }
+
+message KerberosOptions {
+  enum SecurityProtocol {
+    UNKNOWN_SECURITY_PROTOCOL = 999;
+    PLAINTEXT = 0;
+    SASL_PLAINTEXT = 1;
+    SSL = 2;
+    SASL_SSL = 3;
+  }
+  optional SecurityProtocol security_protocol = 1;
+
+  // Broker service name
+  optional string service_name = 2;
+
+  // Client keytab location
+  optional string keytab = 3;
+
+  // Principal info, you should provide correct principal info
+  optional string principal = 4;
+}

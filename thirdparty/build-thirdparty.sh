@@ -110,6 +110,8 @@ else
       "jwt-cpp")      F_JWT_CPP=1 ;;
       "ranger-kms")   F_RANGER_KMS=1 ;;
       "rocksdb")      F_ROCKSDB=1 ;;
+      "rdkafka")      F_RDKAFKA=1 ;;
+      "cppkafka")     F_CPPKAFKA=1 ;;
       *)              echo "Unknown module: $arg"; exit 1 ;;
     esac
   done
@@ -451,6 +453,14 @@ if [ -n "$F_UNINSTRUMENTED" -o -n "$F_ROCKSDB" ]; then
   build_rocksdb
 fi
 
+if [ -n "$F_UNINSTRUMENTED" -o -n "$F_RDKAFKA" ]; then
+  build_librdkafka
+fi
+
+if [ -n "$F_UNINSTRUMENTED" -o -n "$F_CPPKAFKA" ]; then
+  build_cppkafka
+fi
+
 restore_env
 
 # If we're on macOS best to exit here, otherwise single dependency builds will try to
@@ -647,6 +657,14 @@ fi
 
 if [ -n "$F_TSAN" -o -n "$F_ROCKSDB" ]; then
   build_rocksdb
+fi
+
+if [ -n "$F_TSAN" -o -n "$F_RDKAFKA" ]; then
+  build_librdkafka
+fi
+
+if [ -n "$F_TSAN" -o -n "$F_CPPKAFKA" ]; then
+  build_cppkafka
 fi
 
 restore_env

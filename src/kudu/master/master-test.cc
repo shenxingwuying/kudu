@@ -79,6 +79,7 @@
 #include "kudu/server/monitored_task.h"
 #include "kudu/server/rpc_server.h"
 #include "kudu/tablet/metadata.pb.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/util/atomic.h"
 #include "kudu/util/cache.h"
 #include "kudu/util/countdown_latch.h"

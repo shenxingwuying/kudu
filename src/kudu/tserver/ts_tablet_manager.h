@@ -54,6 +54,7 @@ class NodeInstancePB;
 class Partition;
 class PartitionSchema;
 class Schema;
+class Thread;
 class ThreadPool;
 class Timer;
 
@@ -66,6 +67,10 @@ class ConsensusMetadataManager;
 class OpId;
 class StartTabletCopyRequestPB;
 } // namespace consensus
+
+namespace duplicator {
+class ConnectorManager;
+} // namespace duplicator
 
 namespace master {
 class ReportedTabletPB;
@@ -101,7 +106,7 @@ class TransitionInProgressDeleter;
 class TSTabletManager : public tserver::TabletReplicaLookupIf {
  public:
   // Construct the tablet manager.
-  explicit TSTabletManager(TabletServer* server);
+  explicit TSTabletManager(TabletServer* server, duplicator::ConnectorManager* connector_manager);
 
   virtual ~TSTabletManager();
 
@@ -408,6 +413,9 @@ class TSTabletManager : public tserver::TabletReplicaLookupIf {
   void IncrementTabletsProcessed(int tablets_total, std::atomic<int>* tablets_processed,
                              Timer* start_tablets);
 
+  // RunLoop function.
+  void DoDuplicationWhenSwitchToLeader();
+
   FsManager* const fs_manager_;
 
   const scoped_refptr<consensus::ConsensusMetadataManager> cmeta_manager_;
@@ -430,6 +438,9 @@ class TSTabletManager : public tserver::TabletReplicaLookupIf {
   //                to be able to work with RWMutex and use lock_ from above
   //                to create one to notify the task on shutdown
   CountDownLatch shutdown_latch_;
+
+  scoped_refptr<Thread> switch_to_leader_thread_;
+  CountDownLatch switch_to_leader_latch_;
 
   // Map from tablet ID to tablet
   TabletMap tablet_map_;
@@ -486,6 +497,12 @@ class TSTabletManager : public tserver::TabletReplicaLookupIf {
   // registered with corresponding transaction status tablets.
   std::unique_ptr<ThreadPool> txn_status_manager_pool_;
 
+  // Thread pool for duplicator operations
+  std::unique_ptr<ThreadPool> duplication_pool_;
+
+  // Thread pool for duplicator replay wal when lag too much or bootstrapping.
+  std::unique_ptr<ThreadPool> duplication_replay_pool_;
+
   // Ensures that we only update stats from a single thread at a time.
   mutable rw_spinlock lock_update_;
   MonoTime next_update_time_;
@@ -497,6 +514,8 @@ class TSTabletManager : public tserver::TabletReplicaLookupIf {
   // NOTE: it's important that this is the first member to be destructed. This
   // ensures we do not attempt to collect metrics while calling the destructor.
   FunctionGaugeDetacher metric_detacher_;
+
+  duplicator::ConnectorManager* connector_manager_;
 
   DISALLOW_COPY_AND_ASSIGN(TSTabletManager);
 };

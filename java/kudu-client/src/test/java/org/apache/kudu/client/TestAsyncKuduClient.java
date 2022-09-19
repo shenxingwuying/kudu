@@ -30,6 +30,7 @@ import static org.junit.Assert.fail;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.base.Splitter;
@@ -42,6 +43,7 @@ import org.junit.Test;
 
 import org.apache.kudu.ColumnSchema;
 import org.apache.kudu.Common;
+import org.apache.kudu.DuplicationDownstreamType;
 import org.apache.kudu.Schema;
 import org.apache.kudu.Type;
 import org.apache.kudu.consensus.Metadata;
@@ -53,6 +55,7 @@ import org.apache.kudu.test.ProtobufUtils;
 public class TestAsyncKuduClient {
 
   private static final Schema basicSchema = ClientTestUtil.getBasicSchema();
+  private static final String testDefaultUri = "localhost:9092";
 
   private KuduClient client;
   private AsyncKuduClient asyncClient;
@@ -340,5 +343,111 @@ public class TestAsyncKuduClient {
   @KuduTestHarness.MasterServerConfig(flags = { "--master_support_ignore_operations=false" })
   public void testSupportsIgnoreOperationsFalse() throws Exception {
     assertFalse(asyncClient.supportsIgnoreOperations().join());
+  }
+
+  @Test
+  public void testCreateTableWithDuplication() throws Exception {
+    // Test duplication.
+    String tableName = "testCreateTableWithDuplication" + System.currentTimeMillis();
+    CreateTableOptions options = getBasicCreateTableOptions();
+    // Uri is not exist.
+    options.addDuplication("topic_name", DuplicationDownstreamType.KAFKA, testDefaultUri);
+    client.createTable(tableName, basicSchema, options);
+
+    Set<String> subscribedTables = client.getSubscribedTables();
+    assertEquals(1, subscribedTables.size());
+    assertTrue(subscribedTables.contains(tableName));
+  }
+
+  @Test
+  public void testCreateTableWithDuplicationWithKerberos() throws Exception {
+    // Test duplication.
+    String tableName = "testCreateTableWithDuplicationWithKerberos" + System.currentTimeMillis();
+    CreateTableOptions options = getBasicCreateTableOptions();
+    Common.KerberosOptions kerberosOptions = Common.KerberosOptions.newBuilder()
+        .setSecurityProtocol(Common.KerberosOptions.SecurityProtocol.SASL_PLAINTEXT)
+        .setServiceName("kafka")
+        .setKeytab("/tmp/kafka.keytab")
+        .setPrincipal(tableName + "@EXAMPLE.COM")
+        .build();
+    // Uri is not exist.
+    options.addDuplication("topic_name", DuplicationDownstreamType.KAFKA,
+                           testDefaultUri, kerberosOptions);
+    client.createTable(tableName, basicSchema, options);
+
+    Set<String> subscribedTables = client.getSubscribedTables();
+    // TODO(duyuqi)
+    // It is not a avaliable duplication.
+    // We should build a really kafka cluster with kerberos to test it, later.
+    assertEquals(1, subscribedTables.size());
+    assertTrue(subscribedTables.contains(tableName));
+  }
+
+  @Test
+  public void testAlterTableWithDuplication() throws Exception {
+    String tableName = "testAlterTableWithDuplication" + System.currentTimeMillis();
+    String topicName = "topic_name_alter";
+
+    // Create a normal table.
+    CreateTableOptions createOptions = getBasicCreateTableOptions();
+    client.createTable(tableName, basicSchema, createOptions);
+    Set<String> subscribedTables = client.getSubscribedTables();
+    assertEquals(0, subscribedTables.size());
+
+    // Add a duplication for the table.
+    AlterTableOptions addDuplicationOptions = new AlterTableOptions();
+    addDuplicationOptions.addDuplication(topicName,
+        DuplicationDownstreamType.KAFKA, testDefaultUri);
+    client.alterTable(tableName, addDuplicationOptions);
+    subscribedTables = client.getSubscribedTables();
+    assertEquals(1, subscribedTables.size());
+    assertTrue(subscribedTables.contains(tableName));
+
+    // Drop a duplication for the table.
+    AlterTableOptions dropDuplicationOptions = new AlterTableOptions();
+    dropDuplicationOptions.dropDuplication(topicName,
+        DuplicationDownstreamType.KAFKA, testDefaultUri);
+    client.alterTable(tableName, dropDuplicationOptions);
+    subscribedTables = client.getSubscribedTables();
+    assertEquals(0, subscribedTables.size());
+  }
+
+  @Test
+  public void testAlterTableWithDuplicationWithKerberos() throws Exception {
+    String tableName = "testAlterTableWithDuplicationWithKerberos" + System.currentTimeMillis();
+    String topicName = "topic_name_alter";
+
+    // Create a normal table.
+    CreateTableOptions createOptions = getBasicCreateTableOptions();
+    client.createTable(tableName, basicSchema, createOptions);
+    Set<String> subscribedTables = client.getSubscribedTables();
+    assertEquals(0, subscribedTables.size());
+
+    // Add a duplication for the table.
+    AlterTableOptions addDuplicationOptions = new AlterTableOptions();
+    Common.KerberosOptions kerberosOptions = Common.KerberosOptions.newBuilder()
+        .setSecurityProtocol(Common.KerberosOptions.SecurityProtocol.SASL_PLAINTEXT)
+        .setServiceName("kafka")
+        .setKeytab("/tmp/kafka.keytab")
+        .setPrincipal(tableName + "@EXAMPLE.COM")
+        .build();
+    addDuplicationOptions.addDuplication(topicName,
+                                         DuplicationDownstreamType.KAFKA, testDefaultUri,
+                                         kerberosOptions);
+    client.alterTable(tableName, addDuplicationOptions);
+    subscribedTables = client.getSubscribedTables();
+    // TODO(duyuqi)
+    // It is not a avaliable duplication.
+    // We should build a really kafka cluster with kerberos to test it, later.
+    assertEquals(1, subscribedTables.size());
+    assertTrue(subscribedTables.contains(tableName));
+
+    // Drop a duplication for the table.
+    AlterTableOptions dropDuplicationOptions = new AlterTableOptions();
+    dropDuplicationOptions.dropDuplication(topicName,
+                                           DuplicationDownstreamType.KAFKA, testDefaultUri);
+    client.alterTable(tableName, dropDuplicationOptions);
+    subscribedTables = client.getSubscribedTables();
+    assertEquals(0, subscribedTables.size());
   }
 }

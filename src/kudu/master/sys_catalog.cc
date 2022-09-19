@@ -69,6 +69,7 @@
 #include "kudu/tablet/metadata.pb.h"
 #include "kudu/tablet/ops/op.h"
 #include "kudu/tablet/ops/write_op.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet_bootstrap.h"
 #include "kudu/tablet/tablet_metadata.h"
@@ -501,6 +502,8 @@ Status SysCatalogTable::SetupTablet(
   consensus::ServerContext server_ctx{/*quiescing*/nullptr,
                                       master_->num_raft_leaders(),
                                       master_->raft_pool(),
+                                      /* duplicate_pool */ nullptr,
+                                      /* relay_pool */ nullptr,
                                       // Allow sending status-only Raft messages to a master peer
                                       // in FAILED_UNRECOVERABLE state if we allow dynamically
                                       // adding/removing masters.

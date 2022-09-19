@@ -20,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <ostream>
+#include <type_traits>
 #include <utility>
 
 #include <glog/logging.h>
@@ -27,6 +28,7 @@
 #include "kudu/consensus/consensus_peers.h"
 #include "kudu/consensus/log.h"
 #include "kudu/consensus/metadata.pb.h"
+#include "kudu/consensus/quorum_util.h"
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/port.h"
 #include "kudu/gutil/strings/substitute.h"
@@ -70,6 +72,10 @@ void PeerManager::UpdateRaftConfig(const RaftConfigPB& config) {
       continue;
     }
     if (peer_pb.permanent_uuid() == local_uuid_) {
+      continue;
+    }
+    // RaftPeerPB::DUPLICATOR is a shadow of leader.
+    if (consensus::IsDuplicator(peer_pb)) {
       continue;
     }
 

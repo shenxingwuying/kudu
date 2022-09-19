@@ -20,12 +20,14 @@
 #include <memory>
 #include <ostream>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
 #include "kudu/common/common.pb.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.h"
 #include "kudu/consensus/consensus_meta.h"
 #include "kudu/consensus/consensus_meta_manager.h"
@@ -43,15 +45,19 @@
 #include "kudu/tablet/ops/op.h"
 #include "kudu/tablet/ops/write_op.h"
 #include "kudu/tablet/tablet-test-util.h"
-#include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet_bootstrap.h"
 #include "kudu/tablet/tablet_metadata.h"
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/tserver/tserver.pb.h"
 #include "kudu/util/countdown_latch.h"
 #include "kudu/util/monotime.h"
-#include "kudu/util/pb_util.h"
 #include "kudu/util/test_macros.h"
+
+namespace kudu {
+namespace tablet {
+class Tablet;
+}  // namespace tablet
+}  // namespace kudu
 
 using kudu::consensus::ConsensusBootstrapInfo;
 using kudu::consensus::ConsensusMetadata;
@@ -60,7 +66,6 @@ using kudu::consensus::RaftConfigPB;
 using kudu::consensus::RaftPeerPB;
 using kudu::log::Log;
 using kudu::log::LogOptions;
-using kudu::pb_util::SecureDebugString;
 using kudu::rpc::MessengerBuilder;
 using kudu::rpc::ResultTracker;
 using kudu::tablet::KuduTabletTest;
@@ -92,13 +97,14 @@ Status TabletReplicaTestBase::ExecuteWrite(TabletReplica* replica, const WriteRe
 
   RETURN_NOT_OK(replica->SubmitWrite(std::move(op_state)));
   rpc_latch.Wait();
+  Status status = Status::OK();
   if (resp.has_error()) {
-    return StatusFromPB(resp.error().status());
+    status = StatusFromPB(resp.error().status());
   }
   if (resp.per_row_errors_size() > 0) {
-    return StatusFromPB(resp.per_row_errors(0).error());
+    status = StatusFromPB(resp.per_row_errors(0).error());
   }
-  return Status::OK();
+  return status;
 }
 
 void TabletReplicaTestBase::SetUp() {
@@ -208,10 +214,10 @@ Status TabletReplicaTestBase::RestartReplica(bool reset_tablet) {
   RETURN_NOT_OK(BootstrapTablet(tablet_replica_->tablet_metadata(),
                                 cmeta->CommittedConfig(),
                                 clock(),
-                                /*mem_tracker*/nullptr,
-                                /*result_tracker*/nullptr,
+                                /*mem_tracker*/ nullptr,
+                                /*result_tracker*/ nullptr,
                                 &metric_registry_,
-                                /*file_cache*/nullptr,
+                                /*file_cache*/ nullptr,
                                 tablet_replica_,
                                 tablet_replica_->log_anchor_registry(),
                                 &tablet,
@@ -225,6 +231,7 @@ Status TabletReplicaTestBase::RestartReplica(bool reset_tablet) {
                                        log,
                                        prepare_pool_.get(),
                                        dns_resolver_.get()));
+  harness()->TEST_SetTablet(tablet);
   // Wait for the replica to be usable.
   return tablet_replica_->consensus()->WaitUntilLeader(kLeadershipTimeout);
 }

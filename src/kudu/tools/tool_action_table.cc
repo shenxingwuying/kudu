@@ -46,10 +46,12 @@
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/client/table_alterer-internal.h"
 #include "kudu/client/value.h"
+#include "kudu/common/common.pb.h"
 #include "kudu/common/partial_row.h"
 #include "kudu/common/partition.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.h"
+#include "kudu/consensus/metadata.pb.h"
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/stl_util.h"
 #include "kudu/gutil/strings/join.h"
@@ -65,12 +67,14 @@
 #include "kudu/util/flag_validators.h"
 #include "kudu/util/jsonreader.h"
 #include "kudu/util/jsonwriter.h"
+#include "kudu/util/monotime.h"
 #include "kudu/util/status.h"
 #include "kudu/util/string_case.h"
 
 using google::protobuf::util::JsonStringToMessage;
 using google::protobuf::util::JsonParseOptions;
 using google::protobuf::RepeatedPtrField;
+using kudu::client::DuplicationDownstream;
 using kudu::client::KuduClient;
 using kudu::client::KuduColumnSchema;
 using kudu::client::KuduColumnSpec;
@@ -105,7 +109,6 @@ using std::pair;
 using std::set;
 using std::string;
 using std::unique_ptr;
-using std::unordered_map;
 using std::vector;
 using strings::Split;
 using strings::Substitute;
@@ -224,6 +227,24 @@ DEFINE_string(compression_type, "DEFAULT_COMPRESSION",
 DEFINE_string(default_value, "", "Default value for this column.");
 DEFINE_string(comment, "", "Comment for this column.");
 
+DEFINE_string(downstream_uri, "localhost:9092",
+              "Uri of destination storage system for duplication. Only support: Kafka brokers");
+DEFINE_string(downstream_type, "kafka",
+              "type of destination storage system for duplication, Only support kafka");
+DEFINE_string(downstream_options, "",
+              "options of destination storage system for duplication, not used now");
+DEFINE_string(downstream_kerberos_security_protocol, "",
+              "kerberos security_protocol of destination storage system for duplication,"
+              "it determined by destination storage system such as kafka."
+              "including PLAINTEXT, SASL_PLAINTEXT, SSL, SASL_SSL");
+DEFINE_string(downstream_kerberos_service_name, "",
+              "kerberos service_name of destination storage system for duplication, "
+              "it determined by destination storage system such as kafka");
+DEFINE_string(downstream_kerberos_keytab, "",
+              "kerberos keytab of destination storage system for duplication");
+DEFINE_string(downstream_kerberos_principal, "",
+              "kerberos principal of destination storage system for duplication");
+
 DECLARE_bool(show_values);
 DECLARE_string(replica_selection);
 DECLARE_string(tables);
@@ -237,7 +258,27 @@ bool ValidateCreateTable() {
   return true;
 }
 
+bool ValidateKerberos() {
+  if (FLAGS_downstream_kerberos_security_protocol.empty() ==
+          FLAGS_downstream_kerberos_service_name.empty() &&
+      FLAGS_downstream_kerberos_security_protocol.empty() ==
+          FLAGS_downstream_kerberos_keytab.empty() &&
+      FLAGS_downstream_kerberos_security_protocol.empty() ==
+          FLAGS_downstream_kerberos_principal.empty()) {
+    return true;
+  }
+  LOG(ERROR) << Substitute(
+      "--kerberos_security_protocol, --downstream_kerberos_service_name, "
+      "--downstream_kerberos_keytab, --downstream_kerberos_principal. "
+      "If all of the four gflags are set that means this duplicator use kerberos. "
+      "If none of the four gflags are set that means this duplicator doesn't use kerberos. "
+      "Otherwise, some of them are set, the others are not set, which is invalid kerberos "
+      "gflags.");
+  return false;
+}
+
 GROUP_FLAG_VALIDATOR(create_table, ValidateCreateTable);
+GROUP_FLAG_VALIDATOR(kerberos, ValidateKerberos);
 
 namespace kudu {
 namespace tools {
@@ -282,6 +323,14 @@ class TableLister {
                              table_info.live_row_count());
       }
 
+      for (const auto& dup_info : table_info.dup_infos()) {
+        output += Substitute(" name:$0 type:$1 uri:$2 options:$3",
+                             dup_info.name(),
+                             consensus::DownstreamType_Name(dup_info.type()),
+                             dup_info.uri(),
+                             dup_info.options());
+      }
+
       for (const auto& tablet_info : table_info.tablet_with_partition()) {
         output += string("\n") + string("  T ") + tablet_info.tablet_id();
         if (tablet_info.has_partition_info()) {
@@ -318,6 +367,7 @@ class TableLister {
       if (!MatchesAnyPattern(table_filters, tname)) continue;
 
       TablesInfoPB::TableInfoPB* table_info_pb = tables_info_pb.add_tables();
+
       table_info_pb->set_name(tname);
       if (FLAGS_show_table_info) {
         table_info_pb->set_num_tablets(tinfo.num_tablets);
@@ -354,8 +404,9 @@ class TableLister {
         for (const auto* replica : token->tablet().replicas()) {
           const bool is_voter = ReplicaController::is_voter(*replica);
           const bool is_leader = replica->is_leader();
+          const bool is_duplicator = replica->is_duplicator();
           TablesInfoPB::ReplicaInfoPB* rinfo = tpinfo->add_replica_info();
-          rinfo->set_role(is_leader ? "L" : (is_voter ? "V" : "N"));
+          rinfo->set_role(is_leader ? "L" : (is_voter ? "V" : (is_duplicator ? "D" : "N")));
           rinfo->set_uuid(replica->ts().uuid());
           rinfo->set_host_port(replica->ts().hostname() + ":" +
               std::to_string(replica->ts().port()));
@@ -460,6 +511,16 @@ constexpr const char* const kNewTableNameArg = "new_table_name";
 constexpr const char* const kReplicationFactorArg = "replication_factor";
 constexpr const char* const kTableRangeLowerBoundArg = "table_range_lower_bound";
 constexpr const char* const kTableRangeUpperBoundArg = "table_range_upper_bound";
+
+constexpr const char* const kDuplicatorNameArg = "duplicator_name";
+constexpr const char* const kDownstreamTypeArg = "downstream_type";
+constexpr const char* const kDownstreamUriArg = "downstream_uri";
+constexpr const char* const kDownstreamOptionsArg = "downstream_options";
+constexpr const char* const kDownstreamKerberosSecurityProtocolArg =
+    "downstream_kerberos_security_protocol";
+constexpr const char* const kDownstreamKerberosServiceNameArg = "downstream_kerberos_service_name";
+constexpr const char* const kDownstreamKerberosKeytabArg = "downstream_kerberos_keytab";
+constexpr const char* const kDownstreamKerberosPrincipalArg = "downstream_kerberos_principal";
 
 enum PartitionAction {
   ADD,
@@ -1459,6 +1520,95 @@ Status AddColumn(const RunnerContext& context) {
   return alterer->Alter();
 }
 
+client::DuplicationDownstream StringToDuplicationDownstream(const string& type) {
+  string new_type;
+  kudu::ToLowerCase(type, &new_type);
+  if (new_type == "kafka") {
+    return DuplicationDownstream::KAFKA;
+  }
+  LOG(FATAL) << Substitute("Downstream type '$0' is not supported.", type);
+}
+
+Status AddDuplicator(const RunnerContext& context) {
+  const string& table_name = FindOrDie(context.required_args, kTableNameArg);
+  const string& duplicator_name = FindOrDie(context.required_args, kDuplicatorNameArg);
+
+  client::DuplicationInfo info;
+  info.name = duplicator_name;
+  if (!FLAGS_downstream_type.empty()) {
+    info.type = StringToDuplicationDownstream(FLAGS_downstream_type);
+  }
+  if (!FLAGS_downstream_uri.empty()) {
+    info.uri = FLAGS_downstream_uri;
+  }
+  if (!FLAGS_downstream_options.empty()) {
+    info.options = FLAGS_downstream_options;
+  }
+  info.kerberos_options = nullptr;
+  kudu::KerberosOptions kerberos_options;
+  if (!FLAGS_downstream_kerberos_security_protocol.empty()) {
+    kudu::KerberosOptions::SecurityProtocol security_protocol;
+    if (!kudu::KerberosOptions::SecurityProtocol_Parse(FLAGS_downstream_kerberos_security_protocol,
+                                                      &security_protocol)) {
+      string message = Substitute(
+          "invalid security protocol, not support: $0, only support: PLAINTEXT, "
+          "SASL_PLAINTEXT, SSL, SASL_SSL",
+          FLAGS_downstream_kerberos_security_protocol);
+      RETURN_NOT_OK_LOG(Status::InvalidArgument(message), ERROR, message);
+    }
+    kerberos_options.set_security_protocol(security_protocol);
+    kerberos_options.set_service_name(FLAGS_downstream_kerberos_service_name);
+    kerberos_options.set_keytab(FLAGS_downstream_kerberos_keytab);
+    kerberos_options.set_principal(FLAGS_downstream_kerberos_principal);
+    info.kerberos_options = &kerberos_options;
+  }
+
+  client::sp::shared_ptr<KuduClient> client;
+  RETURN_NOT_OK(CreateKuduClient(context, &client));
+  unique_ptr<KuduTableAlterer> alterer(client->NewTableAlterer(table_name));
+  alterer->AddDuplicationInfo(info);
+  RETURN_NOT_OK(alterer->Alter());
+  bool is_altering = true;
+  constexpr const int kMaxRetries = 40;
+  int i = 0;
+  while (is_altering && i++ < kMaxRetries) {
+    client->IsAlterTableInProgress(table_name, &is_altering);
+    SleepFor(MonoDelta::FromMilliseconds(500));
+  }
+  if (is_altering) {
+    return Status::TimedOut("add duplication timeout");
+  }
+  return Status::OK();
+}
+
+Status DropDuplicator(const RunnerContext& context) {
+  const string& table_name = FindOrDie(context.required_args, kTableNameArg);
+  const string& duplicator_name = FindOrDie(context.required_args, kDuplicatorNameArg);
+
+  client::DuplicationInfo info;
+  info.name = duplicator_name;
+  if (!FLAGS_downstream_type.empty()) {
+    info.type = StringToDuplicationDownstream(FLAGS_downstream_type);
+  }
+
+  client::sp::shared_ptr<KuduClient> client;
+  RETURN_NOT_OK(CreateKuduClient(context, &client));
+  unique_ptr<KuduTableAlterer> alterer(client->NewTableAlterer(table_name));
+  alterer->DropDuplicationInfo(info);
+  RETURN_NOT_OK(alterer->Alter());
+  bool is_altering = true;
+  constexpr const int kMaxRetries = 40;
+  int i = 0;
+  while (is_altering && i++ < kMaxRetries) {
+    client->IsAlterTableInProgress(table_name, &is_altering);
+    SleepFor(MonoDelta::FromMilliseconds(500));
+  }
+  if (is_altering) {
+    return Status::TimedOut("drop duplication timeout");
+  }
+  return Status::OK();
+}
+
 Status DeleteColumn(const RunnerContext& context) {
   const string& table_name = FindOrDie(context.required_args, kTableNameArg);
   const string& column_name = FindOrDie(context.required_args, kColumnNameArg);
@@ -2080,6 +2230,20 @@ unique_ptr<Mode> BuildTableMode() {
       .AddOptionalParameter("comment")
       .Build();
 
+  unique_ptr<Action> add_duplicator =
+      ActionBuilder("add_duplicator", &AddDuplicator)
+      .Description("Add a duplicator for a table")
+      .AddRequiredParameter({ kMasterAddressesArg, kMasterAddressesArgDesc })
+      .AddRequiredParameter({ kTableNameArg, "Name of the table to alter" })
+      .AddRequiredParameter({ kDuplicatorNameArg, "Name of the duplicator to add" })
+      .AddOptionalParameter(kDownstreamTypeArg)
+      .AddOptionalParameter(kDownstreamUriArg)
+      .AddOptionalParameter(kDownstreamOptionsArg)
+      .AddOptionalParameter(kDownstreamKerberosSecurityProtocolArg)
+      .AddOptionalParameter(kDownstreamKerberosServiceNameArg)
+      .AddOptionalParameter(kDownstreamKerberosKeytabArg)
+      .AddOptionalParameter(kDownstreamKerberosPrincipalArg)
+      .Build();
 
   unique_ptr<Action> delete_column =
       ClusterActionBuilder("delete_column", &DeleteColumn)
@@ -2099,6 +2263,15 @@ unique_ptr<Mode> BuildTableMode() {
       ClusterActionBuilder("clear_comment", &ClearComment)
       .Description("Clear the comment for a table")
       .AddRequiredParameter({ kTableNameArg, "Name of the table to alter" })
+      .Build();
+
+  unique_ptr<Action> drop_duplicator =
+      ActionBuilder("drop_duplicator", &DropDuplicator)
+      .Description("Drop a duplicator for a table")
+      .AddRequiredParameter({ kMasterAddressesArg, kMasterAddressesArgDesc })
+      .AddRequiredParameter({ kTableNameArg, "Name of the table to alter" })
+      .AddRequiredParameter({ kDuplicatorNameArg, "Name of the duplicator to drop" })
+      .AddOptionalParameter(kDownstreamTypeArg)
       .Build();
 
   unique_ptr<Action> set_replication_factor =
@@ -2126,6 +2299,7 @@ unique_ptr<Mode> BuildTableMode() {
       .Description("Operate on Kudu tables")
       .AddMode(BuildSetTableLimitMode())
       .AddAction(std::move(add_column))
+      .AddAction(std::move(add_duplicator))
       .AddAction(std::move(add_range_partition))
       .AddAction(std::move(clear_comment))
       .AddAction(std::move(column_remove_default))
@@ -2139,6 +2313,7 @@ unique_ptr<Mode> BuildTableMode() {
       .AddAction(std::move(delete_column))
       .AddAction(std::move(delete_table))
       .AddAction(std::move(describe_table))
+      .AddAction(std::move(drop_duplicator))
       .AddAction(std::move(drop_range_partition))
       .AddAction(std::move(get_extra_configs))
       .AddAction(std::move(list_in_flight))

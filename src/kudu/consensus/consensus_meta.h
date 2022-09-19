@@ -18,6 +18,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -28,6 +30,7 @@
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/threading/thread_collision_warner.h"
+#include "kudu/util/mutex.h"
 
 namespace kudu {
 
@@ -167,6 +170,11 @@ class ConsensusMetadata : public RefCountedThreadSafe<ConsensusMetadata> {
   // Return cached peer role and term, lock-free.
   RoleAndTerm GetRoleAndTerm() const;
 
+  std::optional<consensus::DuplicationInfoPB> duplication_info_pb() const {
+    std::lock_guard<Mutex> l_lock(mutex_);
+    return duplication_info_pb_;
+  }
+
  private:
   friend class RaftConsensusQuorumTest;
   friend class RefCountedThreadSafe<ConsensusMetadata>;
@@ -224,6 +232,9 @@ class ConsensusMetadata : public RefCountedThreadSafe<ConsensusMetadata> {
   // Updates the cached on-disk size of the consensus metadata.
   Status UpdateOnDiskSize();
 
+  // Updates the duplicators of RaftConfigPB.
+  Status UpdateDuplicators(const RaftConfigPB& config);
+
   FsManager* const fs_manager_;
   const std::string tablet_id_;
   const std::string peer_uuid_;
@@ -261,6 +272,12 @@ class ConsensusMetadata : public RefCountedThreadSafe<ConsensusMetadata> {
   // as opposed to uint64_t, which is the return type of the underlying function
   // used to populate this value.
   std::atomic<int64_t> on_disk_size_;
+
+  // To protect duplication_info_pb_.
+  mutable Mutex mutex_;
+
+  // The duplicator infomation.
+  std::optional<consensus::DuplicationInfoPB> duplication_info_pb_;
 
   DISALLOW_COPY_AND_ASSIGN(ConsensusMetadata);
 };

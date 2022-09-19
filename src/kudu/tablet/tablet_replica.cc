@@ -43,8 +43,10 @@
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid.pb.h"
 #include "kudu/consensus/quorum_util.h"
+#include "kudu/consensus/opid_util.h"
 #include "kudu/consensus/raft_consensus.h"
 #include "kudu/consensus/time_manager.h"
+#include "kudu/duplicator/connector.h"
 #include "kudu/fs/data_dirs.h"
 #include "kudu/gutil/basictypes.h"
 #include "kudu/gutil/map-util.h"
@@ -54,6 +56,7 @@
 #include "kudu/rpc/rpc_header.pb.h"
 #include "kudu/tablet/mvcc.h"
 #include "kudu/tablet/ops/alter_schema_op.h"
+#include "kudu/tablet/ops/duplication_op.h"
 #include "kudu/tablet/ops/op_driver.h"
 #include "kudu/tablet/ops/participant_op.h"
 #include "kudu/tablet/ops/write_op.h"
@@ -81,6 +84,11 @@ DEFINE_uint32(tablet_max_pending_txn_write_ops, 2,
               "as a participant in the corresponding transaction");
 TAG_FLAG(tablet_max_pending_txn_write_ops, experimental);
 TAG_FLAG(tablet_max_pending_txn_write_ops, runtime);
+namespace kudu {
+namespace duplicator {
+class ConnectorManager;
+}  // namespace duplicator
+}  // namespace kudu
 
 METRIC_DEFINE_histogram(tablet, op_prepare_queue_length, "Operation Prepare Queue Length",
                         kudu::MetricUnit::kTasks,
@@ -121,12 +129,16 @@ METRIC_DEFINE_gauge_uint64(tablet, live_row_count, "Tablet Live Row Count",
                            kudu::MetricLevel::kInfo);
 
 DECLARE_bool(prevent_kudu_2233_corruption);
+METRIC_DEFINE_gauge_uint64(tablet, ops_duplicator_lag, "Tablet duplicator's ops number",
+                           kudu::MetricUnit::kRows, "Number of ops duplicator behind leader",
+                           kudu::MetricLevel::kWarn);
 
 using kudu::consensus::ALTER_SCHEMA_OP;
 using kudu::consensus::ConsensusBootstrapInfo;
 using kudu::consensus::ConsensusOptions;
 using kudu::consensus::ConsensusRound;
 using kudu::consensus::ConsensusStatePB;
+using kudu::consensus::DUPLICATE_OP;
 using kudu::consensus::MarkDirtyCallback;
 using kudu::consensus::OpId;
 using kudu::consensus::PARTICIPANT_OP;
@@ -165,7 +177,8 @@ TabletReplica::TabletReplica(
     ThreadPool* apply_pool,
     ThreadPool* reload_txn_status_tablet_pool,
     TxnCoordinatorFactory* txn_coordinator_factory,
-    MarkDirtyCallback cb)
+    MarkDirtyCallback cb,
+    duplicator::ConnectorManager* connector_manager)
     : meta_(DCHECK_NOTNULL(std::move(meta))),
       cmeta_manager_(DCHECK_NOTNULL(std::move(cmeta_manager))),
       local_peer_pb_(std::move(local_peer_pb)),
@@ -183,7 +196,26 @@ TabletReplica::TabletReplica(
                          this->TxnStatusReplicaStateChanged(this->tablet_id(), reason);
                        } : std::move(cb)),
       state_(NOT_INITIALIZED),
-      last_status_("Tablet initializing...") {
+      last_status_("Tablet initializing..."),
+      connector_manager_(connector_manager),
+      duplicator_(nullptr),
+      duplicator_last_committed_opid_(consensus::MinimumOpId()) {
+}
+
+// TODO(duyuqi), review the construction function and the state_ default value.
+// MockTabletReplica just for Test
+TabletReplica::TabletReplica(consensus::RaftPeerPB local_peer_pb) :
+    meta_(nullptr), cmeta_manager_(nullptr),
+    local_peer_pb_(std::move(local_peer_pb)), log_anchor_registry_(nullptr),
+    apply_pool_(nullptr),
+    reload_txn_status_tablet_pool_(nullptr),
+    txn_coordinator_(nullptr),
+    mark_dirty_clbk_([](const string& reason){}),
+    state_(SHUTDOWN),
+    last_status_("Tablet initializing..."),
+    connector_manager_(nullptr),
+    duplicator_(nullptr),
+    duplicator_last_committed_opid_(consensus::MinimumOpId()) {
 }
 
 TabletReplica::TabletReplica()
@@ -272,6 +304,18 @@ Status TabletReplica::Start(
         } else {
           METRIC_live_row_count.InstantiateInvalid(tablet_->GetMetricEntity(), 0);
         }
+        METRIC_ops_duplicator_lag
+            .InstantiateFunctionGauge(tablet_->GetMetricEntity(), [this]() -> int64_t {
+            if (consensus()->ShouldDuplication()) {
+              log::RetentionIndexes indexes = consensus()->GetRetentionIndexes();
+              int64_t opid_index = last_confirmed_opid().index();
+              if (opid_index <= 0) {
+                return 0;
+              }
+              return (indexes.for_durability - opid_index);
+            }
+            return 0; })
+            ->AutoDetach(&metric_detacher_);
       }
       op_tracker_.StartMemoryTracking(tablet_->mem_tracker());
 
@@ -282,7 +326,6 @@ Status TabletReplica::Start(
       peer_proxy_factory.reset(new RpcPeerProxyFactory(messenger_, resolver));
       time_manager.reset(new TimeManager(clock_, tablet_->mvcc_manager()->GetCleanTimestamp()));
     }
-
     // We cannot hold 'lock_' while we call RaftConsensus::Start() because it
     // may invoke TabletReplica::StartFollowerOp() during startup,
     // causing a self-deadlock. We take a ref to members protected by 'lock_'
@@ -307,6 +350,52 @@ Status TabletReplica::Start(
   }
 
   return Status::OK();
+}
+
+Status TabletReplica::StartDuplicator() {
+  std::lock_guard<Mutex> l_lock(duplicator_mutex_);
+  // StartDuplicator is called when switch Candidate to Leader.
+  // 1. If duplicator_ is nullptr, it's should new and init.
+  // 2. If duplicator_ is not nullptr, that's means initted in the past,
+  // duplicator_ should re-init, when the duplicator's new options maybe changed.
+  // The scenario:
+  //   1. Users add a duplicator with error topic/uri options.
+  //   2. Users want to fix it error and drop the duplicator and add an new duplicator.
+  // 3. If not changed, re-init is no confluence.
+  ShutdownDuplicatorUnlocked();
+  std::optional<consensus::DuplicationInfoPB> dup_info_opt = consensus_->duplication_info_pb();
+  if (!dup_info_opt.has_value()) {
+    // Not exist the duplicator.
+    return Status::OK();
+  }
+  ThreadPool* duplicate_pool = shared_consensus()->duplication_pool();
+  CHECK(duplicate_pool);
+  duplicator_.reset(new duplicator::Duplicator(duplicate_pool, this));
+
+  duplicator::ConnectorOptions options(*dup_info_opt);
+  Status status = duplicator_->Init(options);
+  if (!status.ok()) {
+    LOG_WITH_PREFIX(ERROR) << Substitute(
+        "start duplicator failed, table $0, status $1", meta_->table_name(), status.ToString());
+    ShutdownDuplicatorUnlocked();
+    return status;
+  }
+  VLOG_WITH_PREFIX(0) << "start duplicator success.";
+
+  return Status::OK();
+}
+
+void TabletReplica::ShutdownDuplicator() {
+  std::lock_guard<Mutex> l_lock(duplicator_mutex_);
+  ShutdownDuplicatorUnlocked();
+}
+
+void TabletReplica::ShutdownDuplicatorUnlocked() {
+  if (duplicator_) {
+    duplicator_->Shutdown();
+    duplicator_.reset();
+    VLOG_WITH_PREFIX(0) << "shutdown duplicator.";
+  }
 }
 
 const string& TabletReplica::StateName() const {
@@ -342,6 +431,10 @@ void TabletReplica::Stop() {
   UnregisterMaintenanceOps();
 
   if (consensus_) consensus_->Stop();
+
+  if (duplicator_) {
+    duplicator_->Shutdown();
+  }
 
   // TODO(KUDU-183): Keep track of the pending tasks and send an "abort" message.
   LOG_SLOW_EXECUTION(WARNING, 1000,
@@ -602,6 +695,19 @@ Status TabletReplica::SubmitWrite(unique_ptr<WriteOpState> op_state) {
   return Status::OK();
 }
 
+Status TabletReplica::SubmitDuplicationOp(std::unique_ptr<DuplicationOpState> op_state,
+                                          consensus::OpId confirmed_opid,
+                                          consensus::DuplicationInfoPB dup_info) {
+  RETURN_NOT_OK(CheckRunning());
+  op_state->SetResultTracker(result_tracker_);
+  unique_ptr<DuplicationOp> op(new DuplicationOp(
+      std::move(op_state), consensus::LEADER, std::move(confirmed_opid), std::move(dup_info)));
+  scoped_refptr<OpDriver> driver;
+  RETURN_NOT_OK(NewLeaderOpDriver(std::move(op), &driver));
+  driver->ExecuteAsync();
+  return Status::OK();
+}
+
 Status TabletReplica::SubmitTxnParticipantOp(std::unique_ptr<ParticipantOpState> op_state) {
   RETURN_NOT_OK(CheckRunning());
 
@@ -722,6 +828,9 @@ void TabletReplica::GetInFlightOps(Op::TraceType trace_type,
         case Op::PARTICIPANT_OP:
           status_pb.set_op_type(consensus::PARTICIPANT_OP);
           break;
+        case Op::DUPLICATION_OP:
+          status_pb.set_op_type(consensus::DUPLICATE_OP);
+          break;
       }
       status_pb.set_description(driver->ToString());
       int64_t running_for_micros =
@@ -745,6 +854,20 @@ log::RetentionIndexes TabletReplica::GetRetentionIndexes() const {
                       << Substitute("{dur: $0, peers: $1}", ret.for_durability, ret.for_peers);
   // If we never have written to the log, no need to proceed.
   if (ret.for_durability == 0) return ret;
+
+  log::LogAnchor anchor;
+  if (consensus_->HasDuplicator()) {
+    OpId duplicator_last_committed_opid = this->duplicator_last_committed_opid();
+    CHECK_GE(duplicator_last_committed_opid.index(), 0);
+    VLOG_WITH_PREFIX(4) << "duplicator_last_committed_opid: "
+                        << duplicator_last_committed_opid.ShortDebugString();
+    log_anchor_registry_->Register(duplicator_last_committed_opid.index(), "duplicator", &anchor);
+  }
+  SCOPED_CLEANUP({
+    if (consensus_->HasDuplicator()) {
+      log_anchor_registry_->Unregister(&anchor);
+    }
+  });
 
   // Next, we interrogate the anchor registry.
   // Returns OK if minimum known, NotFound if no anchors are registered.
@@ -838,6 +961,15 @@ Status TabletReplica::StartFollowerOp(const scoped_refptr<ConsensusRound>& round
           new AlterSchemaOp(std::move(op_state), consensus::FOLLOWER));
       break;
     }
+    case DUPLICATE_OP:
+    {
+      const consensus::DuplicateRequestPB& request = replicate_msg->duplicate_request();
+      consensus::DuplicateResponsePB response;
+      auto op_state = std::make_unique<DuplicationOpState>(this, request, response);
+      op.reset(new DuplicationOp(
+          std::move(op_state), consensus::FOLLOWER, request.op_id(), request.dup_info()));
+      break;
+    }
     default:
       LOG(FATAL) << "Unsupported Operation Type";
   }
@@ -912,7 +1044,7 @@ Status TabletReplica::NewLeaderOpDriver(unique_ptr<Op> op,
 }
 
 Status TabletReplica::NewReplicaOpDriver(unique_ptr<Op> op,
-                                                  scoped_refptr<OpDriver>* driver) {
+                                         scoped_refptr<OpDriver>* driver) {
   scoped_refptr<OpDriver> op_driver = new OpDriver(
     &op_tracker_,
     consensus_.get(),

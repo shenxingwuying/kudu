@@ -75,6 +75,7 @@
 #include "kudu/tablet/rowset_info.h"
 #include "kudu/tablet/rowset_tree.h"
 #include "kudu/tablet/svg_dump.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_metrics.h"
 #include "kudu/tablet/tablet_mm_ops.h"
@@ -651,6 +652,13 @@ Status Tablet::NewRowIterator(RowIteratorOptions opts,
 Status Tablet::DecodeWriteOperations(const Schema* client_schema,
                                      WriteOpState* op_state,
                                      bool is_leader) {
+  return DecodeWriteOperations(client_schema, nullptr, op_state, is_leader);
+}
+
+Status Tablet::DecodeWriteOperations(const Schema* client_schema,
+                                     const SchemaPtr& server_schema_ptr,
+                                     WriteOpState* op_state,
+                                     bool /* is_leader */) {
   TRACE_EVENT0("tablet", "Tablet::DecodeWriteOperations");
 
   DCHECK(op_state->row_ops().empty());
@@ -664,7 +672,12 @@ Status Tablet::DecodeWriteOperations(const Schema* client_schema,
   TRACE("Decoding operations");
   vector<DecodedRowOperation> ops;
 
-  SchemaPtr schema_ptr = schema();
+  SchemaPtr schema_ptr;
+  if (server_schema_ptr) {
+    schema_ptr = server_schema_ptr;
+  } else {
+    schema_ptr = schema();
+  }
   // Decode the ops
   RowOperationsPBDecoder dec(&op_state->request()->row_operations(),
                              client_schema,
@@ -1370,7 +1383,6 @@ Status Tablet::ApplyRowOperations(WriteOpState* op_state) {
   IOContext io_context({ tablet_id() });
   RETURN_NOT_OK(BulkCheckPresence(&io_context, op_state));
 
-  // Actually apply the ops.
   for (int op_idx = 0; op_idx < num_ops; op_idx++) {
     RowOp* row_op = op_state->row_ops()[op_idx];
     if (row_op->has_result()) continue;
@@ -1399,7 +1411,7 @@ Status Tablet::ApplyRowOperation(const IOContext* io_context,
   }
 
   {
-    State s;
+    State s = kInitialized;
     RETURN_NOT_OK_PREPEND(CheckHasNotBeenStopped(&s),
         Substitute("Apply of $0 exited early", op_state->ToString()));
     CHECK(s == kOpen || s == kBootstrapping);

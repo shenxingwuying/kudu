@@ -34,6 +34,9 @@ class MaintenanceManager;
 namespace transactions {
 class TxnSystemClientInitializer;
 } // namespace transactions
+namespace duplicator {
+class ConnectorManager;
+}
 
 namespace tserver {
 
@@ -142,6 +145,9 @@ class TabletServer : public kserver::KuduServer {
 
   // The maintenance manager for this tablet server
   std::shared_ptr<MaintenanceManager> maintenance_manager_;
+
+  // Manage connectors for duplications.
+  std::unique_ptr<duplicator::ConnectorManager> connector_manager_;
 
   DISALLOW_COPY_AND_ASSIGN(TabletServer);
 };

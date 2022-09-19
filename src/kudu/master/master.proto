@@ -158,6 +158,8 @@ message SysTabletsEntryPB {
 
   // The delete time of the tablet, in seconds since the epoch.
   optional int64 delete_timestamp = 9;
+  // Replica for duplication
+  repeated consensus.DuplicationInfoPB dup_infos = 100;
 }
 
 // The on-disk entry in the sys.catalog table ("metadata" column) for
@@ -229,6 +231,8 @@ message SysTablesEntryPB {
 
   // The reservation time interval (in seconds) between soft delete and delete.
   optional uint32 soft_deleted_reserved_seconds = 19;
+  // Replica for duplication.
+  repeated consensus.DuplicationInfoPB dup_infos = 100;
 }
 
 // The on-disk entry in the sys.catalog table ("metadata" column) to represent
@@ -573,6 +577,10 @@ message CreateTableRequestPB {
 
   // The comment on the table.
   optional string comment = 13;
+  // Replica for duplication.
+  // firstly, we support only 1 duplication_infos
+  // TODO(duyuqi), support more than one
+  repeated consensus.DuplicationInfoPB dup_infos = 100;
 }
 
 message CreateTableResponsePB {
@@ -681,6 +689,7 @@ message ListTablesResponsePB {
     optional int32 num_tablets = 4;
     optional int32 num_replicas = 5;
     repeated TabletWithPartition tablet_with_partition = 6;
+    repeated consensus.DuplicationInfoPB dup_info = 9;
   }
   repeated TableInfo tables = 2;
 }
@@ -781,6 +790,8 @@ message AlterTableRequestPB {
     ALTER_COLUMN = 4;
     ADD_RANGE_PARTITION = 5;
     DROP_RANGE_PARTITION = 6;
+    ADD_DUPLICATION = 100;
+    DROP_DUPLICATION = 101;
   }
   message AddColumn {
     // The schema to add.
@@ -828,6 +839,12 @@ message AlterTableRequestPB {
     // the range partition to add or drop.
     optional RowOperationsPB range_bounds = 1;
   }
+  message AddDuplication {
+    required consensus.DuplicationInfoPB dup_info = 1;
+  }
+  message DropDuplication {
+    required consensus.DuplicationInfoPB dup_info = 1;
+  }
 
   message Step {
     optional StepType type = 1 [ default = UNKNOWN ];
@@ -839,6 +856,8 @@ message AlterTableRequestPB {
     optional AddRangePartition add_range_partition = 5;
     optional DropRangePartition drop_range_partition = 6;
     optional AlterColumn alter_column = 7;
+    optional AddDuplication add_duplication = 100;
+    optional DropDuplication drop_duplication = 101;
   }
 
   required TableIdentifierPB table = 1;
@@ -1211,6 +1230,8 @@ enum MasterFeatures {
   IMMUTABLE_COLUMN_ATTRIBUTE = 10;
   // Whether master supports auto incrementing column.
   AUTO_INCREMENTING_COLUMN = 11;
+  // Whether the cluster supports duplication.
+  DUPLICATION = 99;
 }
 
 service MasterService {

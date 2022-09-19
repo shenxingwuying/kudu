@@ -239,12 +239,13 @@ TEST_F(SubprocessServerTest, TestTimeoutWhileQueueingCalls) {
   // requests should fill the pipe, and our outbound queue.
   const int kNumRequests = 500;
   vector<thread> threads;
+  threads.reserve(kNumRequests);
   vector<Status> results(kNumRequests);
   const string kLargeRequest = string(10000, 'x');
   for (int i = 0; i < kNumRequests; i++) {
     threads.emplace_back([&, i] {
       SubprocessRequestPB request =
-          CreateEchoSubprocessRequestPB(kLargeRequest, /*sleep_ms*/500);
+          CreateEchoSubprocessRequestPB(kLargeRequest, /*sleep_ms*/900);
       SubprocessResponsePB response;
       results[i] = server_->Execute(&request, &response);
     });

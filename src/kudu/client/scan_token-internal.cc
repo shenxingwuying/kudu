@@ -536,8 +536,10 @@ Status KuduScanTokenBuilder::Data::Build(vector<KuduScanToken*>* tokens) {
                                                     r.ts->location());
       bool is_leader = r.role == consensus::RaftPeerPB::LEADER;
       bool is_voter = is_leader || r.role == consensus::RaftPeerPB::FOLLOWER;
+      bool is_duplicator = r.role == consensus::RaftPeerPB::DUP_LEARNER;
       unique_ptr<KuduReplica> client_replica(new KuduReplica);
       client_replica->data_ = new KuduReplica::Data(is_leader, is_voter,
+                                                    is_duplicator,
                                                     std::move(client_ts));
       client_replicas.push_back(client_replica.release());
     }

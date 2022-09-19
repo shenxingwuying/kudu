@@ -60,7 +60,11 @@ class KuduTableAlterer::Data {
     std::unique_ptr<KuduRangePartition> range_partition;
 
     // The dimension label for tablet. Only set when the StepType is ADD_RANGE_PARTITION.
+
     std::optional<std::string> dimension_label;
+
+    // Duplication Info
+    std::optional<client::DuplicationInfo> dup_info;
   };
   std::vector<Step> steps_;
 

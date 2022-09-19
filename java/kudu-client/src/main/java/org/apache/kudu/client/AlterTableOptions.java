@@ -34,9 +34,11 @@ import org.apache.yetus.audience.InterfaceStability;
 
 import org.apache.kudu.ColumnSchema;
 import org.apache.kudu.Common;
+import org.apache.kudu.DuplicationDownstreamType;
 import org.apache.kudu.Schema;
 import org.apache.kudu.Type;
 import org.apache.kudu.client.ProtobufHelper.SchemaPBConversionFlags;
+import org.apache.kudu.consensus.Metadata;
 import org.apache.kudu.master.Master;
 
 /**
@@ -536,6 +538,72 @@ public class AlterTableOptions {
   }
 
   /**
+   * Add a table's duplication. Only support one duplication.
+   * TODO(duyuqi) support more than one duplication
+   *
+   * @param name destination system data entity, eg Kafka topic name
+   * @param streamType duplication's destination system, Kafka only
+   * @param uri        required, eg Kafka bootstrap servers
+   * @return this instance
+   */
+  public AlterTableOptions addDuplication(String name, DuplicationDownstreamType streamType,
+      String uri) {
+    return addDuplication(name, streamType, uri, null);
+  }
+
+  /**
+   * Add a table's duplication. Only support one duplication.
+   * TODO(duyuqi) support more than one duplication
+   *
+   * @param name destination system data entity, eg Kafka topic name
+   * @param streamType duplication's destination system, Kafka only
+   * @param uri        required, eg Kafka bootstrap servers
+   * @param kerberosOptions optional, kerberos options if destination system uses kerberos.
+   * @return this instance
+   */
+  public AlterTableOptions addDuplication(String name, DuplicationDownstreamType streamType,
+      String uri, Common.KerberosOptions kerberosOptions) {
+    Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
+    builder.setName(name).setType(streamType.getDownstreamType());
+    if (uri != null && !uri.isEmpty()) {
+      builder.setUri(uri);
+    }
+    if (kerberosOptions != null) {
+      builder.setKerberosOptions(kerberosOptions);
+    }
+    Master.AlterTableRequestPB.Step.Builder stepBuilder = pb.addAlterSchemaStepsBuilder();
+    stepBuilder.setType(AlterTableRequestPB.StepType.ADD_DUPLICATION)
+        .setAddDuplication(Master.AlterTableRequestPB.AddDuplication
+            .newBuilder()
+            .setDupInfo(builder));
+    return this;
+  }
+
+  /**
+   * Drop a table's duplication
+   * TODO(duyuqi) support more than one duplication
+   *
+   * @param name destination system data entity, eg Kafka topic name
+   * @param streamType duplication's destination system, Kafka only
+   * @param uri        optional
+   * @return this instance
+   */
+  public AlterTableOptions dropDuplication(String name, DuplicationDownstreamType streamType,
+      String uri) {
+    Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
+    builder.setName(name).setType(streamType.getDownstreamType());
+    if (uri != null && !uri.isEmpty()) {
+      builder.setUri(uri);
+    }
+    Master.AlterTableRequestPB.Step.Builder stepBuilder = pb.addAlterSchemaStepsBuilder();
+    stepBuilder.setType(AlterTableRequestPB.StepType.DROP_DUPLICATION)
+        .setDropDuplication(Master.AlterTableRequestPB.DropDuplication
+            .newBuilder()
+            .setDupInfo(builder));
+    return this;
+  }
+
+  /**
    * Whether to wait for the table to be fully altered before this alter
    * operation is considered to be finished.
    * <p>
@@ -598,6 +666,12 @@ public class AlterTableOptions {
       if (isAddingRangeWithCustomHashSchema) {
         requiredFeatureFlags.add(
                 Integer.valueOf(Master.MasterFeatures.RANGE_SPECIFIC_HASH_SCHEMA_VALUE));
+      }
+    }
+    for (Master.AlterTableRequestPB.Step step : pb.getAlterSchemaStepsList()) {
+      if (step.hasAddDuplication() || step.hasDropDuplication()) {
+        requiredFeatureFlags.add(Master.MasterFeatures.DUPLICATION_VALUE);
+        break;
       }
     }
     return requiredFeatureFlags;

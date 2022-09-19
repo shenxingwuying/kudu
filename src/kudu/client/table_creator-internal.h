@@ -83,6 +83,8 @@ class KuduTableCreator::Data {
 
   std::optional<TableTypePB> table_type_;
 
+  std::optional<client::DuplicationInfo> dup_info_;
+
   MonoDelta timeout_;
 
   bool wait_;

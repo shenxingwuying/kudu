@@ -26,11 +26,13 @@ namespace client {
 
 class KuduReplica::Data {
  public:
-  Data(bool is_leader, bool is_voter, std::unique_ptr<KuduTabletServer> ts);
+  Data(bool is_leader, bool is_voter, bool is_duplicator,
+       std::unique_ptr<KuduTabletServer> ts);
   ~Data() = default;
 
   const bool is_leader_;
   const bool is_voter_;
+  const bool is_duplicator_;
   const std::unique_ptr<KuduTabletServer> ts_;
 
  private:

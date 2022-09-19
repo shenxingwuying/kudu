@@ -21,6 +21,7 @@ option java_package = "org.apache.kudu.tools";
 
 import "kudu/common/common.proto";
 import "kudu/common/wire_protocol.proto";
+import "kudu/consensus/metadata.proto";
 import "kudu/tablet/metadata.proto";
 import "kudu/tablet/tablet.proto";
 
@@ -551,6 +552,7 @@ message TablesInfoPB {
     optional uint32 num_tablets_in_flight = 6;
     optional string state = 7;
     optional bytes id = 8;
+    repeated consensus.DuplicationInfoPB dup_infos = 999;
   }
 
   repeated TableInfoPB tables = 1;

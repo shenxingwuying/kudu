@@ -159,6 +159,7 @@ class KuduClient::Data {
     int num_tablets;
     int num_replicas;
     std::vector<PartitionWithTabletId> partition_with_tablet_info;
+    std::vector<DuplicationInfo> duplication_info;
   };
 
   static Status ListTablesWithInfo(KuduClient* client,

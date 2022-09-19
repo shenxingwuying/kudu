@@ -591,8 +591,12 @@ Status PrintTabletSummaries(const vector<TabletSummary>& tablet_summaries,
     }
     out << tablet_summary.status << endl;
     for (const ReplicaSummary& r : tablet_summary.replicas) {
-      const char* spec_str = r.is_leader
-          ? " [LEADER]" : (!r.is_voter ? " [NONVOTER]" : "");
+      const char* spec_str =
+          r.is_leader
+              ? " [LEADER]"
+              : (r.is_duplicator ? " [DUPLICATOR]"
+              : !r.is_voter ? " [NONVOTER]"
+              : (!r.ts_healthy || r.state !=tablet::RUNNING) ? "" : " [FOLLOWER]");
 
       const string ts_string = r.ts_address ?
                                Substitute("$0 ($1)", r.ts_uuid, *r.ts_address) :
@@ -622,15 +626,23 @@ Status PrintTabletSummaries(const vector<TabletSummary>& tablet_summaries,
           Color(AnsiCode::BLUE, r.status_pb->last_status()));
     }
 
-    auto& master_cstate = tablet_summary.master_cstate;
+    const auto& master_cstate = tablet_summary.master_cstate;
     vector<string> ts_uuids;
     for (const ReplicaSummary& rs : tablet_summary.replicas) {
-      ts_uuids.push_back(rs.ts_uuid);
+      if (rs.is_duplicator) {
+        ts_uuids.emplace_back("FakeUuid");
+      } else {
+        ts_uuids.push_back(rs.ts_uuid);
+      }
     }
     ConsensusStateMap consensus_state_map;
     for (const ReplicaSummary& rs : tablet_summary.replicas) {
       if (rs.consensus_state) {
-        InsertOrDie(&consensus_state_map, rs.ts_uuid, *rs.consensus_state);
+        if (rs.is_duplicator) {
+          InsertOrDie(&consensus_state_map, "FakeUuid", *rs.consensus_state);
+        } else {
+          InsertOrDie(&consensus_state_map, rs.ts_uuid, *rs.consensus_state);
+        }
       }
     }
     RETURN_NOT_OK(PrintConsensusMatrix(ts_uuids, master_cstate,

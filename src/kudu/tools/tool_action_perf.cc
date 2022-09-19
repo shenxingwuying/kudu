@@ -199,6 +199,7 @@
 #include "kudu/consensus/consensus_meta_manager.h"
 #include "kudu/consensus/log.h"
 #include "kudu/consensus/log_anchor_registry.h"
+#include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/raft_consensus.h"
 #include "kudu/fs/fs_manager.h"
 #include "kudu/gutil/map-util.h"
@@ -208,6 +209,7 @@
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/rpc/result_tracker.h"
 #include "kudu/tablet/rowset.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet_bootstrap.h"
 #include "kudu/tablet/tablet_metadata.h"
 #include "kudu/tablet/tablet_replica.h"
@@ -979,6 +981,14 @@ Status TabletScan(const RunnerContext& context) {
   std::shared_ptr<Tablet> tablet;
   scoped_refptr<Log> log;
   ConsensusBootstrapInfo cbi;
+
+  // MockTabletReplica
+  consensus::RaftPeerPB local_peer_pb;
+  local_peer_pb.set_member_type(consensus::RaftPeerPB::VOTER);
+  // TODO(duyuqi) duplication
+  // Why the tablet_replica_ptr, keep it nullptr ok?
+  scoped_refptr<tablet::TabletReplica> tablet_replica_ptr =
+    new tablet::TabletReplica(local_peer_pb);
   RETURN_NOT_OK(tablet::BootstrapTablet(std::move(tmeta),
                                         cmeta->CommittedConfig(),
                                         &clock,
@@ -986,7 +996,7 @@ Status TabletScan(const RunnerContext& context) {
                                         /*result_tracker=*/ nullptr,
                                         /*metric_registry=*/ nullptr,
                                         /*file_cache=*/ nullptr,
-                                        /*tablet_replica=*/ nullptr,
+                                        tablet_replica_ptr.get(),
                                         std::move(registry),
                                         &tablet,
                                         &log,

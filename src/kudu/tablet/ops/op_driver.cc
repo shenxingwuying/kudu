@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <ostream>
+#include <type_traits>
 #include <utility>
 
 #include <glog/logging.h>
@@ -30,6 +31,7 @@
 #include "kudu/clock/clock.h"
 #include "kudu/common/common.pb.h"
 #include "kudu/common/timestamp.h"
+#include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/log.h"
 #include "kudu/consensus/raft_consensus.h"
 #include "kudu/consensus/time_manager.h"
@@ -39,10 +41,12 @@
 #include "kudu/rpc/result_tracker.h"
 #include "kudu/rpc/rpc_header.pb.h"
 #include "kudu/tablet/mvcc.h"
+#include "kudu/tablet/op_order_verifier.h"
+#include "kudu/tablet/ops/op.h"
+#include "kudu/tablet/ops/op_tracker.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet_replica.h"
-#include "kudu/tablet/op_order_verifier.h"
-#include "kudu/tablet/ops/op_tracker.h"
 #include "kudu/util/debug/trace_event.h"
 #include "kudu/util/logging.h"
 #include "kudu/util/pb_util.h"
@@ -156,9 +160,7 @@ Status OpDriver::Init(unique_ptr<Op> op,
       const rpc::RequestIdPB& request_id = state()->request_id();
       const google::protobuf::Message* response = state()->response();
       unique_ptr<OpCompletionCallback> callback(
-          new FollowerOpCompletionCallback(request_id,
-                                                    response,
-                                                    state()->result_tracker()));
+          new FollowerOpCompletionCallback(request_id, response, state()->result_tracker()));
       mutable_state()->set_completion_callback(std::move(callback));
     }
   } else {
@@ -522,10 +524,9 @@ void OpDriver::ApplyTask() {
 
     {
       TRACE_EVENT1("op", "AsyncAppendCommit", "op", this);
-      CHECK_OK(log_->AsyncAppendCommit(
-          *commit_msg, [](const Status& s) {
-            CrashIfNotOkStatusCB("Enqueued commit operation failed to write to WAL", s);
-          }));
+      CHECK_OK(log_->AsyncAppendCommit(*commit_msg, [](const Status& s) {
+                  CrashIfNotOkStatusCB("Enqueued commit operation failed to write to WAL", s);
+              }));
     }
 
     // If the client requested COMMIT_WAIT as the external consistency mode

@@ -22,13 +22,14 @@ import java.util.List;
 import java.util.Map;
 
 import com.google.common.base.Preconditions;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
 
 import org.apache.kudu.Common;
+import org.apache.kudu.DuplicationDownstreamType;
 import org.apache.kudu.Schema;
+import org.apache.kudu.consensus.Metadata;
 import org.apache.kudu.master.Master;
 
 /**
@@ -297,6 +298,45 @@ public class CreateTableOptions {
     return this;
   }
 
+  /**
+   * Add the table's duplication
+   * TODO(duyuqi) support more than one duplication
+   *
+   * @param name destination system data entity name, eg: kafka topic name
+   * @param streamType duplication's destination system, such as Kafka
+   * @param uri required, destination's discovered service name
+   * @return this instance
+   */
+  public CreateTableOptions addDuplication(String name, DuplicationDownstreamType streamType,
+      String uri) {
+    return addDuplication(name, streamType, uri, null);
+  }
+
+  /**
+   * Add the table's duplication
+   * TODO(duyuqi) support more than one duplication
+   *
+   * @param name destination system data entity name, eg: kafka topic name
+   * @param streamType duplication's destination system, such as Kafka
+   * @param uri required, destination's discovered service name
+   * @param kerberosOptions optional, kerberos options if destination system uses kerberos.
+   * @return this instance
+   */
+  public CreateTableOptions addDuplication(String name, DuplicationDownstreamType streamType,
+      String uri, Common.KerberosOptions kerberosOptions) {
+    Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
+    builder.setName(name)
+        .setType(streamType.getDownstreamType());
+    if (uri != null && !uri.isEmpty()) {
+      builder.setUri(uri);
+    }
+    if (kerberosOptions != null) {
+      builder.setKerberosOptions(kerberosOptions);
+    }
+    pb.addDupInfos(builder.build());
+    return this;
+  }
+
   Master.CreateTableRequestPB.Builder getBuilder() {
     if (isPbGenerationDone) {
       return pb;
@@ -333,6 +373,18 @@ public class CreateTableOptions {
     }
     isPbGenerationDone = true;
     return pb;
+  }
+
+
+  List<Integer> getRequiredFeatureFlags() {
+    List<Integer> requiredFeatureFlags = new ArrayList<>();
+    if (!rangePartitions.isEmpty()) {
+      requiredFeatureFlags.add(Master.MasterFeatures.RANGE_PARTITION_BOUNDS_VALUE);
+    }
+    if (!pb.getDupInfosList().isEmpty()) {
+      requiredFeatureFlags.add(Master.MasterFeatures.DUPLICATION_VALUE);
+    }
+    return requiredFeatureFlags;
   }
 
   List<Integer> getRequiredFeatureFlags(Schema schema) {

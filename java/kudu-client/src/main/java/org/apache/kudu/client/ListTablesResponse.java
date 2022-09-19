@@ -25,6 +25,8 @@ import com.google.common.base.Objects;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
 
+import org.apache.kudu.consensus.Metadata;
+
 @InterfaceAudience.Public
 @InterfaceStability.Evolving
 public class ListTablesResponse extends KuduRpcResponse {
@@ -61,10 +63,12 @@ public class ListTablesResponse extends KuduRpcResponse {
   public static class TableInfo {
     private final String tableId;
     private final String tableName;
+    private List<Metadata.DuplicationInfoPB> duplicationInfos = null;
 
     TableInfo(String tableId, String tableName) {
       this.tableId = tableId;
       this.tableName = tableName;
+      this.duplicationInfos = new ArrayList<>();
     }
 
     /**
@@ -79,6 +83,14 @@ public class ListTablesResponse extends KuduRpcResponse {
      */
     public String getTableName() {
       return tableName;
+    }
+
+    public void addAllDuplicationInfos(List<Metadata.DuplicationInfoPB> dupInfos) {
+      this.duplicationInfos.addAll(dupInfos);
+    }
+
+    public List<Metadata.DuplicationInfoPB> duplicationInfos() {
+      return this.duplicationInfos;
     }
 
     @Override

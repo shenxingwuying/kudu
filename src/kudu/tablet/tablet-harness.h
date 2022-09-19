@@ -127,6 +127,15 @@ class TabletHarness {
     return Status::OK();
   }
 
+  void TEST_SetTablet(std::shared_ptr<Tablet> tablet_ptr) {
+    tablet_ = std::move(tablet_ptr);
+  }
+
+  void ResetState() {
+    const std::shared_ptr<Tablet>& tablet_ptr = tablet();
+    tablet_ptr->ResetStateForTest();
+  }
+
   Status Open() {
     RETURN_NOT_OK(tablet_->Open());
     return tablet_->MarkFinishedBootstrapping();

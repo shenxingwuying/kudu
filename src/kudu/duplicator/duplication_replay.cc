@@ -1,0 +1,306 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+#include "kudu/duplicator/duplication_replay.h"
+
+#include <cstdint>
+#include <functional>
+#include <ostream>
+#include <string>
+#include <type_traits>
+#include <vector>
+
+#include <boost/iterator/iterator_facade.hpp>
+#include <boost/iterator/reverse_iterator.hpp>
+#include <boost/range/adaptor/reversed.hpp>
+#include <glog/logging.h>
+
+#include "kudu/common/row_operations.pb.h"
+#include "kudu/common/schema.h"
+#include "kudu/common/timestamp.h"
+#include "kudu/common/wire_protocol.h"
+#include "kudu/consensus/consensus.pb.h"
+#include "kudu/consensus/log.pb.h"
+#include "kudu/consensus/log_anchor_registry.h"
+#include "kudu/consensus/log_index.h"
+#include "kudu/consensus/log_reader.h"
+#include "kudu/consensus/log_util.h"
+#include "kudu/consensus/opid.pb.h"
+#include "kudu/consensus/opid_util.h"
+#include "kudu/consensus/raft_consensus.h"
+#include "kudu/duplicator/connector.h"
+#include "kudu/duplicator/duplicator.h"
+#include "kudu/duplicator/log_segment_reader.h"
+#include "kudu/fs/fs_manager.h"
+#include "kudu/gutil/ref_counted.h"
+#include "kudu/gutil/strings/substitute.h"
+#include "kudu/tablet/ops/write_op.h"
+#include "kudu/tablet/tablet-test-util.h"
+#include "kudu/tablet/tablet.h"
+#include "kudu/tablet/tablet_metadata.h"
+#include "kudu/tablet/tablet_replica.h"
+#include "kudu/tserver/tserver.pb.h"
+#include "kudu/tserver/tserver_admin.pb.h"
+#include "kudu/util/logging.h"
+#include "kudu/util/metrics.h"
+#include "kudu/util/monotime.h"
+#include "kudu/util/pb_util.h"
+#include "kudu/util/scoped_cleanup.h"
+#include "kudu/util/threadpool.h"
+
+using kudu::pb_util::SecureDebugString;
+using std::shared_ptr;
+using std::string;
+using strings::Substitute;
+
+namespace kudu {
+namespace duplicator {
+
+LogReplayer::LogReplayer(tablet::TabletReplica* tablet_replica)
+    : tablet_replica_(tablet_replica) {
+}
+
+shared_ptr<log::LogReader> LogReplayer::GetLogReader() {
+  tablet::Tablet* tablet = tablet_replica_->tablet();
+  FsManager* fs_manager = tablet_replica_->tablet_metadata()->fs_manager();
+  const string wal_dir = fs_manager->GetTabletWalDir(tablet->tablet_id());
+
+  scoped_refptr<log::LogIndex> log_index(nullptr);
+  shared_ptr<log::LogReader> log_reader;
+  Status status;
+  int retry_total_count = 30; // 3s
+  do {
+    // If the last wal file is writing, reading the file's footer may return
+    // error because of the partial record, so retry it.
+    status = log::LogReader::Open(fs_manager->GetEnv(),
+                                  wal_dir,
+                                  log_index,
+                                  tablet->tablet_id(),
+                                  tablet->GetMetricEntity().get(),
+                                  nullptr,
+                                  &log_reader);
+    if (status.ok() || retry_total_count-- < 0) {
+      break;
+    }
+    SleepFor(MonoDelta::FromMilliseconds(100));
+  } while (true);
+  CHECK_OK(status);
+  CHECK(log_reader != nullptr);
+  return log_reader;
+}
+
+void LogReplayer::Init() {
+  ThreadPool* replay_pool = tablet_replica_->consensus()->replay_pool();
+  CHECK(replay_pool != nullptr);
+  log_replay_token_ = replay_pool->NewToken(ThreadPool::ExecutionMode::SERIAL);
+  shutdown_ = false;
+}
+
+void LogReplayer::Shutdown() {
+  shutdown_ = true;
+  if (log_replay_token_) {
+    log_replay_token_->Shutdown();
+    log_replay_token_.reset();
+  }
+}
+
+void LogReplayer::TriggerReplayTask() {
+  CHECK_OK(log_replay_token_->Submit([this]() {
+    Status status = this->Replay();
+    // 'Replay()' should be success or interrupted by duplicator shutdown.
+    CHECK(status.ok() || status.IsIllegalState()) << status.ToString();
+  }));
+}
+
+Status LogReplayer::SeekStartPoint() {
+  CHECK(!start_point_.IsInitialized());
+  log::LogAnchor anchor;
+  tablet_replica_->log_anchor_registry()->Register(0, "duplicator", &anchor);
+  SCOPED_CLEANUP({ tablet_replica_->log_anchor_registry()->Unregister(&anchor); });
+
+  shared_ptr<log::LogReader> log_reader = GetLogReader();
+  log::SegmentSequence segments;
+  log_reader->GetSegmentsSnapshot(&segments);
+
+  // Generally, the lastest segment has DUPLICATE_OP, and we find
+  // the lastest DUPLICATE_OP log entry.
+  for (const auto& segment : boost::adaptors::reverse(segments)) {
+    LogSegmentReader reader(segment);
+    log::LogEntryPB* value = nullptr;
+    while ((value = reader.Next()) != nullptr) {
+      if (value->has_replicate() &&
+          value->replicate().op_type() == consensus::OperationType::DUPLICATE_OP) {
+        const consensus::DuplicateRequestPB& duplicate = value->replicate().duplicate_request();
+        start_point_ = duplicate.op_id();
+      }
+    }
+    if (start_point_.IsInitialized()) {
+      tablet_replica_->duplicator()->set_last_confirmed_opid(start_point_);
+      tablet_replica_->set_duplicator_last_committed_opid(start_point_);
+      return Status::OK();
+    }
+  }
+  CHECK(!start_point_.IsInitialized());
+  return Status::NotFound(Substitute("not found start point, should replay all, $0", LogPrefix()));
+}
+
+Status LogReplayer::Replay() {
+  // To Protect wals, avoid wal file gced when relaying.
+  VLOG_WITH_PREFIX(0) << Substitute("Replay start, replay start point: $0",
+                                    start_point_.ShortDebugString());
+
+  log::LogAnchor anchor;
+  tablet_replica_->log_anchor_registry()->Register(0, "duplicator", &anchor);
+  SCOPED_CLEANUP({ tablet_replica_->log_anchor_registry()->Unregister(&anchor); });
+
+  // TODO(duyuqi): remove 'start_replay' instead of index >= start_point_?
+  //
+  // Whether start replaying.
+  // Find 'start_point_' and replay wals from next entry.
+  bool start_replay = false;
+  if (start_point_.index() == consensus::MinimumOpId().index()) {
+    start_replay = true;
+  }
+  shared_ptr<log::LogReader> log_reader = GetLogReader();
+  log::SegmentSequence segments;
+  log_reader->GetSegmentsSnapshot(&segments);
+  consensus::OpId start_point_opid = start_point_;
+  SchemaPtr schema_ptr = std::make_shared<Schema>();
+  for (const scoped_refptr<log::ReadableLogSegment>& segment : segments) {
+    LogSegmentReader reader(segment);
+    if (!start_replay && !reader.IsExists(start_point_.index())) {
+      // This segment has no 'start_point_'.
+      continue;
+    }
+    RETURN_NOT_OK_PREPEND(SchemaFromPB(segment->header().schema(), schema_ptr.get()),
+                          "Couldn't decode log segment schema");
+
+    log::LogEntryPB* value = nullptr;
+    int64_t replicate_count = 0;
+    int64_t dup_write_count = 0;
+    int64_t ops_count = 0;
+    while ((value = reader.Next()) != nullptr) {
+      if (!value->has_replicate()) {
+        // Ignore commit record.
+        continue;
+      }
+      replicate_count++;
+      consensus::ReplicateMsg& replicate_msg =
+          const_cast<consensus::ReplicateMsg&>(value->replicate());
+      if (value->replicate().op_type() == consensus::ALTER_SCHEMA_OP) {
+        tserver::AlterSchemaRequestPB* alter_schema = replicate_msg.mutable_alter_schema_request();
+        RETURN_NOT_OK(SchemaFromPB(alter_schema->schema(), schema_ptr.get()));
+      }
+      if (!start_replay) {
+        CHECK_LE(replicate_msg.id().index(), start_point_.index());
+        if (replicate_msg.id().index() == start_point_.index()) {
+          start_replay = true;
+        }
+        // If find 'start_point_', replay and duplicate wal entries from next entry (skip this
+        // entry). If not find 'start_point_', continue check next entry.
+        continue;
+      }
+      switch (value->replicate().op_type()) {
+        case consensus::OperationType::WRITE_OP: {
+          const int kRetryIntervalMs = 100;
+          tablet::Tablet* tablet = tablet_replica_->tablet();
+          tserver::WriteRequestPB* write = replicate_msg.mutable_write_request();
+          while (true) {
+            if (shutdown_) {
+              VLOG_WITH_PREFIX(0)
+                  << "LogReplayer has been shutdown, interrupt this replaying task.";
+              return Status::OK();
+            }
+            auto op_state_ptr =
+                std::make_unique<tablet::WriteOpState>(tablet_replica_, write, nullptr);
+            op_state_ptr->mutable_op_id()->CopyFrom(replicate_msg.id());
+            op_state_ptr->set_timestamp(Timestamp(replicate_msg.timestamp()));
+
+            Schema inserts_schema;
+            RETURN_NOT_OK_PREPEND(SchemaFromPB(op_state_ptr->request()->schema(), &inserts_schema),
+                                  "Couldn't decode client schema");
+            RETURN_NOT_OK_PREPEND(
+                tablet->DecodeWriteOperations(
+                    &inserts_schema, schema_ptr, op_state_ptr.get(), true),
+                Substitute("Could not decode row operations: $0",
+                           SecureDebugString(op_state_ptr->request()->row_operations())));
+            Status status =
+                tablet_replica_->Duplicate(op_state_ptr.get(),
+                                           tablet::Tablet::DuplicationMode::WAL_DUPLICATION,
+                                           tablet::Tablet::DuplicateLockMode::TRY_LOCK);
+            if (status.ok()) {
+              ops_count += op_state_ptr->row_ops().size();
+              break;
+            }
+            if (status.IsIncomplete()) {
+              // TODO(duyuqi) exponiential backoff.
+              SleepFor(MonoDelta::FromMilliseconds(kRetryIntervalMs));
+              continue;
+            }
+            // Other status (program is shutdown)
+            return status;
+          }
+          dup_write_count++;
+          break;
+        }
+        case consensus::OperationType::DUPLICATE_OP: {
+          consensus::DuplicateRequestPB* duplicate_request =
+              replicate_msg.mutable_duplicate_request();
+          if (duplicate_request->has_op_id()) {
+            tablet_replica_->duplicator()->set_last_confirmed_opid(duplicate_request->op_id());
+            tablet_replica_->set_duplicator_last_committed_opid(duplicate_request->op_id());
+          }
+          break;
+        }
+        default: {
+          // TODO(duyuqi), Not strict correct. But noop and change is specical.
+          // Maybe we should refact the codes of noop and change replica.
+          tablet_replica_->duplicator()->set_last_confirmed_opid(replicate_msg.id());
+          tablet_replica_->set_duplicator_last_committed_opid(replicate_msg.id());
+          break;
+        }
+      }
+      start_point_opid = replicate_msg.id();
+    }
+    CHECK(start_replay);
+    VLOG_WITH_PREFIX(0) << Substitute(
+        "segment replicate count: $0, replay write count: $1, ops size: $2",
+        replicate_count,
+        dup_write_count,
+        ops_count);
+  }
+  // TODO(duyuqi)
+  // Maybe we can change another way to achieve the aim.
+  // Use 'write_op_state = nullptr && expect_mode = WAL_DUPLICATION_FINISH' to
+  // represent current wal replayer task has finished.
+  tablet_replica_->duplicator()->Duplicate(nullptr,
+                                           tablet::Tablet::DuplicationMode::WAL_DUPLICATION_FINISH);
+
+  VLOG_WITH_PREFIX(0) << Substitute("Replay finish, next start point: $0",
+                                    start_point_opid.ShortDebugString());
+  last_segments_.swap(segments);
+  return Status::OK();
+}
+
+string LogReplayer::LogPrefix() const {
+  return Substitute("tablet id $0, peer uuid $1 ",
+                    tablet_replica_->tablet_id(),
+                    tablet_replica_->permanent_uuid());
+}
+
+}  // namespace duplicator
+}  // namespace kudu

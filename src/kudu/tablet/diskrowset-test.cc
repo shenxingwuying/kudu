@@ -78,7 +78,7 @@ class RowSetMetadata;
 }  // namespace tablet
 }  // namespace kudu
 
-DEFINE_double(update_fraction, 0.1f, "fraction of rows to update");
+DEFINE_double(update_fraction, 0.1F, "fraction of rows to update");
 DECLARE_bool(cfile_lazy_open);
 DECLARE_bool(crash_on_eio);
 DECLARE_int32(cfile_default_block_size);

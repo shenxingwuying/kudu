@@ -1277,7 +1277,7 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   // Fill in the reply of ListTables request.
   static void FillListTablesResponse(const std::string& table_name,
                                      const scoped_refptr<TableInfo>& table_info,
-                                     int replica_num,
+                                     const PersistentTableInfo& table_data,
                                      bool list_tablet_with_partition,
                                      ListTablesResponsePB* resp);
 

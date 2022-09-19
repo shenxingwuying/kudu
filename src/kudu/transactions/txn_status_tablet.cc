@@ -42,6 +42,7 @@
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/tablet/ops/op.h"
 #include "kudu/tablet/ops/write_op.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/transactions/transactions.pb.h"

@@ -142,6 +142,15 @@ class BlockingQueue {
     }
   }
 
+  // Clear all elements reserved by 'queue_'.
+  Status Clear() {
+    MutexLock l(lock_);
+    queue_.clear();
+    size_ = 0;
+    not_full_.Signal();
+    return Status::OK();
+  }
+
   // Attempts to put the given value in the queue.
   // Returns:
   //   QUEUE_SUCCESS: if successfully enqueued

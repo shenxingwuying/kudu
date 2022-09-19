@@ -495,5 +495,17 @@ fetch_and_patch \
   $ROCKSDB_SOURCE \
   $ROCKSDB_PATCHLEVEL
 
+LIRRDKAFKA_PATCHLEVEL=0
+fetch_and_patch \
+  $LIBRDKAFKA_NAME.tar.gz \
+  $LIBRDKAFKA_SOURCE \
+  $LIRRDKAFKA_PATCHLEVEL
+
+CPPKAFKA_PATCHLEVEL=0
+fetch_and_patch \
+  $CPPKAFKA_NAME.tar.gz \
+  $CPPKAFKA_SOURCE \
+  $CPPKAFKA_PATCHLEVEL
+
 echo "---------------"
 echo "Thirdparty dependencies downloaded successfully"

@@ -28,6 +28,7 @@
             <Class name="~org\.apache\.kudu\.consensus\.Opid.*"/>
             <Class name="~org\.apache\.kudu\.master\.Master.*"/>
             <Class name="~org\.apache\.kudu\.rpc\.RpcHeader.*"/>
+            <Class name="~org\.apache\.kudu\.Common.KerberosOptions.*"/>
         </Or>
     </Match>
     <Match>

@@ -79,6 +79,7 @@
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/consensus.proxy.h" // IWYU pragma: keep
+#include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid_util.h"
 #include "kudu/consensus/quorum_util.h"
 #include "kudu/fs/fs_manager.h"
@@ -126,6 +127,7 @@
 #include "kudu/server/monitored_task.h"
 #include "kudu/tablet/metadata.pb.h"
 #include "kudu/tablet/ops/op_tracker.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/tserver/tserver_admin.pb.h"
 #include "kudu/tserver/tserver_admin.proxy.h" // IWYU pragma: keep
@@ -144,6 +146,7 @@
 #include "kudu/util/pb_util.h"
 #include "kudu/util/random_util.h"
 #include "kudu/util/scoped_cleanup.h"
+#include "kudu/util/status.h"
 #include "kudu/util/stopwatch.h"
 #include "kudu/util/thread.h"
 #include "kudu/util/thread_restrictions.h"
@@ -462,6 +465,7 @@ using google::protobuf::Map;
 using kudu::cfile::TypeEncodingInfo;
 using kudu::consensus::ConsensusServiceProxy;
 using kudu::consensus::ConsensusStatePB;
+using kudu::consensus::DuplicationInfoPB;
 using kudu::consensus::IsRaftConfigMember;
 using kudu::consensus::RaftConfigPB;
 using kudu::consensus::RaftConsensus;
@@ -2151,6 +2155,15 @@ Status CatalogManager::CreateTable(const CreateTableRequestPB* orig_req,
     CHECK_EQ(1, reserved_normalized_table_names_.erase(normalized_table_name));
   });
 
+  // TODO(duyuqi), support more than one duplications, we should think it again
+  // and make clearly progress for function' evolution.
+  // remove the condition check
+  if (req.dup_infos_size() > 1) {
+    return SetupError(Status::InvalidArgument(Substitute(
+                "table $0 not support add more than one duplication, duplication num $1",
+                normalized_table_name, req.dup_infos_size())),
+        resp, MasterErrorPB::INVALID_SCHEMA);
+  }
   // d. Create the in-memory representation of the new table and its tablets.
   //    It's not yet in any global maps; that will happen in step g below.
   table = CreateTableInfo(req, schema, partition_schema, std::move(extra_config_pb));
@@ -2325,6 +2338,7 @@ scoped_refptr<TableInfo> CatalogManager::CreateTableInfo(
   if (req.has_owner()) {
     metadata->set_owner(req.owner());
   }
+
   if (req.has_comment()) {
     metadata->set_comment(req.comment());
   }
@@ -2345,6 +2359,13 @@ scoped_refptr<TableInfo> CatalogManager::CreateTableInfo(
                             FLAGS_table_disk_size_limit,
                             FLAGS_table_row_count_limit);
   }
+
+  CHECK_LE(req.dup_infos_size(), 1);
+  for (const auto& info : req.dup_infos()) {
+    auto *dup_info = metadata->add_dup_infos();
+    dup_info->CopyFrom(info);
+  }
+
   return table;
 }
 
@@ -2361,6 +2382,21 @@ scoped_refptr<TabletInfo> CatalogManager::CreateTabletInfo(
   if (dimension_label) {
     metadata->set_dimension_label(*dimension_label);
   }
+  if (table->metadata().IsWriteLocked()) {
+    for (const auto& info : table->metadata().dirty().pb.dup_infos()) {
+      auto *dup_info = metadata->add_dup_infos();
+      dup_info->CopyFrom(info);
+    }
+  } else {
+    table->metadata().ReadLock();
+    CHECK_LE(table->metadata().state().pb.dup_infos_size(), 1);
+    for (const auto& info : table->metadata().state().pb.dup_infos()) {
+      auto *dup_info = metadata->add_dup_infos();
+      dup_info->CopyFrom(info);
+    }
+    table->metadata().ReadUnlock();
+  }
+
   return tablet;
 }
 
@@ -3477,6 +3513,7 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
   // 1. Group the steps into schema altering steps and partition altering steps.
   vector<AlterTableRequestPB::Step> alter_schema_steps;
   vector<AlterTableRequestPB::Step> alter_partitioning_steps;
+  vector<AlterTableRequestPB::Step> alter_duplication_steps;
   for (const auto& step : req.alter_schema_steps()) {
     switch (step.type()) {
       case AlterTableRequestPB::ADD_COLUMN:
@@ -3489,6 +3526,11 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
       case AlterTableRequestPB::ADD_RANGE_PARTITION:
       case AlterTableRequestPB::DROP_RANGE_PARTITION: {
         alter_partitioning_steps.emplace_back(step);
+        break;
+      }
+      case AlterTableRequestPB::ADD_DUPLICATION:
+      case AlterTableRequestPB::DROP_DUPLICATION: {
+        alter_duplication_steps.emplace_back(step);
         break;
       }
       case AlterTableRequestPB::UNKNOWN: {
@@ -3725,6 +3767,72 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
                                          l.mutable_data()->pb.mutable_extra_config()));
   }
 
+  // 9 Alter table duplications
+  if (!alter_duplication_steps.empty()) {
+    TRACE("Apply alter duplication");
+    if (alter_duplication_steps.size() > 1) {
+      return Status::InvalidArgument("a request not support two or more duplication steps");
+    }
+    for (const auto& step : alter_duplication_steps) {
+      switch (step.type()) {
+        case AlterTableRequestPB::ADD_DUPLICATION: {
+          if (!step.has_add_duplication()) {
+            return Status::InvalidArgument("add duplication missing duplication info");
+          }
+          if (l.mutable_data()->pb.dup_infos_size() == 0) {
+            auto duplication_info = step.add_duplication().dup_info();
+            string current_std_uri;
+            Status s = consensus::NormalizeUri(
+                duplication_info.type(), duplication_info.uri(), &current_std_uri);
+            RETURN_NOT_OK_PREPEND(s,
+                                  Substitute("duplication uri is not standard, name: $0, uri: $1",
+                                             duplication_info.name(),
+                                             duplication_info.uri()));
+            duplication_info.set_uri(current_std_uri);
+            l.mutable_data()->pb.add_dup_infos()->CopyFrom(duplication_info);
+          } else {
+            const auto& dup_infos = l.mutable_data()->pb.dup_infos();
+            auto it = dup_infos.begin();
+            return Status::InvalidArgument(
+                Substitute("duplication have exist, name: $0, not support add another duplication",
+                           it->name()));
+          }
+          break;
+        }
+        case AlterTableRequestPB::DROP_DUPLICATION: {
+          if (!step.has_drop_duplication()) {
+            return Status::InvalidArgument("drop duplication missing duplication info");
+          }
+          if (l.mutable_data()->pb.dup_infos_size() > 0) {
+            auto& dup_infos = const_cast<::google::protobuf::RepeatedPtrField<DuplicationInfoPB>&>(
+                l.mutable_data()->pb.dup_infos());
+            auto it = dup_infos.begin();
+            for (; it != dup_infos.end();) {
+              if (it->name() == step.drop_duplication().dup_info().name()) {
+                dup_infos.erase(it);
+                break;
+              }
+              it++;
+            }
+            // TODO(duyuqi)
+            // Support only one duplicator now, should extend the function in the future.
+            if (!dup_infos.empty()) {
+              return Status::InvalidArgument(Substitute("no such duplication name: $0",
+                                                        step.drop_duplication().dup_info().name()));
+            }
+          }
+          break;
+        }
+        default:
+          return Status::InvalidArgument(
+              Substitute("not support the duplication type $0",
+                         AlterTableRequestPB::StepType_Name(step.type())));
+      }
+      // support add duplication or drop duplication once.
+      break;
+    }
+  }
+
   // Set to true if columns are altered, added or dropped.
   const bool has_schema_changes = !alter_schema_steps.empty();
   // Set to true if there are schema changes, the table is renamed,
@@ -3733,7 +3841,8 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
       req.has_new_table_name() || req.has_new_table_owner() ||
       !req.new_extra_configs().empty() || req.has_disk_size_limit() ||
       req.has_row_count_limit() || req.has_new_table_comment() ||
-      num_replicas_changed;
+      num_replicas_changed || !alter_duplication_steps.empty();
+
   // Set to true if there are partitioning changes.
   const bool has_partitioning_changes = !alter_partitioning_steps.empty() ||
       partition_schema_updated;
@@ -4102,14 +4211,15 @@ Status CatalogManager::ListTables(const ListTablesRequestPB* req,
       const auto& table_name = table_owner_pair.first;
       const auto& table_info = FindOrDie(table_info_by_name, table_name);
       TableMetadataLock ltm(table_info.get(), LockMode::READ);
-      if (!ltm.data().is_running()) continue;
+      const auto& table_data = ltm.data();
+      if (!table_data.is_running()) continue;
 
       // If we have a different table name than expected, there was a table
       // rename and we shouldn't show the table.
-      if (table_name != ltm.data().name()) {
+      if (table_name != table_data.name()) {
         continue;
       }
-      FillListTablesResponse(table_name, table_info, ltm.data().pb.num_replicas(),
+      FillListTablesResponse(table_name, table_info, table_data,
                              req->list_tablet_with_partition(), resp);
     }
   } else {
@@ -4118,7 +4228,7 @@ Status CatalogManager::ListTables(const ListTablesRequestPB* req,
       const auto& table_name = name_and_table_info.first;
       const auto& table_info = name_and_table_info.second;
       TableMetadataLock ltm(table_info.get(), LockMode::READ);
-      FillListTablesResponse(table_name, table_info, ltm.data().pb.num_replicas(),
+      FillListTablesResponse(table_name, table_info, ltm.data(),
                              req->list_tablet_with_partition(), resp);
     }
   }
@@ -4127,7 +4237,7 @@ Status CatalogManager::ListTables(const ListTablesRequestPB* req,
 
 void CatalogManager::FillListTablesResponse(const string& table_name,
                                             const scoped_refptr<TableInfo>& table_info,
-                                            int replica_num,
+                                            const PersistentTableInfo& table_data,
                                             bool list_tablet_with_partition,
                                             ListTablesResponsePB* resp) {
   ListTablesResponsePB::TableInfo* table = resp->add_tables();
@@ -4135,7 +4245,14 @@ void CatalogManager::FillListTablesResponse(const string& table_name,
   table->set_name(table_name);
   table->set_live_row_count(table_info->GetMetrics()->live_row_count->value());
   table->set_num_tablets(table_info->num_tablets());
-  table->set_num_replicas(replica_num);
+  table->set_num_replicas(table_data.pb.num_replicas());
+
+  CHECK_LE(table_data.pb.dup_infos_size(), 1);
+  for (const auto& dup_info : table_data.pb.dup_infos()) {
+    auto *dup_info_pb = table->add_dup_info();
+    dup_info_pb->CopyFrom(dup_info);
+  }
+
   if (list_tablet_with_partition) {
     const auto& tablet_map = table_info->tablet_map();
     for (const auto& tablet : tablet_map) {
@@ -5037,7 +5154,8 @@ class AsyncAddReplicaTask : public AsyncChangeConfigTask {
                       scoped_refptr<TabletInfo> tablet,
                       ConsensusStatePB cstate,
                       RaftPeerPB::MemberType member_type,
-                      ThreadSafeRandom* rng);
+                      ThreadSafeRandom* rng,
+                      const consensus::DuplicationInfoPB* dup_info = nullptr);
 
   string type_name() const override;
 
@@ -5046,20 +5164,26 @@ class AsyncAddReplicaTask : public AsyncChangeConfigTask {
 
  private:
   const RaftPeerPB::MemberType member_type_;
-
   // Used to make random choices in replica selection.
   ThreadSafeRandom* rng_;
+
+  // For add duplicator.
+  consensus::DuplicationInfoPB dup_info_;
 };
 
 AsyncAddReplicaTask::AsyncAddReplicaTask(Master* master,
                                          scoped_refptr<TabletInfo> tablet,
                                          ConsensusStatePB cstate,
                                          RaftPeerPB::MemberType member_type,
-                                         ThreadSafeRandom* rng)
+                                         ThreadSafeRandom* rng,
+                                         const consensus::DuplicationInfoPB* dup_info)
     : AsyncChangeConfigTask(master, std::move(tablet), std::move(cstate),
                             consensus::ADD_PEER),
       member_type_(member_type),
       rng_(rng) {
+  if (dup_info != nullptr) {
+    dup_info_ = *dup_info;
+  }
 }
 
 string AsyncAddReplicaTask::type_name() const {
@@ -5076,104 +5200,114 @@ bool AsyncAddReplicaTask::SendRequest(int attempt) {
 
   Status s;
   shared_ptr<TSDescriptor> extra_replica;
-  {
-    // Select the replica we wish to add to the config.
-    // Do not include current members of the config.
-    const auto& config = cstate_.committed_config();
-    TSDescriptorVector existing;
-    for (auto i = 0; i < config.peers_size(); ++i) {
-      shared_ptr<TSDescriptor> desc;
-      if (master_->ts_manager()->LookupTSByUUID(config.peers(i).permanent_uuid(),
-                                                &desc)) {
-        existing.emplace_back(std::move(desc));
-      }
-    }
-
-    TSDescriptorVector ts_descs;
-    master_->ts_manager()->GetDescriptorsAvailableForPlacement(&ts_descs);
-
-    // Get the dimension, table id, and range start key of the tablet.
-    optional<string> dimension = nullopt;
-    optional<string> table_id = nullopt;
-    optional<string> range_key_start = nullopt;
+  if (member_type_ != RaftPeerPB::DUPLICATOR) {
     {
-      TabletMetadataLock l(tablet_.get(), LockMode::READ);
-      if (tablet_->metadata().state().pb.has_dimension_label()) {
-        dimension = tablet_->metadata().state().pb.dimension_label();
-      }
-      if (FLAGS_enable_range_replica_placement) {
-        Partition partition;
-        if (tablet_->metadata().state().pb.has_partition()) {
-          const auto& tablet_partition = tablet_->metadata().state().pb.partition();
-          Partition::FromPB(tablet_partition, &partition);
+      // Select the replica we wish to add to the config.
+      // Do not include current members of the config.
+      const auto& config = cstate_.committed_config();
+      TSDescriptorVector existing;
+      for (auto i = 0; i < config.peers_size(); ++i) {
+        shared_ptr<TSDescriptor> desc;
+        if (master_->ts_manager()->LookupTSByUUID(config.peers(i).permanent_uuid(),
+                                                  &desc)) {
+          existing.emplace_back(std::move(desc));
         }
-        range_key_start = partition.begin().range_key();
-        VLOG(1) << Substitute("range_key_start is set to $1", range_key_start.value());
-        table_id = tablet_->metadata().state().pb.table_id();
-        VLOG(1) << Substitute("table_id is set to $1", table_id.value());
       }
-    }
 
-    // Some tablet servers hosting the current members of the config
-    // (see the 'existing' populated above) might be presumably dead.
-    // Inclusion of a presumably dead tablet server into 'existing' is OK:
-    // PlacementPolicy::PlaceExtraTabletReplica() does not require elements of
-    // 'existing' to be a subset of 'ts_descs', and 'ts_descs' contains only
-    // alive tablet servers. Essentially, the list of candidate tablet servers
-    // to host the extra replica is 'ts_descs' after blacklisting all elements
-    // common with 'existing'.
-    PlacementPolicy policy(std::move(ts_descs), rng_);
-    s = policy.PlaceExtraTabletReplica(
+      TSDescriptorVector ts_descs;
+      master_->ts_manager()->GetDescriptorsAvailableForPlacement(&ts_descs);
+
+      // Get the dimension of the tablet. Otherwise, it will be nullopt.
+      optional<string> dimension = nullopt;
+      optional<string> table_id = nullopt;
+      optional<string> range_key_start = nullopt;
+      {
+        TabletMetadataLock l(tablet_.get(), LockMode::READ);
+        if (tablet_->metadata().state().pb.has_dimension_label()) {
+          dimension = tablet_->metadata().state().pb.dimension_label();
+        }
+        if (FLAGS_enable_range_replica_placement) {
+          Partition partition;
+          if (tablet_->metadata().state().pb.has_partition()) {
+            const auto& tablet_partition = tablet_->metadata().state().pb.partition();
+            Partition::FromPB(tablet_partition, &partition);
+          }
+          range_key_start = partition.begin().range_key();
+          VLOG(1) << Substitute("range_key_start is set to $1", range_key_start.value());
+          table_id = tablet_->metadata().state().pb.table_id();
+          VLOG(1) << Substitute("table_id is set to $1", table_id.value());
+        }
+      }
+
+      // Some of the tablet servers hosting the current members of the config
+      // (see the 'existing' populated above) might be presumably dead.
+      // Inclusion of a presumably dead tablet server into 'existing' is OK:
+      // PlacementPolicy::PlaceExtraTabletReplica() does not require elements of
+      // 'existing' to be a subset of 'ts_descs', and 'ts_descs' contains only
+      // alive tablet servers. Essentially, the list of candidate tablet servers
+      // to host the extra replica is 'ts_descs' after blacklisting all elements
+      // common with 'existing'.
+      PlacementPolicy policy(std::move(ts_descs), rng_);
+      s = policy.PlaceExtraTabletReplica(
         std::move(existing), dimension, range_key_start, table_id, &extra_replica);
-  }
-  if (PREDICT_FALSE(!s.ok())) {
-    auto msg = Substitute("no extra replica candidate found for tablet $0: $1",
-                          tablet_->ToString(), s.ToString());
-    // Check whether it's a situation when a replacement replica cannot be found
-    // due to an inconsistency in cluster configuration. If the tablet has the
-    // replication factor of N, and the cluster is using the N->(N+1)->N
-    // replica management scheme (see --raft_prepare_replacement_before_eviction
-    // flag), at least N+1 tablet servers should be registered to find a place
-    // for an extra replica.
-    const auto num_tservers_registered = master_->ts_manager()->GetCount();
-
-    auto replication_factor = 0;
-    {
-      TableMetadataLock l(tablet_->table().get(), LockMode::READ);
-      replication_factor = tablet_->table()->metadata().state().pb.num_replicas();
     }
-    DCHECK_GE(replication_factor, 1);
-    const auto num_tservers_needed =
-        FLAGS_raft_prepare_replacement_before_eviction ? replication_factor + 1
-                                                       : replication_factor;
-    if (num_tservers_registered < num_tservers_needed) {
-      msg += Substitute(
-          ": the total number of registered tablet servers ($0) does not allow "
-          "for adding an extra replica; consider bringing up more "
-          "to have at least $1 tablet servers up and running",
-          num_tservers_registered, num_tservers_needed);
+
+    if (PREDICT_FALSE(!s.ok())) {
+      auto msg = Substitute("no extra replica candidate found for tablet $0: $1",
+                            tablet_->ToString(), s.ToString());
+      // Check whether it's a situation when a replacement replica cannot be found
+      // due to an inconsistency in cluster configuration. If the tablet has the
+      // replication factor of N, and the cluster is using the N->(N+1)->N
+      // replica management scheme (see --raft_prepare_replacement_before_eviction
+      // flag), at least N+1 tablet servers should be registered to find a place
+      // for an extra replica.
+      const auto num_tservers_registered = master_->ts_manager()->GetCount();
+
+      auto replication_factor = 0;
+      {
+        TableMetadataLock l(tablet_->table().get(), LockMode::READ);
+        replication_factor = tablet_->table()->metadata().state().pb.num_replicas();
+      }
+      DCHECK_GE(replication_factor, 1);
+      const auto num_tservers_needed =
+          FLAGS_raft_prepare_replacement_before_eviction ? replication_factor + 1
+                                                        : replication_factor;
+      if (num_tservers_registered < num_tservers_needed) {
+        msg += Substitute(
+            ": the total number of registered tablet servers ($0) does not allow "
+            "for adding an extra replica; consider bringing up more "
+            "to have at least $1 tablet servers up and running",
+            num_tservers_registered, num_tservers_needed);
+      }
+      KLOG_EVERY_N_SECS(WARNING, 60) << LogPrefix() << msg;
+      return false;
     }
-    KLOG_EVERY_N_SECS(WARNING, 60) << LogPrefix() << msg;
-    return false;
   }
 
-  DCHECK(extra_replica);
   consensus::ChangeConfigRequestPB req;
   req.set_dest_uuid(target_ts_desc_->permanent_uuid());
   req.set_tablet_id(tablet_->id());
   req.set_type(consensus::ADD_PEER);
   req.set_cas_config_opid_index(cstate_.committed_config().opid_index());
   RaftPeerPB* peer = req.mutable_server();
-  peer->set_permanent_uuid(extra_replica->permanent_uuid());
-  if (FLAGS_raft_prepare_replacement_before_eviction &&
-      member_type_ == RaftPeerPB::NON_VOTER) {
-    peer->mutable_attrs()->set_promote(true);
-  }
-  ServerRegistrationPB peer_reg;
-  DCHECK_OK(extra_replica->GetRegistration(&peer_reg));
-  CHECK_GT(peer_reg.rpc_addresses_size(), 0);
-  *peer->mutable_last_known_addr() = peer_reg.rpc_addresses(0);
   peer->set_member_type(member_type_);
+
+  if (member_type_ == RaftPeerPB::DUPLICATOR) {
+    consensus::DuplicationInfoPB* duplication_pb = peer->mutable_dup_info();
+    *duplication_pb = dup_info_;
+  } else {
+    DCHECK(extra_replica);
+    peer->set_permanent_uuid(extra_replica->permanent_uuid());
+    if (FLAGS_raft_prepare_replacement_before_eviction &&
+        member_type_ == RaftPeerPB::NON_VOTER) {
+      peer->mutable_attrs()->set_promote(true);
+    }
+    ServerRegistrationPB peer_reg;
+    extra_replica->GetRegistration(&peer_reg);
+    CHECK_GT(peer_reg.rpc_addresses_size(), 0);
+    *peer->mutable_last_known_addr() = peer_reg.rpc_addresses(0);
+  }
+
   VLOG(1) << Substitute("Sending $0 request to $1 (attempt $2): $3",
                         type_name(), target_ts_desc_->ToString(), attempt,
                         SecureDebugString(req));
@@ -5187,7 +5321,8 @@ class AsyncEvictReplicaTask : public AsyncChangeConfigTask {
   AsyncEvictReplicaTask(Master *master,
                         scoped_refptr<TabletInfo> tablet,
                         ConsensusStatePB cstate,
-                        string peer_uuid_to_evict);
+                        string peer_uuid_to_evict,
+                        RaftPeerPB::MemberType member_type = RaftPeerPB::VOTER);
 
   string type_name() const override;
 
@@ -5196,16 +5331,16 @@ class AsyncEvictReplicaTask : public AsyncChangeConfigTask {
 
  private:
   const string peer_uuid_to_evict_;
+  const RaftPeerPB::MemberType member_type_;
 };
 
 AsyncEvictReplicaTask::AsyncEvictReplicaTask(Master* master,
                                              scoped_refptr<TabletInfo> tablet,
                                              ConsensusStatePB cstate,
-                                             string peer_uuid_to_evict)
-    : AsyncChangeConfigTask(master, std::move(tablet), std::move(cstate),
-                            consensus::REMOVE_PEER),
-      peer_uuid_to_evict_(std::move(peer_uuid_to_evict)) {
-}
+                                             string peer_uuid_to_evict,
+                                             RaftPeerPB::MemberType member_type)
+    : AsyncChangeConfigTask(master, std::move(tablet), std::move(cstate), consensus::REMOVE_PEER),
+      peer_uuid_to_evict_(std::move(peer_uuid_to_evict)), member_type_(member_type) {}
 
 string AsyncEvictReplicaTask::type_name() const {
   return Substitute("ChangeConfig:$0",
@@ -5224,6 +5359,11 @@ bool AsyncEvictReplicaTask::SendRequest(int attempt) {
   req.set_type(consensus::REMOVE_PEER);
   req.set_cas_config_opid_index(cstate_.committed_config().opid_index());
   RaftPeerPB* peer = req.mutable_server();
+  if (member_type_ == RaftPeerPB::DUPLICATOR) {
+    peer->set_member_type(RaftPeerPB::DUPLICATOR);
+    // TODO(duyuqi)
+    // Add more DuplicationPB info and remove it correctly.
+  }
   peer->set_permanent_uuid(peer_uuid_to_evict_);
   VLOG(1) << Substitute("Sending $0 request to $1 (attempt $2): $3",
                         type_name(), target_ts_desc_->ToString(), attempt,
@@ -5394,6 +5534,7 @@ Status CatalogManager::ProcessTabletReport(
     }
 
     const auto replication_factor = table->metadata().state().pb.num_replicas();
+    const auto duplication_factor = table->metadata().state().pb.dup_infos_size();
     bool consensus_state_updated = false;
     // 7. Process the report's consensus state. There may be one even when the
     // replica has been tombstoned.
@@ -5497,6 +5638,10 @@ Status CatalogManager::ProcessTabletReport(
           }
           for (const auto& p : prev_cstate.committed_config().peers()) {
             DCHECK(!p.has_health_report()); // Health report shouldn't be persisted.
+            if (consensus::IsDuplicator(p)) {
+              // DUPLICATOR is a leader's shadow, not a real replica.
+              continue;
+            }
             const string& peer_uuid = p.permanent_uuid();
             if (!ContainsKey(current_member_uuids, peer_uuid)) {
               rpcs.emplace_back(new AsyncDeleteReplica(
@@ -5524,6 +5669,20 @@ Status CatalogManager::ProcessTabletReport(
               master_, tablet, cstate, RaftPeerPB::VOTER, &rng_));
         }
 
+        // TODO(duyuqi) duplication.
+        // Support only one duplicator now.
+        int current_duplicator_size =
+            CountMembers(cstate.committed_config(), RaftPeerPB::DUPLICATOR);
+        CHECK_LE(duplication_factor, 1);
+        if (FLAGS_master_add_server_when_underreplicated &&
+            current_duplicator_size < duplication_factor) {
+          CHECK_EQ(current_duplicator_size, 0);
+          const consensus::DuplicationInfoPB& dup_info =
+            table->metadata().state().pb.dup_infos()[0];
+          rpcs.emplace_back(new AsyncAddReplicaTask(
+              master_, tablet, cstate, RaftPeerPB::DUPLICATOR, &rng_, &dup_info));
+        }
+
       // When --raft_prepare_replacement_before_eviction is enabled, we
       // consider whether to add or evict replicas based on the health report
       // included in the leader's tablet report. Since only the leader tracks
@@ -5540,11 +5699,36 @@ Status CatalogManager::ProcessTabletReport(
           DCHECK(!to_evict.empty());
           rpcs.emplace_back(new AsyncEvictReplicaTask(
               master_, tablet, cstate, std::move(to_evict)));
+        } else if (FLAGS_catalog_manager_evict_excess_replicas &&
+            CountMembers(cstate.committed_config(), RaftPeerPB::DUPLICATOR) > duplication_factor) {
+          // @TODO(duyuqi) more raft message
+          // Now, only support 1 duplicator
+          LOG(WARNING) << Substitute(
+              "Now only support 1 duplicator, remove the duplicator, table: $0, tablet_id: $1",
+              table->metadata().state().name(),
+              tablet->id());
+          DCHECK(to_evict.empty());
+          for (const RaftPeerPB& peer : cstate.committed_config().peers()) {
+            if (peer.member_type() == RaftPeerPB::DUPLICATOR) {
+              to_evict = peer.permanent_uuid();
+              break;
+            }
+          }
+          rpcs.emplace_back(new AsyncEvictReplicaTask(
+              master_, tablet, cstate, std::move(to_evict), RaftPeerPB::DUPLICATOR));
         } else if (FLAGS_master_add_server_when_underreplicated &&
                    ShouldAddReplica(config, replication_factor,
                                     uuids_ignored_for_underreplication)) {
           rpcs.emplace_back(new AsyncAddReplicaTask(
               master_, tablet, cstate, RaftPeerPB::NON_VOTER, &rng_));
+        } else if (FLAGS_master_add_server_when_underreplicated &&
+                   ShouldAddDuplicator(config, duplication_factor)) {
+          int current_duplicator_size = CountMembers(config, RaftPeerPB::DUPLICATOR);
+          // TODO(duyuqi), should use the unique key to add, now need check carefully.
+          const consensus::DuplicationInfoPB& dup_info =
+            table->metadata().state().pb.dup_infos()[current_duplicator_size];
+          rpcs.emplace_back(new AsyncAddReplicaTask(
+              master_, tablet, cstate, RaftPeerPB::DUPLICATOR, &rng_, &dup_info));
         }
       }
     }
@@ -5758,6 +5942,10 @@ void CatalogManager::SendDeleteTabletRequest(const scoped_refptr<TabletInfo>& ta
       << "Sending DeleteTablet for " << cstate.committed_config().peers().size()
       << " replicas of tablet " << tablet->id();
   for (const auto& peer : cstate.committed_config().peers()) {
+    if (IsDuplicator(peer)) {
+      // RaftPeerPB::DUPLICATOR is not a real replica. It's just leader's shadow.
+      continue;
+    }
     scoped_refptr<AsyncDeleteReplica> task = new AsyncDeleteReplica(
         master_, peer.permanent_uuid(), tablet->table().get(), tablet->id(),
         TABLET_DATA_DELETED, nullopt, deletion_msg);
@@ -6159,6 +6347,7 @@ Status CatalogManager::SelectReplicasForTablet(const PlacementPolicy& policy,
                    "replicas, but only $2 tablet servers are available",
                    table_guard.data().name(), nreplicas, policy.ts_num()));
   }
+  const auto num_duplicas = table_guard.data().pb.dup_infos_size();
 
   ConsensusStatePB* cstate = tablet->mutable_metadata()->
       mutable_dirty()->pb.mutable_consensus_state();
@@ -6209,6 +6398,14 @@ Status CatalogManager::SelectReplicasForTablet(const PlacementPolicy& policy,
       peer->mutable_last_known_addr()->CopyFrom(addr);
     }
   }
+  for (int i = 0; i < num_duplicas; i++) {
+    RaftPeerPB* peer = config->add_peers();
+    // DUPLICATOR is a virtual role, it's leader's shadow.
+    // So DUPLICATOR need not permanent_uuid and last_known_addr.
+    peer->set_member_type(RaftPeerPB::DUPLICATOR);
+    peer->mutable_dup_info()->CopyFrom(
+        tablet->metadata().state().pb.dup_infos()[i]);
+  }
 
   return Status::OK();
 }
@@ -6219,6 +6416,10 @@ void CatalogManager::SendCreateTabletRequest(const scoped_refptr<TabletInfo>& ta
       tablet_lock.data().pb.consensus_state().committed_config();
   tablet->set_last_create_tablet_time(MonoTime::Now());
   for (const RaftPeerPB& peer : config.peers()) {
+    // RaftPeerPB::DUPLICATOR is not a real replica. It's just leader's shadow.
+    if (IsDuplicator(peer)) {
+      continue;
+    }
     scoped_refptr<AsyncCreateReplica> task = new AsyncCreateReplica(
         master_, peer.permanent_uuid(), tablet, tablet_lock);
     tablet->table()->AddTask(tablet->id(), task);
@@ -6359,7 +6560,12 @@ Status CatalogManager::BuildLocationsForTablet(
       return false;
     };
 
-    const auto role = GetParticipantRole(peer, cstate);
+    RaftPeerPB::Role role = RaftPeerPB::NON_PARTICIPANT;
+    if (IsDuplicator(peer)) {
+      role = RaftPeerPB::DUP_LEARNER;
+    } else {
+      role = GetParticipantRole(peer, cstate);
+    }
     const optional<string> dimension = l_tablet.data().pb.has_dimension_label()
         ? make_optional(l_tablet.data().pb.dimension_label()) : nullopt;
 
@@ -6370,7 +6576,12 @@ Status CatalogManager::BuildLocationsForTablet(
     // anyways, so from their standpoint a replica without such address
     // doesn't even exist.
     if (ts_infos_dict) {
-      const auto idx = ts_infos_dict->LookupOrAdd(peer.permanent_uuid(), fill_tsinfo_pb);
+      int idx = -1;
+      if (IsDuplicator(peer)) {
+        idx = ts_infos_dict->LookupOrAdd(cstate.leader_uuid(), fill_tsinfo_pb);
+      } else {
+        idx = ts_infos_dict->LookupOrAdd(peer.permanent_uuid(), fill_tsinfo_pb);
+      }
       if (idx >= 0) {
         auto* interned_replica_pb = locs_pb->add_interned_replicas();
         interned_replica_pb->set_ts_info_idx(idx);

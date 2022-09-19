@@ -28,6 +28,7 @@
 #include <glog/logging.h>
 
 #include "kudu/cfile/block_cache.h"
+#include "kudu/duplicator/connector_manager.h"
 #include "kudu/fs/error_manager.h"
 #include "kudu/fs/fs_manager.h"
 #include "kudu/gutil/strings/substitute.h"
@@ -35,6 +36,8 @@
 #include "kudu/server/rpc_server.h"
 #include "kudu/server/startup_path_handler.h"
 #include "kudu/transactions/txn_system_client.h"
+// TODO(duyuqi) check iwyu.
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tserver/heartbeater.h"
 #include "kudu/tserver/scanners.h"
 #include "kudu/tserver/tablet_copy_service.h"
@@ -66,9 +69,10 @@ TabletServer::TabletServer(const TabletServerOptions& opts)
       quiescing_(false),
       fail_heartbeats_for_tests_(false),
       opts_(opts),
-      tablet_manager_(new TSTabletManager(this)),
       scanner_manager_(new ScannerManager(metric_entity())),
-      path_handlers_(new TabletServerPathHandlers(this)) {
+      path_handlers_(new TabletServerPathHandlers(this)),
+      connector_manager_(new duplicator::ConnectorManager()) {
+    tablet_manager_.reset(new TSTabletManager(this, connector_manager_.get()));
 }
 
 TabletServer::~TabletServer() {

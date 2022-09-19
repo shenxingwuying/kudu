@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <glog/logging.h>
@@ -65,7 +66,7 @@ struct TxnRowSets;
 enum WritePrivilegeType {
   INSERT,
   UPDATE,
-  DELETE,
+  DELETE
 };
 static constexpr size_t kWritePrivilegeMax = WritePrivilegeType::DELETE + 1;
 std::string WritePrivilegeToString(const WritePrivilegeType& type);
@@ -236,6 +237,10 @@ class WriteOpState : public OpState {
     return row_ops_;
   }
 
+  void TEST_set_row_ops(std::vector<RowOp*> row_ops) {
+    row_ops_ = std::move(row_ops);
+  }
+
   // Return the ProbeStats object collecting statistics for op index 'i'.
   ProbeStats* mutable_op_stats(int i) {
     DCHECK_LT(i, row_ops_.size());
@@ -386,6 +391,8 @@ class WriteOp : public Op {
   // original requests) which is already a requirement of the consensus
   // algorithm.
   Status Apply(consensus::CommitMsg** commit_msg) override;
+
+  Status Duplicate() override;
 
   // If result == COMMITTED, commits the mvcc op and updates the metrics, if
   // result == ABORTED aborts the mvcc op.

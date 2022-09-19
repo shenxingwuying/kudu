@@ -22,6 +22,7 @@
 #include <ostream>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -90,6 +91,9 @@ class OpTrackerTest : public KuduTest,
     Status Prepare() override { return Status::OK(); }
     Status Start() override { return Status::OK(); }
     Status Apply(consensus::CommitMsg** /* commit_msg */) override {
+      return Status::OK();
+    }
+    Status Duplicate() override {
       return Status::OK();
     }
     std::string ToString() const override {

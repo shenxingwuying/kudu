@@ -489,7 +489,8 @@ Status CheckCompleteReplace(const client::sp::shared_ptr<client::KuduClient>& cl
 
   bool is_all_voters = true;
   for (const auto& peer : cstate.committed_config().peers()) {
-    if (peer.member_type() != RaftPeerPB::VOTER) {
+    // DUPLICATOR is a leader's shadow, it's not a real replica, so we ignore it.
+    if (peer.member_type() != RaftPeerPB::VOTER && peer.member_type() != RaftPeerPB::DUPLICATOR) {
       is_all_voters = false;
       break;
     }

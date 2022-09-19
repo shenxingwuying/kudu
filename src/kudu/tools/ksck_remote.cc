@@ -20,10 +20,10 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
-#include <map>
 #include <mutex>
 #include <optional>
 #include <ostream>
+#include <type_traits>
 
 #include <gflags/gflags.h>
 #include <glog/logging.h>
@@ -52,6 +52,7 @@
 #include "kudu/rpc/rpc_controller.h"
 #include "kudu/server/server_base.pb.h"
 #include "kudu/server/server_base.proxy.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tools/ksck.h"
 #include "kudu/tools/ksck_checksum.h"
@@ -699,8 +700,10 @@ Status RemoteKsckCluster::RetrieveTabletsList(const shared_ptr<KsckTable>& table
         new KsckTablet(table.get(), t->tablet().id(), std::move(partition)));
     vector<shared_ptr<KsckTabletReplica>> replicas;
     for (const auto* r : t->tablet().replicas()) {
-      replicas.push_back(make_shared<KsckTabletReplica>(
-          r->ts().uuid(), r->is_leader(), ReplicaController::is_voter(*r)));
+      replicas.push_back(make_shared<KsckTabletReplica>(r->ts().uuid(),
+                                                        r->is_leader(),
+                                                        ReplicaController::is_voter(*r),
+                                                        ReplicaController::is_duplicator(*r)));
     }
     tablet->set_replicas(std::move(replicas));
     tablets.push_back(tablet);

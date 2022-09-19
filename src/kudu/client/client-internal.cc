@@ -47,6 +47,7 @@
 #include "kudu/common/partition.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.h"
+#include "kudu/consensus/metadata.pb.h"
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/port.h"
 #include "kudu/gutil/strings/human_readable.h"
@@ -80,6 +81,7 @@ using kudu::client::internal::AsyncLeaderMasterRpc;
 using kudu::client::internal::ConnectToClusterRpc;
 using kudu::client::internal::RemoteTablet;
 using kudu::client::internal::RemoteTabletServer;
+using kudu::consensus::DownstreamType;
 using kudu::master::AlterTableRequestPB;
 using kudu::master::AlterTableResponsePB;
 using kudu::master::ConnectToMasterResponsePB;
@@ -122,6 +124,15 @@ class SignedTokenPB;
 } // namespace security
 
 namespace client {
+
+DuplicationDownstream FromInternalDownstreamType(DownstreamType type) {
+  switch (type) {
+    case DownstreamType::KAFKA:
+      return DuplicationDownstream::KAFKA;
+    default:
+      return DuplicationDownstream::UNKNOWN;
+  }
+}
 
 Status RetryFunc(const MonoTime& deadline,
                  const string& retry_msg,

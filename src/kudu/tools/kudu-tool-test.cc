@@ -44,6 +44,7 @@
 #include <glog/stl_logging.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <gtest/internal/gtest-param-util.h>
 #include <rapidjson/document.h>
 
 #include "kudu/cfile/cfile-test-base.h"
@@ -109,12 +110,14 @@
 #include "kudu/tablet/local_tablet_writer.h"
 #include "kudu/tablet/metadata.pb.h"
 #include "kudu/tablet/tablet-harness.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_metadata.h"
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/thrift/client.h"
 #include "kudu/tools/tool.pb.h"
+#include "kudu/tools/tool_action_common.h"
 #include "kudu/tools/tool_replica_util.h"
 #include "kudu/tools/tool_test_util.h"
 #include "kudu/tserver/mini_tablet_server.h"
@@ -6203,6 +6206,102 @@ TEST_F(ToolTest, TestAddColumn) {
             expected_schema.Column(1).storage_attributes().compression());
   ASSERT_EQ(table->schema().Column(2).comment(), expected_schema.Column(1).comment());
   ASSERT_EQ(table->schema().Column(2), expected_schema.Column(1));
+}
+
+// TODO(duyuqi)
+// Implement the following command and add the tests.
+//  'kudu duplicator list <master_addr> --tables=<table_name>'
+//  'kudu duplicator describe <master_addr> --duplicator=<duplicator_name>'
+TEST_F(ToolTest, TestListDuplicators) {
+  LOG(INFO) << "TODO(duyuqi), Mock TestListDuplicators";
+}
+
+TEST_P(ToolTestKerberosParameterized, TestAddDuplicatorAndDropDuplicator) {
+  NO_FATALS(StartExternalMiniCluster());
+  const string& kTableName = "kudu.table.add.duplicator";
+  KuduSchemaBuilder schema_builder;
+  schema_builder.AddColumn("key")->Type(client::KuduColumnSchema::INT32)->NotNull()->PrimaryKey();
+  schema_builder.AddColumn("col.0")->Type(client::KuduColumnSchema::INT32)->NotNull();
+  KuduSchema schema;
+  ASSERT_OK(schema_builder.Build(&schema));
+
+  // Create the table
+  TestWorkload workload(cluster_.get());
+  workload.set_table_name(kTableName);
+  workload.set_schema(schema);
+  workload.set_num_replicas(1);
+  workload.Setup();
+
+  string master_addr = cluster_->master()->bound_rpc_addr().ToString();
+  string err_msg;
+  string out_msg;
+
+  string list_command =
+      Substitute("table list $0 --tables=$1 --list_tablets", master_addr, kTableName);
+  RunActionStdoutString(list_command, &out_msg);
+  ASSERT_STR_NOT_CONTAINS(out_msg, "D ");
+
+  bool hasKerberos = GetParam();
+  // AddDuplicator
+  string command = Substitute(
+      "table add_duplicator $0 $1 dup_for_test -downstream_type=KAFKA "
+      "-downstream_uri=localhost:9092 ", master_addr, kTableName);
+  if (hasKerberos) {
+    command = Substitute(
+        "$0 -downstream_kerberos_security_protocol=SASL_PLAINTEXT "
+        "-downstream_kerberos_service_name=kafka "
+        "-downstream_kerberos_keytab=/tmp/kdc/dup_for_test.keytab "
+        "-downstream_kerberos_principal=dup_for_test ",
+        command);
+  }
+  RunActionStdoutNone(command);
+
+  auto s = RunActionStdoutStderrString(
+      Substitute("cluster ksck $0", master_addr, kTableName), &out_msg, &err_msg);
+  ASSERT_OK(s);
+  RunActionStdoutString(list_command, &out_msg);
+  ASSERT_STR_CONTAINS(out_msg, "D ");
+  string consensus_dir = JoinPathSegments(cluster_->WalRootForTS(0), "consensus-meta");
+
+  client::sp::shared_ptr<KuduClient> client;
+  ASSERT_OK(CreateKuduClient({master_addr}, &client));
+
+  client::sp::shared_ptr<KuduTable> client_table;
+  ASSERT_OK(client->OpenTable(kTableName, &client_table));
+  vector<KuduScanToken*> tokens;
+  ElementDeleter deleter(&tokens);
+  KuduScanTokenBuilder builder(client_table.get());
+  ASSERT_OK(builder.Build(&tokens));
+
+  string tablet_id;
+  for (const auto* token : tokens) {
+    tablet_id = token->tablet().id();
+    break;
+  }
+  RunActionStdoutString(Substitute("pbc dump $0/$1", consensus_dir, tablet_id), &out_msg);
+  ASSERT_STR_CONTAINS(out_msg, "localhost:9092");
+  ASSERT_STR_CONTAINS(out_msg, "KAFKA");
+  if (hasKerberos) {
+    ASSERT_STR_CONTAINS(out_msg, "SASL_PLAINTEXT");
+    ASSERT_STR_CONTAINS(out_msg, "service_name");
+    ASSERT_STR_CONTAINS(out_msg, "dup_for_test.keytab");
+    ASSERT_STR_CONTAINS(out_msg, "principal");
+  }
+
+  // DropDuplicator
+  NO_FATALS(
+      RunActionStdoutNone(Substitute("table drop_duplicator $0 $1 dup_for_test "
+                                     "-downstream_type=KAFKA ",
+                                     master_addr,
+                                     kTableName)));
+  s = RunActionStdoutStderrString(
+      Substitute("cluster ksck $0", master_addr, kTableName), &out_msg, &err_msg);
+  ASSERT_OK(s);
+  RunActionStdoutString(list_command, &out_msg);
+  ASSERT_STR_NOT_CONTAINS(out_msg, "D ");
+  RunActionStdoutString(Substitute("pbc dump $0/$1", consensus_dir, tablet_id), &out_msg);
+  ASSERT_STR_NOT_CONTAINS(out_msg, "localhost:9092");
+  ASSERT_STR_NOT_CONTAINS(out_msg, "KAFKA");
 }
 
 TEST_F(ToolTest, TestDeleteColumn) {

@@ -77,6 +77,7 @@
 #include "kudu/tablet/row_op.h"
 #include "kudu/tablet/rowset.h"
 #include "kudu/tablet/rowset_metadata.h" // IWYU pragma: keep
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_metadata.h"
@@ -112,6 +113,7 @@ using kudu::consensus::ALTER_SCHEMA_OP;
 using kudu::consensus::CHANGE_CONFIG_OP;
 using kudu::consensus::CommitMsg;
 using kudu::consensus::ConsensusBootstrapInfo;
+using kudu::consensus::DUPLICATE_OP;
 using kudu::consensus::MinimumOpId;
 using kudu::consensus::NO_OP;
 using kudu::consensus::OpId;
@@ -314,6 +316,9 @@ class TabletBootstrap {
 
   Status PlayNoOpRequest(const IOContext* io_context, ReplicateMsg* replicate_msg,
                          const CommitMsg& commit_msg);
+
+  Status PlayDuplicateRequest(const IOContext* io_context, ReplicateMsg* replicate_msg,
+                              const CommitMsg& commit_msg);
 
   // Plays operations, skipping those that have already been flushed or have previously failed.
   // See ApplyRowOperations() for more details on how the decision of whether an operation
@@ -1003,6 +1008,7 @@ Status TabletBootstrap::HandleCommitMessage(const IOContext* io_context, ReplayS
 
   // Match up the COMMIT record with the original entry that it's applied to.
   const OpId& committed_op_id = entry->commit().commited_op_id();
+
   state->UpdateCommittedOpId(committed_op_id);
 
   // If there are no pending replicates, or if this commit's index is lower than the
@@ -1144,6 +1150,10 @@ Status TabletBootstrap::HandleEntryPair(const IOContext* io_context, LogEntryPB*
 
     case NO_OP:
       RETURN_NOT_OK_REPLAY(PlayNoOpRequest, io_context, replicate, commit);
+      break;
+
+    case DUPLICATE_OP:
+      RETURN_NOT_OK_REPLAY(PlayDuplicateRequest, io_context, replicate, commit);
       break;
 
     default:
@@ -1389,7 +1399,7 @@ Status TabletBootstrap::DetermineSkippedOpsAndBuildResponse(const TxResultPB& or
 
   for (int i = 0; i < num_ops; i++) {
     const auto& orig_op_result = orig_result.ops(i);
-    OpAction action;
+    OpAction action = NEEDS_REPLAY;
     RETURN_NOT_OK(FilterOperation(orig_op_result, &action));
     *all_skipped &= action != NEEDS_REPLAY;
 
@@ -1425,7 +1435,10 @@ Status TabletBootstrap::PlayWriteRequest(const IOContext* io_context,
   DCHECK(replicate_msg->has_timestamp());
   WriteRequestPB* write = replicate_msg->mutable_write_request();
 
-  WriteOpState op_state(nullptr, write, nullptr);
+  // TODO(duyuqi), duplication.
+  // restore 'tablet_replica_.get()' to nullptr?
+  // Need run unit tests to make decision.
+  WriteOpState op_state(tablet_replica_.get(), write, nullptr);
   op_state.mutable_op_id()->CopyFrom(replicate_msg->id());
   op_state.set_timestamp(Timestamp(replicate_msg->timestamp()));
 
@@ -1633,6 +1646,15 @@ Status TabletBootstrap::PlayNoOpRequest(const IOContext* /*io_context*/,
                                         ReplicateMsg* /*replicate_msg*/,
                                         const CommitMsg& commit_msg) {
   return AppendCommitMsg(commit_msg);
+}
+
+Status TabletBootstrap::PlayDuplicateRequest(const IOContext* /*io_context*/,
+                                             ReplicateMsg* /*replicate_msg*/,
+                                             const CommitMsg& commit_msg) {
+  return AppendCommitMsg(commit_msg).AndThen([this, &commit_msg] {
+    tablet_replica_->set_duplicator_last_committed_opid(commit_msg.commited_op_id());
+    return Status::OK();
+  });
 }
 
 Status TabletBootstrap::PlayRowOperations(const IOContext* io_context,

@@ -20,6 +20,8 @@ package org.apache.kudu.client;
 import java.security.cert.CertificateException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.Executor;
 
 import com.google.common.base.Preconditions;
@@ -282,6 +284,36 @@ public class KuduClient implements AutoCloseable {
   public ListTablesResponse getTablesList(String nameFilter) throws KuduException {
     Deferred<ListTablesResponse> d = asyncClient.getTablesList(nameFilter, false);
     return joinAndHandleException(d);
+  }
+
+  /**
+   *  Get the table names of duplications, used by infinity, compatible for ksyncer.
+   *  @return set of tables' name who has duplication.
+   */
+  public Set<String> getSubscribedTables() throws KuduException, RuntimeException {
+    Set<String> subscribedTables = new TreeSet<>();
+    // Check kudu-master version whether kudu cluster support duplication.
+    boolean supportDuplication = false;
+    try {
+      supportDuplication = joinAndHandleException(asyncClient.supportsDuplication());
+    } catch (KuduException e) {
+      throw e;
+    }
+    if (supportDuplication) {
+      Deferred<ListTablesResponse> d = asyncClient.listDuplications();
+      ListTablesResponse response = null;
+      try {
+        response = joinAndHandleException(d);
+      } catch (KuduException e) {
+        throw e;
+      }
+      for (ListTablesResponse.TableInfo tableInfo : response.getTableInfosList()) {
+        if (!tableInfo.duplicationInfos().isEmpty()) {
+          subscribedTables.add(tableInfo.getTableName());
+        }
+      }
+    }
+    return subscribedTables;
   }
 
   /**

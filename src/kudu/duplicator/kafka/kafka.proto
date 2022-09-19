@@ -1,0 +1,50 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+syntax = "proto2";
+package kudu.kafka;
+
+message RawProperty {
+  optional string name = 1;
+  optional string value = 2;
+  optional bool primary_key_column = 3;
+  optional bool null_value = 4;
+}
+
+// kudu record data description which would be duplicated to thirdparty storage system
+message RawKuduRecord {
+  // The two fields are kudu record's raft meta which can be used to validate data integration.
+  // Users can ignore it.
+  optional int64 term = 1;
+  optional int64 index = 2;
+
+  optional string table_name = 3;
+
+  enum KuduOperationType {
+    KUDU_OPERATION_TYPE_UNSPECIFIED = 0;
+    // insert or upsert which stand for insert
+    INSERT = 1;
+    // update or upsert which stand for update
+    UPDATE = 2;
+    // delete
+    DELETE = 3;
+    // upsert, keep upsert original
+    UPSERT = 4;
+  }
+  optional KuduOperationType operation_type = 5;
+  repeated RawProperty properties = 4;
+}

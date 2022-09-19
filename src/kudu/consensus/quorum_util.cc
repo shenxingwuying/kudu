@@ -16,6 +16,7 @@
 // under the License.
 #include "kudu/consensus/quorum_util.h"
 
+#include <algorithm>
 #include <map>
 #include <ostream>
 #include <queue>
@@ -28,9 +29,11 @@
 #include <glog/logging.h>
 
 #include "kudu/common/common.pb.h"
+#include "kudu/consensus/metadata.pb.h"
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/port.h"
 #include "kudu/gutil/strings/join.h"
+#include "kudu/gutil/strings/split.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/util/pb_util.h"
 #include "kudu/util/status.h"
@@ -122,6 +125,16 @@ int CountVoters(const RaftConfigPB& config) {
   return voters;
 }
 
+int CountMembers(const RaftConfigPB& config, RaftPeerPB::MemberType type) {
+  int count = 0;
+  for (const RaftPeerPB& peer : config.peers()) {
+    if (peer.member_type() == type) {
+      count++;
+    }
+  }
+  return count;
+}
+
 int MajoritySize(int num_voters) {
   DCHECK_GE(num_voters, 1);
   return (num_voters / 2) + 1;
@@ -196,7 +209,9 @@ Status VerifyRaftConfig(const RaftConfigPB& config) {
   }
 
   for (const RaftPeerPB& peer : config.peers()) {
-    if (!peer.has_permanent_uuid() || peer.permanent_uuid().empty()) {
+    bool is_duplicator = IsDuplicator(peer);
+    if ((!peer.has_permanent_uuid() || peer.permanent_uuid().empty()) &&
+       !is_duplicator) {
       return Status::IllegalState(Substitute("One peer didn't have an uuid or had the empty"
           " string. RaftConfig: $0", SecureShortDebugString(config)));
     }
@@ -207,7 +222,7 @@ Status VerifyRaftConfig(const RaftConfigPB& config) {
     }
     uuids.insert(peer.permanent_uuid());
 
-    if (config.peers_size() > 1 && !peer.has_last_known_addr()) {
+    if (config.peers_size() > 1 && !peer.has_last_known_addr() && !is_duplicator) {
       return Status::IllegalState(
           Substitute("Peer: $0 has no address. RaftConfig: $1",
                      peer.permanent_uuid(), SecureShortDebugString(config)));
@@ -489,6 +504,10 @@ bool ShouldAddReplica(const RaftConfigPB& config,
           }
         }
         break;
+      case RaftPeerPB::DUPLICATOR:
+        // @TODO(duyuqi) duplication
+        // do something
+        break;
       default:
         LOG(DFATAL) << peer.member_type() << ": unsupported member type";
         break;
@@ -510,6 +529,24 @@ bool ShouldAddReplica(const RaftConfigPB& config,
           << "under-replicated; should" << (should_add_replica ? " " : " not ")
           << "add a non-voter replica";
   return should_add_replica;
+}
+
+// @TODO(duyuqi), duplicator failover
+bool ShouldAddDuplicator(const RaftConfigPB& config,
+                         int duplication_factor) {
+  int num_duplicators_total = 0;
+
+  for (const RaftPeerPB& peer : config.peers()) {
+    switch (peer.member_type()) {
+      case RaftPeerPB::DUPLICATOR:
+        ++num_duplicators_total;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return (num_duplicators_total < duplication_factor);
 }
 
 // Whether there is an excess replica to evict.
@@ -593,6 +630,9 @@ bool ShouldEvictReplica(const RaftConfigPB& config,
   // the appropriate default values of those fields.
   VLOG(2) << "config to evaluate: " << SecureDebugString(config);
   for (const RaftPeerPB& peer : config.peers()) {
+    if (IsDuplicator(peer)) {
+      continue;
+    }
     DCHECK(peer.has_permanent_uuid() && !peer.permanent_uuid().empty());
     const string& peer_uuid = peer.permanent_uuid();
     const auto overall_health = peer.health_report().overall_health();
@@ -835,6 +875,46 @@ bool ShouldEvictReplica(const RaftConfigPB& config,
           << (should_evict ? to_evict : "");
 
   return should_evict;
+}
+
+bool IsDuplicator(const RaftPeerPB& peer) {
+  return peer.has_member_type() && peer.member_type() == RaftPeerPB::DUPLICATOR;
+}
+
+// TODO(duyuqi)
+// currently, we only support kafka.
+std::map<DownstreamType, int> kDefaultPortByDownstreamType = {
+  {DownstreamType::KAFKA, 9092}
+};
+
+Status NormalizeUri(DownstreamType type, const string& uri, string* normalized_uri) {
+  if (!normalized_uri || uri.empty()) {
+    return Status::InvalidArgument("uri is empty");
+  }
+  if (type != DownstreamType::KAFKA) {
+    // currently, we only support kafka.
+    return Status::InvalidArgument("unknown downstream type, only support kafka");
+  }
+  const auto* default_port = FindOrNull(kDefaultPortByDownstreamType, type);
+  if (!default_port) {
+    return Status::InvalidArgument(
+        "get default port failed, no default port for downstream type $0",
+        DownstreamType_Name(type));
+  }
+  set<string> node_set;
+  vector<string> nodes = strings::Split(uri, ",");
+  for (int i = 0; i < nodes.size(); i++) {
+    int count = std::count(nodes[i].begin(), nodes[i].end(), ':');
+    if (count == 0) {
+      nodes[i].append(strings::Substitute(":$0", *default_port));
+    } else if (count != 1) {
+      return Status::InvalidArgument(
+          Substitute("invalid uri format, exist a node contains more than 1 ':' in uri $0", uri));
+    }
+    node_set.insert(nodes[i]);
+  }
+  *normalized_uri = JoinStrings(node_set, ",");
+  return Status::OK();
 }
 
 }  // namespace consensus

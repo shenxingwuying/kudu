@@ -1911,5 +1911,28 @@ TEST(QuorumUtilTest, ReplaceAllTabletReplicas) {
   EXPECT_FALSE(ShouldAddReplica(config, kReplicationFactor));
 }
 
+TEST(QuorumUtilTest, TestNormalizeUri) {
+  const string expect_std_uri = "host1:port1,host2:port2,host3:port3";
+  const string expect_std_uri_with_default_port = "host1:9092,host2:9092,host3:9092";
+
+  const string uri = "host3:port3,host2:port2,host1:port1";
+  string std_uri;
+  EXPECT_FALSE(NormalizeUri(DownstreamType::KAFKA, "", &std_uri).ok());
+  EXPECT_FALSE(NormalizeUri(DownstreamType::KAFKA, uri, nullptr).ok());
+  EXPECT_FALSE(NormalizeUri(DownstreamType::KUDU_BACKUP, uri, &std_uri).ok());
+  EXPECT_FALSE(
+      NormalizeUri(DownstreamType::KAFKA, "host1:port1,host2:port2:error,host3:port3", &std_uri)
+          .ok());
+  EXPECT_OK(NormalizeUri(DownstreamType::KAFKA, uri, &std_uri));
+  EXPECT_EQ(std_uri, expect_std_uri);
+  std_uri.clear();
+  EXPECT_OK(NormalizeUri(
+      DownstreamType::KAFKA, "host2:port2,host3:port3,host2:port2,host1:port1", &std_uri));
+  EXPECT_EQ(std_uri, expect_std_uri);
+  std_uri.clear();
+  EXPECT_OK(NormalizeUri(DownstreamType::KAFKA, "host1,host2,host3,host3,host2", &std_uri));
+  EXPECT_EQ(std_uri, expect_std_uri_with_default_port);
+}
+
 } // namespace consensus
 } // namespace kudu
