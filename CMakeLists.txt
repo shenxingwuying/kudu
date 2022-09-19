@@ -1252,6 +1252,20 @@ else()
           SHARED_LIB "${PROMETHEUS_CPP_PULL_SHARED_LIB}")
 endif ()
 
+## librdkafka
+find_package(RdKafka REQUIRED)
+include_directories(SYSTEM ${RDKAFKA_INCLUDE_DIR})
+ADD_THIRDPARTY_LIB(rdkafka
+    STATIC_LIB "${RDKAFKA_STATIC_LIB}"
+    SHARED_LIB "${RDKAFKA_SHARED_LIB}")
+
+## cppkafka
+find_package(CppKafka REQUIRED)
+include_directories(SYSTEM ${CPPKAFKA_INCLUDE_DIR})
+ADD_THIRDPARTY_LIB(cppkafka
+    STATIC_LIB "${CPPKAFKA_STATIC_LIB}"
+    SHARED_LIB "${CPPKAFKA_SHARED_LIB}")
+
 ############################################################
 # Enable sized deallocation where supported.
 # This happens down here instead of up with the rest of the

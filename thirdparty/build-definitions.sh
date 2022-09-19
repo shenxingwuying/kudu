@@ -1095,15 +1095,14 @@ build_prometheus() {
   pushd $PROMETHEUS_SOURCE
   cd 3rdparty
   rm -Rf civetweb
-  git clone https://github.com.cnpmjs.org/civetweb/civetweb.git
-  cd civetweb
-  git reset --hard c1d08d3c35bc939da7bec09973bda77c702c1d00
-  cd ..
+  wget https://jfrog-internal.sensorsdata.cn:443/artifactory/dragon-internal/inf/soku/civetweb-1.15.tar.gz
+  tar xzf civetweb-1.15.tar.gz && mv civetweb-1.15 civetweb
+  rm -rf civetweb-1.15.tar.gz
 
   rm -Rf googletest
-  git clone https://github.com.cnpmjs.org/google/googletest.git
-  cd googletest
-  git reset --hard e2239ee6043f73722e7aa812a459f54a28552929
+  wget https://jfrog-internal.sensorsdata.cn:443/artifactory/dragon-internal/inf/soku/googletest-1.11.0.tar.gz
+  tar xvf googletest-1.11.0.tar.gz && mv googletest-release-1.11.0 googletest
+  rm -rf googletest-1.11.0.tar.gz
   popd
 
   for SHARED in ON OFF; do
@@ -1135,6 +1134,45 @@ build_prometheus() {
     $PROMETHEUS_SOURCE
 
     ${NINJA:-make} -j$PARALLEL $EXTRA_MAKEFLAGS install
+    popd
+  done
+}
+
+# TODO(duyuqi)
+# try to use 'cmake'.
+build_librdkafka() {
+  mkdir -p $LIBRDKAFKA_SOURCE
+  pushd $LIBRDKAFKA_SOURCE
+  CFLAGS="$EXTRA_CFLAGS" \
+    CXXFLAGS="$EXTRA_CXXFLAGS" \
+    LDFLAGS="$EXTRA_LDFLAGS" \
+    LIBS="$EXTRA_LIBS" \
+    ./configure --prefix=$PREFIX
+  make -j$PARALLEL $EXTRA_MAKEFLAGS
+  make install
+  popd
+}
+
+build_cppkafka() {
+  CPPKAFKA_SHARED_BDIR=$TP_BUILD_DIR/$CPPKAFKA_NAME.shared$MODE_SUFFIX
+  CPPKAFKA_STATIC_BDIR=$TP_BUILD_DIR/$CPPKAFKA_NAME.static$MODE_SUFFIX
+  for SHARED in 1 0; do
+    if [ $SHARED -eq 1 ]; then
+      CPPKAFKA_BDIR=$CPPKAFKA_SHARED_BDIR
+    else
+      CPPKAFKA_BDIR=$CPPKAFKA_STATIC_BDIR
+    fi
+    mkdir -p $CPPKAFKA_BDIR
+    pushd $CPPKAFKA_BDIR
+    rm -rf CMakeCache.txt CMakeFiles/
+    CC="$CLANG" CXX="$CLANGXX" cmake $CPPKAFKA_SOURCE \
+      -DRDKAFKA_ROOT_DIR=$PREFIX \
+      -DCMAKE_INSTALL_PREFIX=$PREFIX \
+      -DCMAKE_CXX_FLAGS="$EXTRA_CXXFLAGS" \
+      -DCMAKE_SHARED_LINKER_FLAGS="$EXTRA_LDFLAGS" \
+      -DCPPKAFKA_BUILD_SHARED=$SHARED
+    make -j$PARALLEL $EXTRA_MAKEFLAGS 
+    make install
     popd
   done
 }

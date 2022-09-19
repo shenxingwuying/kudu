@@ -267,3 +267,17 @@ RANGER_SOURCE=$TP_SOURCE_DIR/$RANGER_NAME
 PROMETHEUS_VERSION=master-sensorsdata-c5a5cf4552750ac8e2c4fc93563f8f8318a6a20d
 PROMETHEUS_NAME=prometheus-cpp-$PROMETHEUS_VERSION
 PROMETHEUS_SOURCE=$TP_SOURCE_DIR/$PROMETHEUS_NAME
+
+# librdkafka
+LIBRDKAFKA_VERSION=1.9.2
+LIBRDKAFKA_NAME=librdkafka-$LIBRDKAFKA_VERSION
+## LIBRDKAFKA_URL=https://github.com/edenhill/librdkafka/archive/refs/tags/v$LIBRDKAFKA_VERSION.tar.gz
+LIBRDKAFKA_URL=https://jfrog-internal.sensorsdata.cn:443/artifactory/dragon-internal/inf/soku/$LIBRDKAFKA_NAME.tar.gz
+LIBRDKAFKA_SOURCE=$TP_SOURCE_DIR/$LIBRDKAFKA_NAME
+
+# cppkafka
+CPPKAFKA_VERSION=0.4.0
+CPPKAFKA_NAME=cppkafka-$CPPKAFKA_VERSION
+## CPPKAFKA_URL=https://github.com/mfontanini/cppkafka/archive/refs/tags/v$CPPKAFKA_VERSION.tar.gz
+CPPKAFKA_URL=https://jfrog-internal.sensorsdata.cn:443/artifactory/dragon-internal/inf/soku/$CPPKAFKA_NAME.tar.gz
+CPPKAFKA_SOURCE=$TP_SOURCE_DIR/$CPPKAFKA_NAME
