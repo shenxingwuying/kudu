@@ -1,4 +1,4 @@
-image: jcr-large-files.sensorsdata.cn/docker-impala/com.sensorsdata.dragon/bite_kudu:1.14.2.1
+image: jcr-large-files.sensorsdata.cn/docker-inf/kudu/bite_ksyncer_el7:1.14.0.4
 
 variables:
   THIRDPARTY_DIR: "/opt/code/kudu/thirdparty"
@@ -15,87 +15,146 @@ cache:
     - ${GRADLE_USER_HOME}/wrapper
 
 stages:
-  - style_check
-  - test
+  - full_parallel
 
 job ilint:
-  stage: style_check
+  stage: full_parallel
   script:
     - mkdir -p build/debug
     - cd build/debug
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
-    - make ilint -j32
+    - make ilint -j$(nproc)
   tags:
-    - skv-kudu-docker
-  only:
-    - merge_requests
+    - docker
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "CMakeLists.txt"
+        - "build-support/**/*"
+        - "check_test.sh"
+        - "cmake_modules/*"
+        - "src/kudu/**/*"
+        - "thirdparty/**/*"
+        - ".gitlab-ci.yml"
+      when: always
+    - when: never
 
 job tidy:
-  stage: style_check
+  stage: full_parallel
   script:
     - mkdir -p build/debug
     - cd build/debug
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
-    - make tidy -j32
+    - make tidy -j$(nproc)
   tags:
-    - skv-kudu-docker
-  only:
-    - merge_requests
+    - docker
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "CMakeLists.txt"
+        - "build-support/**/*"
+        - "check_test.sh"
+        - "cmake_modules/*"
+        - "src/kudu/**/*"
+        - "thirdparty/**/*"
+        - ".gitlab-ci.yml"
+      when: always
+    - when: never
 
 job iwyu:
-  stage: style_check
+  stage: full_parallel
   script:
     - mkdir -p build/debug
     - cd build/debug
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
-    - make iwyu -j32
+    - make iwyu -j$(nproc)
   tags:
-    - skv-kudu-docker
-  only:
-    - merge_requests
+    - docker
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "CMakeLists.txt"
+        - "build-support/**/*"
+        - "check_test.sh"
+        - "cmake_modules/*"
+        - "src/kudu/**/*"
+        - "thirdparty/**/*"
+        - ".gitlab-ci.yml"
+      when: always
+    - when: never
 
 job asan:
-  stage: test
+  stage: full_parallel
   script:
     - export KUDU_ALLOW_SLOW_TESTS=0
     - mkdir -p build/asan
     - cd build/asan
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DKUDU_USE_ASAN=1 ../..
-    - make -j32
+    - make -j$(nproc)
     - cd ../..
     - bash check_test.sh
   tags:
     - skv-kudu-docker
-  only:
-    - merge_requests
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "CMakeLists.txt"
+        - "build-support/**/*"
+        - "check_test.sh"
+        - "cmake_modules/*"
+        - "src/kudu/**/*"
+        - "thirdparty/**/*"
+        - ".gitlab-ci.yml"
+      when: always
+    - when: never
 
 job debug:
-  stage: test
+  stage: full_parallel
   script:
     - export KUDU_ALLOW_SLOW_TESTS=0
     - mkdir -p build/debug
     - cd build/debug
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
-    - make -j32
+    - make -j$(nproc)
     - cd ../..
     - bash check_test.sh
   tags:
     - skv-kudu-docker
-  only:
-    - merge_requests
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "CMakeLists.txt"
+        - "build-support/**/*"
+        - "check_test.sh"
+        - "cmake_modules/*"
+        - "src/kudu/**/*"
+        - "thirdparty/**/*"
+        - ".gitlab-ci.yml"
+      when: always
+    - when: never
 
 job tsan:
-  stage: test
+  stage: full_parallel
   script:
     - export KUDU_ALLOW_SLOW_TESTS=0
     - mkdir -p build/tsan
     - cd build/tsan
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DKUDU_USE_TSAN=1 ../..
-    - make -j32
+    - make -j$(nproc)
     - cd ../..
     - bash -x check_test.sh
   tags:
     - skv-kudu-docker
-  only:
-    - merge_requests
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "CMakeLists.txt"
+        - "build-support/**/*"
+        - "check_test.sh"
+        - "cmake_modules/*"
+        - "src/kudu/**/*"
+        - "thirdparty/**/*"
+        - ".gitlab-ci.yml"
+      when: always
+    - when: never
 
