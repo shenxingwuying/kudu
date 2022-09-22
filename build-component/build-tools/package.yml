@@ -1,37 +1,37 @@
 package_modules:
   bootstrap:
-    version: "1.14.2"
+    version: "1.14.5"
     source: local
     pub:
       - type: dragon
  
   construction_blueprint:
     source: local
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon
 
   upgrader:
     source: local
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon
 
   admintools:
     source: local
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon
 
   scheduler_job:
     source: local
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon
 
   kudu_shim:
     source: local
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon
 
@@ -41,7 +41,7 @@ package_modules:
     variants:
       - os_distro: el6
       - os_distro: el7
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon
 
@@ -51,7 +51,7 @@ package_modules:
     variants:
       - os_distro: el6
       - os_distro: el7
-    version: "1.14.2"
+    version: "1.14.5"
     containerized: true
     pub:
       - type: dragon
@@ -62,7 +62,7 @@ package_modules:
     variants:
       - os_distro: el6
       - os_distro: el7
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon
 
@@ -72,7 +72,7 @@ package_modules:
     variants:
       - os_distro: el6
       - os_distro: el7
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon
 
@@ -82,6 +82,6 @@ package_modules:
     variants:
       - os_distro: el6
       - os_distro: el7
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon

@@ -4,7 +4,7 @@ package_modules:
     variants:
       - os_distro: el6
       - os_distro: el7
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon
       - type: docker
@@ -14,7 +14,7 @@ package_modules:
     variants:
       - os_distro: el6
       - os_distro: el7
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon
 
@@ -23,7 +23,7 @@ package_modules:
     variants:
       - os_distro: el6
       - os_distro: el7
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon
 
@@ -32,7 +32,7 @@ package_modules:
     variants:
       - os_distro: el6
       - os_distro: el7
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon
 
@@ -41,6 +41,6 @@ package_modules:
     variants:
       - os_distro: el6
       - os_distro: el7
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: dragon

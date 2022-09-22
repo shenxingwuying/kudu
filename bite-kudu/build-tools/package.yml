@@ -1,11 +1,11 @@
 package_modules:
   bite_kudu:
     source: local
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: docker
   bite_kudu_el6:
     source: local
-    version: "1.14.2"
+    version: "1.14.5"
     pub:
       - type: docker
