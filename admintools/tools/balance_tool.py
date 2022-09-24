@@ -36,6 +36,8 @@ soku_tool banlance start # 开始balance
     best_op = [float("inf"), [], []]
 
     def init_parser(self, parser):
+        global timeout_signal
+        timeout_signal = 0
         return 0
 
     def run_cmd(self, cmd):
