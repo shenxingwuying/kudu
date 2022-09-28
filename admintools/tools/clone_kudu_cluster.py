@@ -219,6 +219,8 @@ def parse_args():
                         help='table needed to be migrated to new cluster')
     parser.add_argument('--passwords', default='',
                         help='passwords of new cluster nodes, format:<{"hostname1":"pwd", "hostname2":"pwd"}')
+    parser.add_argument('--host_password', default='',
+                        help='password of one new cluster node, format:<{"hostname":"pwd"}')
     parser.add_argument('--ignore_dest_cluster_ksck', type=bool, default=False,
                         help='Not to check dest cluster health status')
     parser.add_argument('--continue_mode', type=bool, default=False,
@@ -243,7 +245,7 @@ def parse_args():
         if "*" in args.table:
             die("Parameter: --table can not contains *")
         print("parameter --table is configed, will migrate table:%s" % args.table)
-    if len(args.table) <= 0 and len(args.passwords) <= 0:
+    if len(args.table) <= 0 and len(args.passwords) <= 0 and len(args.host_password) <= 0:
         die("parameter --passwords is not configed")
     print("0.3----检查本地kudu集群是否正常")
     if not check_cluster(args.local_source_cluster):
@@ -320,6 +322,40 @@ def migrate_table(progress, args, progress_file):
     print("Finish table migrate task!")
 
 
+def fetch_all_passwords(host_password, dest_master_addrs, ssh_port):
+    host_passwords = {}
+    pwd = {}
+    try:
+        pwd = json.loads(host_password)
+    except Exception:
+        print("can't parse parameter --host_passowrd, it should be in json format")
+        return
+
+    hosts = []
+    # 获取master host.
+    for addr in dest_master_addrs.split(','):
+        hp = addr.split(':')
+        hosts.append(hp[0])
+
+    host = list(pwd.keys())[0]
+    password = pwd[host]
+    # 获取目标集群所有tserver地址.
+    cmd = "kudu tserver list %s --format=json" % dest_master_addrs
+    result = run_ssh_cmd_with_password(cmd, host, ssh_port, _user_sa, password)
+    host_info = json.loads(result['stdout'])
+    for addr in host_info:
+        hp = addr['rpc-addresses'].split(':')
+        hosts.append(hp[0])
+
+    # 获取所有host的sa密码.
+    for h in hosts:
+        cmd = "ssh %s -p %s \ 'cat /home/sa_cluster/.sa_password'" % (h, ssh_port)
+        result = run_ssh_cmd_with_password(cmd, host, ssh_port, _user_sa, password)
+        host_passwords[h] = result['stdout']
+    
+    return host_passwords
+
+
 def main():
     start_time = int(time.time())
     if getpass.getuser() != _user_sa:
@@ -379,19 +415,9 @@ def main():
         new_tserver_fs_data_dirs = get_server_config('tserver', new_1st_tserver, 'fs_data_dirs').split(',')
 
         # 请确保其父目录是 kudu:sa_group 权限！！！
-        if len(args.passwords) <= 0:
-            print("1.7----获取目标集群master/tserver sa_cluster密码，密码存在/home/sa_cluster/.sa_password中")
-            pwd = {}
-            for host in new_master_hosts:
-                print("请输入主机:%s sa_cluster账号的密码" % host)
-                result = run_cmd("ssh %s@%s -p %d cat ~/.sa_password" % (_user_sa, host, args.ssh_port))
-                pwd[host] = result['stdout']
-            for host in new_tserver_hosts:
-                if host in pwd:
-                    continue
-                print("请输入主机:%s sa_cluster账号的密码" % host)
-                result = run_cmd("ssh %s@%s -p %d cat ~/.sa_password" % (_user_sa, host, args.ssh_port))
-                pwd[host] = result['stdout']
+        if len(args.host_password) > 0:
+            print("1.7----获取目标集群master/tserver sa_cluster密码")
+            pwd = fetch_all_passwords(args.host_password, args.dest_cluster, args.ssh_port)
         else:
             print("1.7----解析命令行中passwords参数")
             try:
