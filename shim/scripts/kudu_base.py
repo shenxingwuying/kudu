@@ -57,16 +57,16 @@ class KuduBase(Script):
         import params
         if self.role == self.KUDU_COLLECTOR:
             exec_path = os.path.join(params.collector_bin, 'kudu-%s' % self.role)
-            cmd = '{exec_path}  --flagfile={flag_file} 2>&1 &'.format(exec_path=exec_path, flag_file=self._flag_file())
+            cmd = 'echo $BASHPID > {pid} && exec {exec_path}  --flagfile={flag_file} &'.format(
+                pid=self._pid_file(), exec_path=exec_path, flag_file=self._flag_file())
         elif self.role in [self.KUDU_MASTER, self.KUDU_TSERVER]:
             dump_info_path = os.path.join(params.kudu_conf_dir, 'kudu_%s.json' % self.role)
             bin = params.master_bin if self.role == self.KUDU_MASTER else params.tserver_bin
             exec_path = os.path.join(bin, 'kudu-%s' % self.role)
-            cmd = '{exec_path} --server_dump_info_path={dump_info_path} --flagfile={flag_file} 2>&1 &'.format(
-                exec_path=exec_path, dump_info_path=dump_info_path, flag_file=self._flag_file())
+            cmd = 'echo $BASHPID > {pid} && exec {exec_path} --server_dump_info_path={dump_info_path} --flagfile={flag_file} &'.format(
+                pid=self._pid_file(), exec_path=exec_path, dump_info_path=dump_info_path, flag_file=self._flag_file())
         else:
             raise Exception('unexpected role: [%s]' % self.role)
-
         Logger.info("start cmd: %s" % cmd)
         try:
             Execute(cmd, user=params.kudu_user)

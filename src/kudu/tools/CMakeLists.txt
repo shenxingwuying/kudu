@@ -143,7 +143,7 @@ target_link_libraries(kudu
 )
 option(KUDU_CLIENT_INSTALL "Whether to install the Kudu command line tool" ON)
 if(KUDU_CLIENT_INSTALL)
-  install(TARGETS kudu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  install(TARGETS kudu RUNTIME DESTINATION ${CMAKE_INSTALL_SBINDIR})
 else()
   message(STATUS "Skipping install rule for the Kudu command line tool")
 endif()

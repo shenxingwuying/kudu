@@ -52,8 +52,8 @@ make install
 mkdir -p $INSTALL_DIR/lib/kudu
 cp -r ${CODE_ROOT}/www $INSTALL_DIR/lib/kudu/
 
-strip --remove-section=.symtab $INSTALL_DIR/bin/kudu
-strip --remove-section=.strtab $INSTALL_DIR/bin/kudu
+strip --remove-section=.symtab $INSTALL_DIR/sbin/kudu
+strip --remove-section=.strtab $INSTALL_DIR/sbin/kudu
 
 strip --remove-section=.symtab $INSTALL_DIR/sbin/kudu-master
 strip --remove-section=.strtab $INSTALL_DIR/sbin/kudu-master

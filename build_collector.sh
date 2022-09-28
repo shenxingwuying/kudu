@@ -32,8 +32,8 @@ rm $INSTALL_DIR/sbin/kudu-master
 rm $INSTALL_DIR/sbin/kudu-tserver
 rm $INSTALL_DIR/lib64/libkudu_client.so.0.1.0
 
-strip --remove-section=.symtab $INSTALL_DIR/bin/kudu
-strip --remove-section=.strtab $INSTALL_DIR/bin/kudu
+strip --remove-section=.symtab $INSTALL_DIR/sbin/kudu
+strip --remove-section=.strtab $INSTALL_DIR/sbin/kudu
 
 strip --remove-section=.symtab $INSTALL_DIR/sbin/kudu-collector
 strip --remove-section=.strtab $INSTALL_DIR/sbin/kudu-collector

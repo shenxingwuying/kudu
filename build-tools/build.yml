@@ -45,8 +45,8 @@ build_modules:
         add_cmds:
           # 这里需要执行build的原因是整个编译不会按build.yml的顺序来保证执行顺序
           - ["RUN", "sh build.sh"]
-          - ["COPY", "/opt/kudu/installed/bin/kudu", "./"]
-          - ["COPY", "/opt/kudu/installed/bin/kudu", "./sp_kudu"]
+          - ["COPY", "/opt/kudu/installed/sbin/kudu", "./"]
+          - ["COPY", "/opt/kudu/installed/sbin/kudu", "./sp_kudu"]
 
   kudu_guidance:
     variants:
@@ -58,4 +58,4 @@ build_modules:
           # 这里需要执行build的原因是整个编译不会按build.yml的顺序来保证执行顺序
           - ["RUN", "sh build.sh"]
           - ["COPY", "./guidance/*", "./" ]
-          - ["COPY", "/opt/kudu/installed/bin/kudu", "./kudu/command"]
+          - ["COPY", "/opt/kudu/installed/sbin/kudu", "./kudu/command"]

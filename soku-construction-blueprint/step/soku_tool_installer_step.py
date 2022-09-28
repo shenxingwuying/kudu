@@ -32,13 +32,13 @@ class SokuToolInstallerStep(BaseInstallerStep):
         # CDH环境下kudu会链接到该目录下，且直接替换的方式并不能使/usr/bin/kudu的优先级更高
         # 保险起见，直接将这里的kudu链接到soku_tool目录下,升级时直接替换源soku_tool目录即可
         cdh_home = getoutput("""cat ~/.bashrc | grep PATH | grep CDH | sed "s/[=:']/ /g" | awk '{print $3}'""")
-        kudu_tool_path = os.path.join(cdh_home, "../../CDH/bin/kudu")
+        kudu_tool_path = os.path.join(cdh_home, "../../CDH/sbin/kudu")
         if os.path.islink(kudu_tool_path) or os.path.isfile(kudu_tool_path):
             cmd = "sudo rm -f '%s'" % kudu_tool_path
             check_call(cmd, self.logger.debug)
             cmd = "sudo ln -s '%s' '%s'" % (src_kudu, kudu_tool_path)
             check_call(cmd, self.logger.debug)
-        kudu_sensors_tool_path = os.path.join(cdh_home, "../../KUDU_SENSORS_DATA/bin/kudu")
+        kudu_sensors_tool_path = os.path.join(cdh_home, "../../KUDU_SENSORS_DATA/sbin/kudu")
         if os.path.islink(kudu_sensors_tool_path) or os.path.isfile(kudu_sensors_tool_path):
             cmd = "sudo rm -f '%s'" % kudu_sensors_tool_path
             check_call(cmd, self.logger.debug)

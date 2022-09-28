@@ -43,10 +43,6 @@ class CollectorModuleInstaller(ExternalModuleInstaller):
         src = os.path.join(soku_home, "collector/sbin", 'kudu-collector')
         dst = os.path.join("/usr/bin", 'kudu-collector')
         links_to_make.append((src, dst, True))
-        # tool
-        tool_src = os.path.join(soku_home, "collector/bin", 'kudu')
-        tool_dst = os.path.join(soku_home, "collector/sbin", 'kudu')
-        links_to_make.append((tool_src, tool_dst, False))
         # 创建软链
         for src, dst, issudo in links_to_make:
             if os.path.islink(dst):

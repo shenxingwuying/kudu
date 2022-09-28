@@ -10,10 +10,7 @@ COLLECTOR_HOME=${SENSORS_SOKU_HOME}/collector
 COLLECTOR_LOG_HOME=${SENSORS_SOKU_HOME}/logs/${role}
 COLLECTOR_CONF_HOME=${SENSORS_SOKU_HOME}/conf/kudu_${role}.gflagfile
 export LD_LIBRARY_PATH="${COLLECTOR_HOME}/lib/kudu/sbin:${LD_LIBRARY_PATH}"
-cd ${COLLECTOR_HOME}
-if [ ! -L "sbin/kudu" ]; then
-    cp bin/kudu sbin/kudu
-fi
+
 nohup ${COLLECTOR_HOME}/sbin/kudu-${role} --flagfile ${COLLECTOR_CONF_HOME} >> ${COLLECTOR_LOG_HOME}/kudu_${role}.out 2>> ${COLLECTOR_LOG_HOME}/kudu_${role}.err </dev/null &
 
 sleep 1
