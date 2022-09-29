@@ -17,7 +17,11 @@
 
 package org.apache.kudu.client;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.Executor;
 
 import com.google.common.base.Preconditions;
@@ -313,33 +317,51 @@ public class KuduClient implements AutoCloseable {
     }
   }
 
-  public Set<String> getSubscribedTables() throws Exception {
+  public Set<String> getSubscribedTables() throws KuduException, RuntimeException {
+    return getTablesAtServer(AsyncKuduClient.BEEF_ID);
+  }
+
+  public Set<String> getTablesAtServer(String serverUuid) throws KuduException, RuntimeException {
     Set<String> subscribedTables = new TreeSet<>();
 
-    if (asyncClient.supportDuplication()) {
-      // TODO(duyuqi)
-    } else {
-      Map<String, ServerInfo> serverMap;
-      try {
-        serverMap = listTabletServersWithUUID().getServerInfoMap();
-      } catch (KuduException e) {
-        LOG.error("Problem occurred when fetching all tservers info. ", e);
-        throw e;
-      }
-      if (serverMap.containsKey(AsyncKuduClient.BEEF_ID)) {
-        ServerInfo serverInfo = serverMap.get(AsyncKuduClient.BEEF_ID);
-        RpcProxy proxy = asyncClient.newRpcProxy(serverInfo);
-        ListTabletsRequest req = new ListTabletsRequest(asyncClient.getTimer(), 10000);
+    // TODO(duyuqi)
+    // support duplication.
+
+    // The code below adapt to ksyncer.
+    // Map: <server uuid, server info>
+    Map<String, ServerInfo> serverInfoByUuid = null;
+    try {
+      serverInfoByUuid = listTabletServersWithUUID().getServerInfoMap();
+    } catch (KuduException e) {
+      LOG.error("Problem occurred when fetching all tservers info. ", e);
+      throw e;
+    }
+    if (serverInfoByUuid.containsKey(serverUuid)) {
+      ServerInfo serverInfo = serverInfoByUuid.get(serverUuid);
+      RpcProxy proxy = asyncClient.newRpcProxy(serverInfo);
+      int maxRetry = 3;
+      ListTabletsRequest req = new ListTabletsRequest(asyncClient.getTimer(), 10000);
+      for (int i = 1; i <= maxRetry; i++) {
+        subscribedTables.clear();
         Deferred<ListTabletsResponse> d = req.getDeferred();
+        // TODO(duyuqi)
+        // We should provide a better way to retry, such as async execute task and
+        // an exponential backoff time.
         proxy.sendRpc(req);
-        ListTabletsResponse resp = d.join();
-        for (Tserver.ListTabletsResponsePB.StatusAndSchemaPB tabletInfo : resp.getTabletInfoMap()) {
-          if (tabletInfo.getTabletStatus().getState() == Metadata.TabletStatePB.RUNNING) {
-            subscribedTables.add(tabletInfo.getTabletStatus().getTableName());
+        try {
+          ListTabletsResponse resp = d.join();
+          for (Tserver.ListTabletsResponsePB.StatusAndSchemaPB tabletInfo : resp.getTabletInfoMap()) {
+            if (tabletInfo.getTabletStatus().getState() == Metadata.TabletStatePB.RUNNING) {
+              subscribedTables.add(tabletInfo.getTabletStatus().getTableName());
+            }
+          }
+          break;
+        } catch (Exception e) {
+          // The 'Exception e' include InterruptedException
+          if (i == maxRetry) {
+            throw new RuntimeException(e);
           }
         }
-      } else {
-        throw new Exception("no ksyncer server.");
       }
     }
     return subscribedTables;

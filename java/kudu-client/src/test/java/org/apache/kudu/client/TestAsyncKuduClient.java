@@ -30,6 +30,8 @@ import static org.junit.Assert.fail;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.base.Stopwatch;
@@ -296,5 +298,25 @@ public class TestAsyncKuduClient {
   @KuduTestHarness.MasterServerConfig(flags = { "--master_support_ignore_operations=false" })
   public void testSupportsIgnoreOperationsFalse() throws Exception {
     assertFalse(asyncClient.supportsIgnoreOperations().join());
+  }
+
+  @Test(timeout = 100000)
+  public void testGetSubscribedTables() throws Exception {
+    CreateTableOptions options = getBasicCreateTableOptions();
+    String tableName = "testGetSubscribedTables" + System.currentTimeMillis();
+    client.createTable(tableName, basicSchema, options);
+    Set<String> tables = client.getSubscribedTables();
+    assertTrue(tables.isEmpty());
+    ListTabletServersWithUUIDResponse response = client.listTabletServersWithUUID();
+    ServerInfo serverInfo = null;
+
+    for (Map.Entry<String, ServerInfo> kvServerInfo : response.getServerInfoMap().entrySet()) {
+      serverInfo = kvServerInfo.getValue();
+      break;
+    }
+    assertNotEquals(null, serverInfo);
+    tables = client.getTablesAtServer(serverInfo.getUuid());
+    assertEquals(1, tables.size());
+    assertTrue(tables.contains(tableName));
   }
 }
