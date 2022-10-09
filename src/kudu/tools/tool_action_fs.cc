@@ -973,7 +973,7 @@ Status List(const RunnerContext& /*context*/) {
 Status CompactMetaData(const RunnerContext& context) {
   if (FLAGS_metadata_op_type != kMetadataMergeOp) {
     // 判断当前kudu tool的版本，版本必须不高于 1.12.
-    const string cmd = "kudu tserver get_flags localhost:7050 "
+    const string cmd = "sp_kudu tserver get_flags localhost:7050 "
                        "-flags=log_container_metadata_runtime_compact --format=json";
     vector<string> argv = strings::Split(cmd, " ", strings::SkipEmpty());
     string stderr, stdout;
