@@ -23,6 +23,7 @@
 #include <mutex>
 #include <ostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <boost/optional/optional.hpp>
@@ -32,13 +33,16 @@
 #include "kudu/common/partition.h"
 #include "kudu/common/timestamp.h"
 #include "kudu/consensus/consensus.pb.h"
+#include "kudu/consensus/consensus_meta.h"
 #include "kudu/consensus/consensus_meta_manager.h"
 #include "kudu/consensus/consensus_peers.h"
 #include "kudu/consensus/log.h"
 #include "kudu/consensus/log_anchor_registry.h"
 #include "kudu/consensus/opid.pb.h"
+#include "kudu/consensus/opid_util.h"
 #include "kudu/consensus/raft_consensus.h"
 #include "kudu/consensus/time_manager.h"
+#include "kudu/duplicator/connector.h"
 #include "kudu/fs/data_dirs.h"
 #include "kudu/gutil/basictypes.h"
 #include "kudu/gutil/port.h"
@@ -59,6 +63,7 @@
 #include "kudu/util/metrics.h"
 #include "kudu/util/monotime.h"
 #include "kudu/util/pb_util.h"
+#include "kudu/util/scoped_cleanup.h"
 #include "kudu/util/stopwatch.h"
 #include "kudu/util/threadpool.h"
 #include "kudu/util/trace.h"
@@ -105,6 +110,7 @@ using kudu::consensus::ALTER_SCHEMA_OP;
 using kudu::consensus::ConsensusBootstrapInfo;
 using kudu::consensus::ConsensusOptions;
 using kudu::consensus::ConsensusRound;
+using kudu::consensus::DUPLICATE_OP;
 using kudu::consensus::MarkDirtyCallback;
 using kudu::consensus::OpId;
 using kudu::consensus::PARTICIPANT_OP;
@@ -144,7 +150,8 @@ TabletReplica::TabletReplica(
     consensus::RaftPeerPB local_peer_pb,
     ThreadPool* apply_pool,
     TxnCoordinatorFactory* txn_coordinator_factory,
-    MarkDirtyCallback cb)
+    MarkDirtyCallback cb,
+    duplicator::ConnectorManager* connector_manager)
     : meta_(DCHECK_NOTNULL(std::move(meta))),
       cmeta_manager_(DCHECK_NOTNULL(std::move(cmeta_manager))),
       local_peer_pb_(std::move(local_peer_pb)),
@@ -155,7 +162,25 @@ TabletReplica::TabletReplica(
                        DCHECK_NOTNULL(txn_coordinator_factory)->Create(this) : nullptr),
       mark_dirty_clbk_(std::move(cb)),
       state_(NOT_INITIALIZED),
-      last_status_("Tablet initializing...") {
+      last_status_("Tablet initializing..."),
+      connector_manager_(connector_manager),
+      duplicator_(nullptr),
+      duplicator_last_committed_opid_(consensus::MinimumOpId()) {
+}
+
+// TODO(duyuqi), review the construction function and the state_ default value.
+// MockTabletReplica just for Test
+TabletReplica::TabletReplica(consensus::RaftPeerPB local_peer_pb) :
+    meta_(nullptr), cmeta_manager_(nullptr),
+    local_peer_pb_(std::move(local_peer_pb)), log_anchor_registry_(nullptr),
+    apply_pool_(nullptr),
+    txn_coordinator_(nullptr),
+    mark_dirty_clbk_([](const std::string& reason){}),
+    state_(SHUTDOWN),
+    last_status_("Tablet initializing..."),
+    connector_manager_(nullptr),
+    duplicator_(nullptr),
+    duplicator_last_committed_opid_(consensus::MinimumOpId()) {
 }
 
 TabletReplica::TabletReplica()
@@ -252,7 +277,6 @@ Status TabletReplica::Start(const ConsensusBootstrapInfo& bootstrap_info,
       peer_proxy_factory.reset(new RpcPeerProxyFactory(messenger_, resolver));
       time_manager.reset(new TimeManager(clock_, tablet_->mvcc_manager()->GetCleanTimestamp()));
     }
-
     // We cannot hold 'lock_' while we call RaftConsensus::Start() because it
     // may invoke TabletReplica::StartFollowerOp() during startup,
     // causing a self-deadlock. We take a ref to members protected by 'lock_'
@@ -315,6 +339,12 @@ void TabletReplica::Stop() {
   UnregisterMaintenanceOps();
 
   if (consensus_) consensus_->Stop();
+
+  if (duplicator_) {
+    duplicator_->Shutdown();
+    // delete duplicator_;
+    // duplicator_ = nullptr;
+  }
 
   // TODO(KUDU-183): Keep track of the pending tasks and send an "abort" message.
   LOG_SLOW_EXECUTION(WARNING, 1000,
@@ -602,6 +632,12 @@ log::RetentionIndexes TabletReplica::GetRetentionIndexes() const {
   // If we never have written to the log, no need to proceed.
   if (ret.for_durability == 0) return ret;
 
+  log::LogAnchor anchor;
+  if (duplicator_) {
+    log_anchor_registry_->Register(duplicator_last_committed_opid_.index(),  "duplicator", &anchor);
+  }
+  SCOPED_CLEANUP({ if (duplicator_) { log_anchor_registry_->Unregister(&anchor); }});
+
   // Next, we interrogate the anchor registry.
   // Returns OK if minimum known, NotFound if no anchors are registered.
   {
@@ -768,7 +804,7 @@ Status TabletReplica::NewLeaderOpDriver(unique_ptr<Op> op,
 }
 
 Status TabletReplica::NewReplicaOpDriver(unique_ptr<Op> op,
-                                                  scoped_refptr<OpDriver>* driver) {
+                                         scoped_refptr<OpDriver>* driver) {
   scoped_refptr<OpDriver> op_driver = new OpDriver(
     &op_tracker_,
     consensus_.get(),

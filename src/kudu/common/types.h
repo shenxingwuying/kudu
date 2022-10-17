@@ -62,8 +62,9 @@ class TypeInfo {
   // Returns the type used to actually store the data.
   DataType physical_type() const { return physical_type_; }
   const std::string& name() const { return name_; }
-  const size_t size() const { return size_; }
+  size_t size() const { return size_; }
   void AppendDebugStringForValue(const void *ptr, std::string *str) const;
+  void StringForValue(const void *ptr, std::string *str) const;
   int Compare(const void *lhs, const void *rhs) const;
   // Returns true if increment(a) is equal to b.
   bool AreConsecutive(const void* a, const void* b) const;
@@ -93,6 +94,7 @@ class TypeInfo {
 
   typedef void (*AppendDebugFunc)(const void *, std::string *);
   const AppendDebugFunc append_func_;
+  const AppendDebugFunc stringify_func_;
 
   typedef int (*CompareFunc)(const void *, const void *);
   const CompareFunc compare_func_;
@@ -144,6 +146,9 @@ struct DataTypeTraits<UINT8> {
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     str->append(SimpleItoa(*reinterpret_cast<const uint8_t *>(val)));
   }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
+  }
   static int Compare(const void *lhs, const void *rhs) {
     return GenericCompare<UINT8>(lhs, rhs);
   }
@@ -170,6 +175,9 @@ struct DataTypeTraits<INT8> {
   }
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     str->append(SimpleItoa(*reinterpret_cast<const int8_t *>(val)));
+  }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
   }
   static int Compare(const void *lhs, const void *rhs) {
     return GenericCompare<INT8>(lhs, rhs);
@@ -198,6 +206,9 @@ struct DataTypeTraits<UINT16> {
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     str->append(SimpleItoa(*reinterpret_cast<const uint16_t *>(val)));
   }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
+  }
   static int Compare(const void *lhs, const void *rhs) {
     return GenericCompare<UINT16>(lhs, rhs);
   }
@@ -224,6 +235,9 @@ struct DataTypeTraits<INT16> {
   }
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     str->append(SimpleItoa(*reinterpret_cast<const int16_t *>(val)));
+  }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
   }
   static int Compare(const void *lhs, const void *rhs) {
     return GenericCompare<INT16>(lhs, rhs);
@@ -252,6 +266,9 @@ struct DataTypeTraits<UINT32> {
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     str->append(SimpleItoa(*reinterpret_cast<const uint32_t *>(val)));
   }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
+  }
   static int Compare(const void *lhs, const void *rhs) {
     return GenericCompare<UINT32>(lhs, rhs);
   }
@@ -278,6 +295,9 @@ struct DataTypeTraits<INT32> {
   }
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     str->append(SimpleItoa(*reinterpret_cast<const int32_t *>(val)));
+  }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
   }
   static int Compare(const void *lhs, const void *rhs) {
     return GenericCompare<INT32>(lhs, rhs);
@@ -306,6 +326,9 @@ struct DataTypeTraits<UINT64> {
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     str->append(SimpleItoa(*reinterpret_cast<const uint64_t *>(val)));
   }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
+  }
   static int Compare(const void *lhs, const void *rhs) {
     return GenericCompare<UINT64>(lhs, rhs);
   }
@@ -332,6 +355,9 @@ struct DataTypeTraits<INT64> {
   }
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     str->append(SimpleItoa(*reinterpret_cast<const int64_t *>(val)));
+  }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
   }
   static int Compare(const void *lhs, const void *rhs) {
     return GenericCompare<INT64>(lhs, rhs);
@@ -360,6 +386,9 @@ struct DataTypeTraits<INT128> {
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     str->append(SimpleItoa(UnalignedLoad<int128_t>(val)));
   }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
+  }
   static int Compare(const void *lhs, const void *rhs) {
     return GenericCompare<INT128>(lhs, rhs);
   }
@@ -387,6 +416,9 @@ struct DataTypeTraits<FLOAT> {
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     str->append(SimpleFtoa(*reinterpret_cast<const float *>(val)));
   }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
+  }
   static int Compare(const void *lhs, const void *rhs) {
     return GenericCompare<FLOAT>(lhs, rhs);
   }
@@ -413,6 +445,9 @@ struct DataTypeTraits<DOUBLE> {
   }
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     str->append(SimpleDtoa(*reinterpret_cast<const double *>(val)));
+  }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
   }
   static int Compare(const void *lhs, const void *rhs) {
     return GenericCompare<DOUBLE>(lhs, rhs);
@@ -443,6 +478,10 @@ struct DataTypeTraits<BINARY> {
     str->push_back('"');
     str->append(strings::CHexEscape(s->ToString()));
     str->push_back('"');
+  }
+  static void StringForValue(const void *val, std::string *str) {
+    const Slice *s = reinterpret_cast<const Slice *>(val);
+    str->append(s->ToString());
   }
   static int Compare(const void *lhs, const void *rhs) {
     const Slice *lhs_slice = reinterpret_cast<const Slice *>(lhs);
@@ -484,6 +523,9 @@ struct DataTypeTraits<BOOL> {
   static void AppendDebugStringForValue(const void* val, std::string* str) {
     str->append(*reinterpret_cast<const bool *>(val) ? "true" : "false");
   }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
+  }
   static int Compare(const void *lhs, const void *rhs) {
     return GenericCompare<BOOL>(lhs, rhs);
   }
@@ -512,6 +554,9 @@ struct DerivedTypeTraits {
 
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     DataTypeTraits<PhysicalType>::AppendDebugStringForValue(val, str);
+  }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
   }
 
   static int Compare(const void *lhs, const void *rhs) {
@@ -545,6 +590,10 @@ struct DataTypeTraits<STRING> : public DerivedTypeTraits<BINARY>{
     str->append(strings::Utf8SafeCEscape(s->ToString()));
     str->push_back('"');
   }
+  static void StringForValue(const void *val, std::string *str) {
+    const Slice *s = reinterpret_cast<const Slice *>(val);
+    str->append(s->ToString());
+  }
 };
 
 
@@ -576,6 +625,9 @@ struct DataTypeTraits<UNIXTIME_MICROS> : public DerivedTypeTraits<INT64>{
     snprintf(time, sizeof(time), kDateMicrosAndTzFormat, time_up_to_secs, remaining_micros);
     str->append(time);
   }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
+  }
 };
 
 template<>
@@ -589,6 +641,9 @@ struct DataTypeTraits<DATE> : public DerivedTypeTraits<INT32>{
   }
 
   static void AppendDebugStringForValue(const void* val, std::string* str);
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
+  }
 
   static const cpp_type* min_value() {
     static int32_t value = kMinValue;
@@ -615,6 +670,9 @@ struct DataTypeTraits<DECIMAL32> : public DerivedTypeTraits<INT32>{
     DataTypeTraits<physical_type>::AppendDebugStringForValue(val, str);
     str->append("_D32");
   }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
+  }
 };
 
 template<>
@@ -629,6 +687,9 @@ struct DataTypeTraits<DECIMAL64> : public DerivedTypeTraits<INT64>{
     DataTypeTraits<physical_type>::AppendDebugStringForValue(val, str);
     str->append("_D64");
   }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
+  }
 };
 
 template<>
@@ -642,6 +703,9 @@ struct DataTypeTraits<DECIMAL128> : public DerivedTypeTraits<INT128>{
   static void AppendDebugStringForValue(const void *val, std::string *str) {
     DataTypeTraits<physical_type>::AppendDebugStringForValue(val, str);
     str->append("_D128");
+  }
+  static void StringForValue(const void *val, std::string *str) {
+    AppendDebugStringForValue(val, str);
   }
 };
 
@@ -665,6 +729,10 @@ struct DataTypeTraits<VARCHAR> : public DerivedTypeTraits<BINARY>{
     str->push_back('"');
     str->append(strings::Utf8SafeCEscape(s->ToString()));
     str->push_back('"');
+  }
+  static void StringForValue(const void *val, std::string *str) {
+    const Slice *s = reinterpret_cast<const Slice*>(val);
+    str->append(s->ToString());
   }
 };
 

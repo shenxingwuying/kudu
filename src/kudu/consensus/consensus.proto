@@ -95,6 +95,8 @@ enum OperationType {
   ALTER_SCHEMA_OP = 4;
   CHANGE_CONFIG_OP = 5;
   PARTICIPANT_OP = 6;
+  // For durability the progress of duplication.
+  DUPLICATE_OP = 100;
 }
 
 // The op driver type: indicates whether an op is being executed on a leader or
@@ -143,6 +145,8 @@ message ChangeConfigRequestPB {
   // The peer to add or remove.
   // When 'type' == ADD_PEER, both the permanent_uuid and last_known_addr
   // fields must be set. Otherwise, only the permanent_uuid field is required.
+  // When ADD_PEER a duplictor, permanent_uuid and last_known_addr set to
+  // localhost:port, but no real.
   optional RaftPeerPB server = 3;
 
   // The OpId index of the committed config to replace.
@@ -210,6 +214,7 @@ message ReplicateMsg {
   optional rpc.RequestIdPB request_id = 8;
 
   optional NoOpRequestPB noop_request = 999;
+  optional DuplicateRequestPB duplicate_request = 1099;
 }
 
 // A commit message for a previous operation.
@@ -237,6 +242,16 @@ message NoOpRequestPB {
  // leader marking a successful Raft election, this is true. If not set, it is
  // assumed to be true.
  optional bool timestamp_in_opid_order = 2;
+}
+
+message DuplicateRequestPB {
+  required OpId op_id = 1;
+  required DuplicationInfoPB dup_info = 2;
+}
+
+// DuplicateRequest need not a response, the response required by
+// structure of dealing DuplicationOp.
+message DuplicateResponsePB {
 }
 
 // Status message received in the peer responses.

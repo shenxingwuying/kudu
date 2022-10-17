@@ -28,18 +28,26 @@
 
 #include "kudu/consensus/log.h"
 #include "kudu/consensus/metadata.pb.h"
+#include "kudu/consensus/opid.pb.h"
 #include "kudu/consensus/raft_consensus.h"
+#include "kudu/duplicator/connector_manager.h"
+#include "kudu/duplicator/duplicator.h"
 #include "kudu/fs/fs_manager.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
+#include "kudu/gutil/strings/substitute.h"
 #include "kudu/tablet/metadata.pb.h"
 #include "kudu/tablet/op_order_verifier.h"
 #include "kudu/tablet/ops/op.h"
 #include "kudu/tablet/ops/op_tracker.h"
+#include "kudu/tablet/ops/write_op.h"
+#include "kudu/tablet/row_op.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet_metadata.h"
 #include "kudu/util/locks.h"
 #include "kudu/util/metrics.h"
+#include "kudu/util/mutex.h"
 #include "kudu/util/status.h"
 
 namespace kudu {
@@ -48,6 +56,7 @@ class DnsResolver;
 class MaintenanceManager;
 class MaintenanceOp;
 class MonoDelta;
+class Schema;
 class ThreadPool;
 class ThreadPoolToken;
 
@@ -59,6 +68,10 @@ class TimeManager;
 
 namespace clock {
 class Clock;
+}
+
+namespace duplicator {
+class DuplicationReplayWalTest;
 }
 
 namespace log {
@@ -76,12 +89,13 @@ class TabletCopier;
 
 namespace tablet {
 class AlterSchemaOpState;
+class DuplicationOpState;
 class OpDriver;
 class ParticipantOpState;
 class TabletStatusPB;
 class TxnCoordinator;
 class TxnCoordinatorFactory;
-class WriteOpState;
+struct ProbeStats;
 
 // A replica in a tablet consensus configuration, which coordinates writes to tablets.
 // Each time Write() is called this class appends a new entry to a replicated
@@ -96,7 +110,11 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
                 consensus::RaftPeerPB local_peer_pb,
                 ThreadPool* apply_pool,
                 TxnCoordinatorFactory* txn_coordinator_factory,
-                consensus::MarkDirtyCallback cb);
+                consensus::MarkDirtyCallback cb,
+                duplicator::ConnectorManager* connector_manager = nullptr);
+
+  // MockTabletReplica just for Test
+  explicit TabletReplica(consensus::RaftPeerPB local_peer_pb);
 
   // Initializes RaftConsensus.
   // This must be called before publishing the instance to other threads.
@@ -141,6 +159,11 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   // RPC WriteRequest, WriteResponse, RpcContext and to the tablet's
   // MvccManager.
   Status SubmitWrite(std::unique_ptr<WriteOpState> op_state);
+
+  // SubmitDuplicationOp to duriable the duplicator's duplicate progress.
+  Status SubmitDuplicationOp(std::unique_ptr<DuplicationOpState> op_state,
+                             consensus::OpId confirmed_opid,
+                             consensus::DuplicationInfoPB dup_info);
 
   // Submits an op to update transaction participant state, executing it
   // asynchonously.
@@ -203,6 +226,10 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   const TabletDataState data_state() const {
     std::lock_guard<simple_spinlock> lock(lock_);
     return meta_->tablet_data_state();
+  }
+
+  duplicator::ConnectorManager* connector_manager() {
+    return connector_manager_;
   }
 
   // Returns the current Raft configuration.
@@ -325,19 +352,52 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
     return txn_coordinator_.get();
   }
 
+  std::unique_ptr<duplicator::Duplicator>& duplicator() {
+    return duplicator_;
+  }
+
+  Status Duplicate(const std::shared_ptr<WriteOpState>& op_state_ptr,
+                   const SchemaPtr& schema,
+                   Tablet::DuplicationMode mode) {
+    if (!duplicator_ || !duplicator_->is_started()) {
+      DCHECK(!op_state_ptr->row_ops().empty());
+      return Status::IllegalState(
+          Substitute("duplicator is not inited, first row_op: $0",
+                     op_state_ptr->row_ops()[0]->ToString(*schema)));
+    }
+    return duplicator_->Duplicate(op_state_ptr, schema, mode);
+  }
+
+  // OpId of remote destination storage has received.
+  consensus::OpId last_confirmed_opid() const {
+    return duplicator_->last_confirmed_opid();
+  }
+
+  // OpId what less or equal, should replicate to remote destination.
+  void set_duplicator_last_committed_opid(const consensus::OpId& duplicator_last_committed_opid) {
+    if (OpIdLessThan(duplicator_last_committed_opid_, duplicator_last_committed_opid)) {
+      duplicator_last_committed_opid_ = duplicator_last_committed_opid;
+    }
+  }
+
+  consensus::OpId duplicator_last_committed_opid() const {
+    return duplicator_last_committed_opid_;
+  }
+
  private:
   friend class kudu::tools::TabletCopier;
   friend class kudu::AlterTableTest;
   friend class RefCountedThreadSafe<TabletReplica>;
   friend class TabletReplicaTest;
   friend class TabletReplicaTestBase;
-  FRIEND_TEST(TabletReplicaTest, TestMRSAnchorPreventsLogGC);
-  FRIEND_TEST(TabletReplicaTest, TestDMSAnchorPreventsLogGC);
+  FRIEND_TEST(DuplicationReplayWalTest, PrepareAndReplay);
   FRIEND_TEST(TabletReplicaTest, TestActiveOpPreventsLogGC);
+  FRIEND_TEST(TabletReplicaTest, TestDMSAnchorPreventsLogGC);
+  FRIEND_TEST(TabletReplicaTest, TestMRSAnchorPreventsLogGC);
 
   TabletReplica();
 
-  ~TabletReplica();
+  ~TabletReplica() override;
 
   // Wait until the TabletReplica is fully in STOPPED, SHUTDOWN, or FAILED
   // state.
@@ -398,6 +458,16 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
 
   // Token for serial task submission to the server-wide op prepare pool.
   std::unique_ptr<ThreadPoolToken> prepare_pool_token_;
+
+  // Get connectors for duplication.
+  duplicator::ConnectorManager* connector_manager_;
+
+  // duplicate write ops to thirdparty destination storage system.
+  std::unique_ptr<duplicator::Duplicator> duplicator_;
+  // To pretect duplicator_'s Init and Start.
+  Mutex duplicator_mutex_;
+  // Record last committed_opid for duplication.
+  consensus::OpId duplicator_last_committed_opid_;
 
   clock::Clock* clock_;
 

@@ -191,6 +191,42 @@ class Tablet {
                            RowOp* row_op,
                            ProbeStats* stats) WARN_UNUSED_RESULT;
 
+  // duplication works at WAL_DUPLICATION mode or REALTIME_DUPLICATION mode.
+  // Generally, duplicator is at REALTIME_DUPLICATION: Every write request
+  // which has applied into kudu engine, will put into the duplication queue,
+  // duplicate pool fetch them from queue, and write them to kafka(destination system).
+  // It's realtime at memory queue, the mode is REALTIME_DUPLICATION.
+  //
+  // When bootstap, the duplicated opid should be found by replaying wal, and from the
+  // point to wal's end, should fetch them from wals. If write requests too many,
+  // REALTIME_DUPLICATION is slow, then REALTIME_DUPLICATION downgrade to WAL_DUPLICATION,
+  // because the queue is limited.
+  enum class DuplicationMode {
+    WAL_DUPLICATION,
+    REALTIME_DUPLICATION
+  };
+
+  static const char* DuplicationMode_Name(const DuplicationMode mode) {
+    switch (mode) {
+      case DuplicationMode::WAL_DUPLICATION:
+        return "WAL_DUPLICATION";
+      case DuplicationMode::REALTIME_DUPLICATION:
+        return "REALTIME_DUPLICATION";
+      default:
+        return "Unknown";
+    }
+  }
+
+  // Duplicate all of the row operations associated with this op.
+  Status DuplicateRowOperations(const std::shared_ptr<WriteOpState>& op_state_ptr,
+                                DuplicationMode mode = DuplicationMode::REALTIME_DUPLICATION);
+
+  // Duplicate a single row operation.
+  Status DuplicateRowOperation(const fs::IOContext* io_context,
+                               const std::shared_ptr<WriteOpState>& op_state_ptr,
+                               ProbeStats* stats,
+                               DuplicationMode mode = DuplicationMode::REALTIME_DUPLICATION);
+
   // Begins the transaction, recording its presence in the tablet metadata.
   // Upon calling this, 'op_id' will be anchored until the metadata is flushed,
   // using 'txn' as the anchor owner.
@@ -534,11 +570,17 @@ class Tablet {
                                              int64_t* replay_size = nullptr,
                                              MonoTime* earliest_dms_time = nullptr) const;
 
+  void ResetStateForTest() {
+    std::lock_guard<simple_spinlock> lock(state_lock_);
+    state_ = kudu::tablet::Tablet::State::kInitialized;
+  }
+
  private:
   friend class kudu::AlterTableTest;
   friend class Iterator;
   friend class TabletReplicaTest;
   friend class TabletReplicaTestBase;
+
   FRIEND_TEST(TestTablet, TestGetReplaySizeForIndex);
   FRIEND_TEST(TestTabletStringKey, TestSplitKeyRange);
   FRIEND_TEST(TestTabletStringKey, TestSplitKeyRangeWithZeroRowSets);

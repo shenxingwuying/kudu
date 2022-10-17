@@ -1503,6 +1503,8 @@ add_subdirectory(src/kudu/codegen)
 add_subdirectory(src/kudu/collector)
 add_subdirectory(src/kudu/common)
 add_subdirectory(src/kudu/consensus)
+# for duplication hot backup and others functions
+add_subdirectory(src/kudu/duplicator)
 add_subdirectory(src/kudu/experiments)
 add_subdirectory(src/kudu/fs)
 # Google util libraries borrowed from supersonic, tcmalloc, Chromium, etc.
