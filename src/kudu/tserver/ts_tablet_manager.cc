@@ -256,14 +256,16 @@ bool ValidateUpdateTabletStatsInterval() {
 
 GROUP_FLAG_VALIDATOR(update_tablet_stats_interval_ms, ValidateUpdateTabletStatsInterval);
 
-TSTabletManager::TSTabletManager(TabletServer* server)
-  : fs_manager_(server->fs_manager()),
-    cmeta_manager_(new ConsensusMetadataManager(fs_manager_)),
-    server_(server),
-    shutdown_latch_(1),
-    metric_registry_(server->metric_registry()),
-    tablet_copy_metrics_(server->metric_entity()),
-    state_(MANAGER_INITIALIZING) {
+TSTabletManager::TSTabletManager(TabletServer* server,
+                                 duplicator::ConnectorManager* connector_manager)
+    : fs_manager_(server->fs_manager()),
+      cmeta_manager_(new ConsensusMetadataManager(fs_manager_)),
+      server_(server),
+      shutdown_latch_(1),
+      metric_registry_(server->metric_registry()),
+      tablet_copy_metrics_(server->metric_entity()),
+      state_(MANAGER_INITIALIZING),
+      connector_manager_(connector_manager) {
   // A heartbeat msg without statistics will be considered to be from an old
   // version, thus it's necessary to trigger updating stats as soon as possible.
   next_update_time_ = MonoTime::Now();
@@ -865,7 +867,7 @@ Status TSTabletManager::CreateAndRegisterTabletReplica(
                         &tsm_factory,
                         [this, tablet_id](const string& reason) {
                           this->MarkTabletDirty(tablet_id, reason);
-                        }));
+                        }, connector_manager_));
   Status s = replica->Init({ server_->mutable_quiescing(),
                              server_->num_raft_leaders(),
                              server_->raft_pool() });

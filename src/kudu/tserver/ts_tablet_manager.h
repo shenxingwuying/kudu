@@ -30,6 +30,7 @@
 
 #include "kudu/common/common.pb.h"
 #include "kudu/consensus/metadata.pb.h"
+#include "kudu/duplicator/connector_manager.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/tablet/metadata.pb.h"
@@ -65,6 +66,10 @@ class OpId;
 class StartTabletCopyRequestPB;
 } // namespace consensus
 
+namespace duplicator {
+class ConnectorManager;
+} // namespace duplicator
+
 namespace master {
 class ReportedTabletPB;
 class TabletReportPB;
@@ -93,7 +98,7 @@ class TransitionInProgressDeleter;
 class TSTabletManager : public tserver::TabletReplicaLookupIf {
  public:
   // Construct the tablet manager.
-  explicit TSTabletManager(TabletServer* server);
+  explicit TSTabletManager(TabletServer* server, duplicator::ConnectorManager* connector_manager);
 
   virtual ~TSTabletManager();
 
@@ -424,6 +429,8 @@ class TSTabletManager : public tserver::TabletReplicaLookupIf {
   // NOTE: it's important that this is the first member to be destructed. This
   // ensures we do not attempt to collect metrics while calling the destructor.
   FunctionGaugeDetacher metric_detacher_;
+
+  duplicator::ConnectorManager* connector_manager_;
 
   DISALLOW_COPY_AND_ASSIGN(TSTabletManager);
 };

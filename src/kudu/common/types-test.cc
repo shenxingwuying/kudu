@@ -127,12 +127,20 @@ namespace {
   void TestAreConsecutive(DataType type, vector<tuple<T, T, bool>> test_cases) {
     const TypeInfo* info = GetTypeInfo(type);
     for (auto test_case : test_cases) {
-      string lower, upper;
+      string lower;
+      string upper;
       info->AppendDebugStringForValue(&get<0>(test_case), &lower);
       info->AppendDebugStringForValue(&get<1>(test_case), &upper);
       SCOPED_TRACE(strings::Substitute("lower: $0, upper: $1, expected: $2",
                                        lower, upper, get<2>(test_case)));
 
+      ASSERT_EQ(get<2>(test_case), info->AreConsecutive(&get<0>(test_case), &get<1>(test_case)));
+
+      info->StringForValue(&get<0>(test_case), &lower);
+      info->StringForValue(&get<1>(test_case), &upper);
+
+      SCOPED_TRACE(strings::Substitute("lower: $0, upper: $1, expected: $2",
+                                       lower, upper, get<2>(test_case)));
       ASSERT_EQ(get<2>(test_case), info->AreConsecutive(&get<0>(test_case), &get<1>(test_case)));
     }
   }

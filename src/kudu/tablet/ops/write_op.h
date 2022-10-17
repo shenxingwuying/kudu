@@ -228,6 +228,10 @@ class WriteOpState : public OpState {
     return row_ops_;
   }
 
+  void TEST_set_row_ops(std::vector<RowOp*> row_ops) {
+    row_ops_ = std::move(row_ops);
+  }
+
   // Return the ProbeStats object collecting statistics for op index 'i'.
   ProbeStats* mutable_op_stats(int i) {
     DCHECK_LT(i, row_ops_.size());

@@ -26,6 +26,7 @@
 #include <glog/logging.h>
 
 #include "kudu/cfile/block_cache.h"
+#include "kudu/duplicator/connector_manager.h"
 #include "kudu/fs/error_manager.h"
 #include "kudu/fs/fs_manager.h"
 #include "kudu/gutil/strings/substitute.h"
@@ -57,9 +58,10 @@ TabletServer::TabletServer(const TabletServerOptions& opts)
       quiescing_(false),
       fail_heartbeats_for_tests_(false),
       opts_(opts),
-      tablet_manager_(new TSTabletManager(this)),
       scanner_manager_(new ScannerManager(metric_entity())),
-      path_handlers_(new TabletServerPathHandlers(this)) {
+      path_handlers_(new TabletServerPathHandlers(this)),
+      connector_manager_(new duplicator::ConnectorManager()) {
+    tablet_manager_.reset(new TSTabletManager(this, connector_manager_.get()));
 }
 
 TabletServer::~TabletServer() {
