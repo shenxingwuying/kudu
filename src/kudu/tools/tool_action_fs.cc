@@ -92,6 +92,7 @@ DECLARE_int32(log_container_sample_count);
 DECLARE_string(columns);
 DECLARE_string(format);
 DECLARE_int32(num_threads);
+DECLARE_uint64(fs_max_thread_count_per_data_dir);
 
 DEFINE_bool(print_rows, true,
             "Print each row in the CFile");
@@ -460,11 +461,12 @@ Status Sample(const RunnerContext& /*context*/) {
   DataTable table({"type", "count", "latency per item (us)", "total latency (sec)"});
 #define ADD_LATENCY(type, sampled_count, latency_per_item_us)                                    \
   do {                                                                                           \
-    int64_t count = (sampled_count);                                                             \
-    double total_sec = count * (latency_per_item_us) / 1e6;                                      \
-    estimate_total_bootstrap_sec += total_sec;                                                   \
-    table.AddRow({type, std::to_string(count),                                                   \
-                  std::to_string(latency_per_item_us), std::to_string(total_sec)});              \
+    auto _us = (latency_per_item_us);                                                            \
+    int64_t _count = (sampled_count);                                                            \
+    double _total_sec = _count * _us / 1e6;                                                      \
+    estimate_total_bootstrap_sec += _total_sec;                                                  \
+    table.AddRow({type, std::to_string(_count),                                                  \
+                  std::to_string(_us), std::to_string(_total_sec)});                             \
   } while (false)
 
   // 1. Time to load LBM containers.
@@ -511,7 +513,8 @@ Status Sample(const RunnerContext& /*context*/) {
   ADD_LATENCY("lbm low live block containers to rewrite",
               report.stats.lbm_low_live_block_container_count / sampled_ratio,
               FLAGS_estimate_latency_ratio_of_rewrite_lbm_metadata_to_load_lbm_container *
-                  estimate_load_lbm_container_latency_us);
+                  estimate_load_lbm_container_latency_us /
+                      std::max(1UL, FLAGS_fs_max_thread_count_per_data_dir));
 
   // 3. Time to load tablet metadata.
   vector<string> tablet_ids;
@@ -519,7 +522,8 @@ Status Sample(const RunnerContext& /*context*/) {
   ADD_LATENCY("tablet metadata to load",
               tablet_ids.size(),
               FLAGS_estimate_latency_ratio_of_load_tablet_metadata_to_load_lbm_container *
-                  estimate_load_lbm_container_latency_us);
+                  // --num_tablets_to_open_simultaneously is set to 8 in SensorsData.
+                  estimate_load_lbm_container_latency_us / 8);
 
   // 4. Time to open tablet.
   // 4.1 Play Log segments
