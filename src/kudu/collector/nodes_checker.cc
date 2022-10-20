@@ -218,7 +218,18 @@ static const size_t kSingleNodeClusterTabletDefaultReplicaNum = 1;
 // 集群版 replication_factor >=3 都是合理的
 static const size_t kMutilNodeClusterTabletDefaultReplicaNum = 3;
 
-static size_t GetDefaultTabletReplicaNum(const uint32_t tserver_num) {
+static size_t GetDefaultTabletReplicaNum(const JsonReader& r,
+                                         const vector<const Value*>& tservers) {
+  uint32_t tserver_num = 0;
+  for (const Value* tserver : tservers) {
+    string uuid;
+    CHECK_OK(r.ExtractString(tserver, "uuid", &uuid));
+    if (uuid == FLAGS_ksyncer_uuid) {
+      continue;
+    }
+    tserver_num++;
+  }
+
   bool is_single_node_cluster = tserver_num == kSingleNodeClusterTserverNodeNum;
   size_t min_tablet_replica_num = is_single_node_cluster ?
       kSingleNodeClusterTabletDefaultReplicaNum : kMutilNodeClusterTabletDefaultReplicaNum;
@@ -310,7 +321,7 @@ Status NodesChecker::ReportNodesMetrics(const string& data) {
       .Help("Kudu table replication factor health status "
             "(0: HEALTHY, 1: UNHEALTHY)")
       .Register(PrometheusReporter::instance()->registry());
-  size_t default_tablet_replica_num = GetDefaultTabletReplicaNum(tservers.size());
+  size_t default_tablet_replica_num = GetDefaultTabletReplicaNum(r, tservers);
   if (s.ok()) {
     for (const Value* table : tables) {
       string name;
