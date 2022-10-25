@@ -29,21 +29,29 @@ _config_kudu_tool = ""
 _tmp_kudu_tool_path = "/home/sa_cluster/kudu"
 _kudu_tool_min_version = "1.14.2"
 _user_sa = "sa_cluster"
+_long_timeout = 14400
 
 
-def run_cmd(cmd):
+## 执行本地命令
+## 简单命令超时时间默认为600s
+## 数据拷贝命令超时时间默认为14400s
+def run_cmd(cmd, timeout=600):
     print('****going to run: "' + cmd + '"')
-    result = shell_utils.run_cmd(cmd, logger.info)
+    result = shell_utils.run_cmd(cmd, logger.info, timeout)
     if result['ret'] != 0:
         print('execute %s error:%s' % (cmd, result))
         sys.exit(1)
     return result
 
 
-def run_ssh_cmd_with_password(cmd, host, ssh_port, user, password):
+## 执行远程命令
+## 简单命令超时时间默认为600s
+## 数据拷贝命令超时时间默认为14400s
+def run_ssh_cmd_with_password(cmd, host, ssh_port, user, password, timeout=600):
     ssh_connector = SSHConnector(host, user, password, ssh_port)
-    result = ssh_connector.run_cmd(cmd)
+    result = ssh_connector.run_cmd(cmd, logger.info, timeout)
     if result['ret'] != 0:
+        print('execute %s error:%s' % (cmd, result))
         sys.exit(1)
     return result
 
@@ -132,9 +140,9 @@ def get_server_config(role, rpc_addr, config):
 
 
 def backup_dirs(host, ssh_port, wal_dir, data_dirs, timestamp, pwd):
-    run_ssh_cmd_with_password("if [ -d %s ]; then sudo mv %s %s.bak.%s; fi" % (wal_dir, wal_dir, wal_dir, timestamp), host, ssh_port, _user_sa, pwd[host])
+    run_ssh_cmd_with_password("if [ -d %s ]; then sudo mv %s %s.bak.%s; fi" % (wal_dir, wal_dir, wal_dir, timestamp), host, ssh_port, _user_sa, pwd[host], _long_timeout)
     for data_dir in data_dirs:
-        run_ssh_cmd_with_password("if [ -d %s ]; then sudo mv %s %s.bak.%s; fi" % (data_dir, data_dir, data_dir, timestamp), host, ssh_port, _user_sa, pwd[host])
+        run_ssh_cmd_with_password("if [ -d %s ]; then sudo mv %s %s.bak.%s; fi" % (data_dir, data_dir, data_dir, timestamp), host, ssh_port, _user_sa, pwd[host], _long_timeout)
 
 
 def chown_dirs(host, ssh_port, wal_dir, data_dirs, owner, pwd):
@@ -187,11 +195,11 @@ def generate_master_data(old_master_leader,
     run_cmd('%s local_replica copy_from_remote %s %s '
             '-fs_wal_dir=%s '
             '-fs_data_dirs=%s'
-            % (_config_kudu_tool, master_meta_uuid, old_master_leader, fs_wal_dir, fs_data_dirs))
+            % (_config_kudu_tool, master_meta_uuid, old_master_leader, fs_wal_dir, fs_data_dirs), _long_timeout)
     run_cmd('%s local_replica cmeta rewrite_raft_config %s %s '
             '-fs_wal_dir=%s '
             '-fs_data_dirs=%s'
-            % (_config_kudu_tool, master_meta_uuid, new_master_peers, fs_wal_dir, fs_data_dirs))
+            % (_config_kudu_tool, master_meta_uuid, new_master_peers, fs_wal_dir, fs_data_dirs), _long_timeout)
 
 
 def die(msg=''):
@@ -226,6 +234,8 @@ def parse_args():
     parser.add_argument('--continue_mode', type=bool, default=False,
                         help="""Whether to continue previous work. If --continue_mode is True,
                         --ignore_dest_cluster_ksck must be True too.""")
+    parser.add_argument('--timeout', type=int, default=14400,
+                        help='timeout for execute local or remote command, default is 4h.')
     args = parser.parse_args()
     print("倒计时3秒，在开始执行前，请确保目标集群和源集群主机的域名互相可识别，参见配置/etc/hosts")
     time.sleep(3)
@@ -264,6 +274,9 @@ def parse_args():
     if args.continue_mode and not args.ignore_dest_cluster_ksck:
         parser.print_usage()
         die('If --continue_mode is True, --ignore_dest_cluster_ksck must be True too')
+    
+    global _long_timeout
+    _long_timeout = args.timeout
     return args
 
 
@@ -311,7 +324,7 @@ def migrate_table(progress, args, progress_file):
 
         cmd = "%s table copy %s %s %s -num_threads=%s -write_type=upsert -create_table=true" % \
             (_config_kudu_tool, args.local_source_cluster, args.table, args.dest_cluster, args.parallel)
-        run_cmd(cmd)
+        run_cmd(cmd, _long_timeout)
         progress = set_progress_stage_1plus(progress, 2)
         with open(progress_file, 'w+') as f:
             yaml.dump(progress, f)
@@ -811,7 +824,7 @@ def copy_from_remote(tablet_ids, from_tserver_hp, fs_data_dirs,
           % (kudu_tool, tablet_ids, from_tserver_hp, fs_data_dirs, fs_wal_dir, parallel)
     cmd = "sudo sh -c '%s'" % cmd
     return run_ssh_cmd_with_password(cmd, to_tserver_host, ssh_port, _user_sa,
-                                       pwd[to_tserver_host])
+                                     pwd[to_tserver_host], _long_timeout)
 
 
 def rewrite_raft_config(tablet_ids, raft_peers, fs_data_dirs, fs_wal_dir,
@@ -820,7 +833,7 @@ def rewrite_raft_config(tablet_ids, raft_peers, fs_data_dirs, fs_wal_dir,
           (kudu_tool, tablet_ids, raft_peers, fs_data_dirs, fs_wal_dir)
     cmd = "sudo sh -c '%s'" % cmd
     return run_ssh_cmd_with_password(cmd, to_tserver_host, ssh_port, _user_sa,
-                                     pwd[to_tserver_host])
+                                     pwd[to_tserver_host], _long_timeout)
 
 
 def gen_uuids(hosts):
