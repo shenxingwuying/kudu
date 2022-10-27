@@ -112,7 +112,7 @@ job debug:
     - cd ../..
     - bash check_test.sh
   tags:
-    - docker
+    - skv-kudu-docker
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
