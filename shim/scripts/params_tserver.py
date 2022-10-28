@@ -37,5 +37,14 @@ tserver_flag_config['fs_wal_dir'] = tserver_fs_wal_dir
 tserver_flag_config['rpc_bind_addresses'] = '0.0.0.0:' + str(params.tserver_service_port)
 tserver_flag_config['webserver_port'] = params.tserver_webserver_port
 
+# Kerberos 相关配置
+if params.enable_kerberos:
+    tserver_flag_config['keytab_file'] = params.keytab_file
+    tserver_flag_config['rpc_authentication'] = 'required'
+    tserver_flag_config['rpc_encryption'] = 'required'
+# ranger 相关配置
+if params.enable_ranger:
+    tserver_flag_config['tserver_enforce_access_control'] = True
+
 # 探活用
 webserver_port = params.tserver_webserver_port

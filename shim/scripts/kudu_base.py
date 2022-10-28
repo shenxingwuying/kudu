@@ -6,8 +6,10 @@ import signal
 import subprocess
 
 from resource_management.libraries.script.script import Script
+from resource_management.libraries.functions import check_process_status
 from resource_management.libraries.functions.show_logs import show_logs
 from resource_management.libraries.functions.check_process_status import wait_process_stopped
+from resource_management.libraries.resources.xml_config import XmlConfig
 from resource_management.core.exceptions import ComponentIsNotRunning
 from resource_management.core.logger import Logger
 from resource_management.core.resources.system import Directory, File, Execute
@@ -39,6 +41,32 @@ class KuduBase(Script):
             except Exception as e:
                 Logger.info('master not started: failed to reach %s: %s' % (url, e))
         if alive_master_num >= (total_master_num + 1) / 2:
+            return True
+        return False
+
+    def check_tserver_started(self):
+        '''
+        通过访问tserver的web接口来确认tserver启动
+        单机环境下tserver必须启动
+        集群环境下至少需要三个tserver节点
+        这样collector才能正常启动(需要创建表)
+        '''
+        import params
+        import params_master
+        config = Script.get_config()
+        kudu_tserver_hosts = config['cluster_node_info']['kudu_tserver']['nodes']
+        total_master_num = len(params_master.kudu_master_hosts)
+        alive_tserver_num = 0
+        for h in kudu_tserver_hosts:
+            url = 'http://%s:%s' % (h, params.tserver_webserver_port)
+            try:
+                r = requests.get(url)
+                r.raise_for_status()
+                alive_tserver_num = alive_tserver_num + 1
+            except Exception as e:
+                Logger.info('tserver not started: failed to reach %s: %s' % (url, e))
+        base_tserver_num = 3 if total_master_num > 1 else 1;
+        if alive_tserver_num >= base_tserver_num:
             return True
         return False
 
@@ -76,8 +104,9 @@ class KuduBase(Script):
 
     def stop(self, env):
         """根据pid文件获取pid 然后发送kill命令"""
+        import params
         pid_file = self._pid_file()
-        self.check_process_status()
+        check_process_status(pid_file, self.get_port())
         pid = int(sudo.read_file(pid_file))
         Logger.info("start kill %s" % pid)
         sudo.kill(pid, signal.SIGTERM)
@@ -103,6 +132,40 @@ class KuduBase(Script):
             env.set_params(params_master)
             dirs = [params_master.master_fs_wal_dir, params_master.master_log_dir, params_master.master_fs_data_dirs.split(',')]
             flag_kv = params_master.master_flag_config
+            """如果开启认证需要配置"""
+            if params.enable_ranger:
+                import params_ranger_kudu_security
+                XmlConfig(
+                    params.ranger_security_file_name,
+                    conf_dir=params.kudu_conf_dir,
+                    configurations=params_ranger_kudu_security.ranger_kudu_security_config,
+                    owner=params.kudu_user,
+                    group=params.kudu_user_group,
+                    mode=0o644)
+                import params_ranger_kudu_audit
+                XmlConfig(
+                    params.ranger_audit_file_name,
+                    conf_dir=params.kudu_conf_dir,
+                    configurations=params_ranger_kudu_audit.ranger_kudu_audit_config,
+                    owner=params.kudu_user,
+                    group=params.kudu_user_group,
+                    mode=0o644)
+                import params_ranger_kudu_policymgr_ssl
+                XmlConfig(
+                    params.ranger_policymgr_file_name,
+                    conf_dir=params.kudu_conf_dir,
+                    configurations=params_ranger_kudu_policymgr_ssl.ranger_kudu_policymgr_config,
+                    owner=params.kudu_user,
+                    group=params.kudu_user_group,
+                    mode=0o644)
+                import params_core_site
+                XmlConfig(
+                    "core-site.xml",
+                    conf_dir=params.kudu_conf_dir,
+                    configurations=params_core_site.core_site_config,
+                    owner=params.kudu_user,
+                    group=params.kudu_user_group,
+                    mode=0o644)
         elif self.role == self.KUDU_TSERVER:
             import params_tserver
             env.set_params(params_tserver)
@@ -147,45 +210,7 @@ class KuduBase(Script):
         return output
 
     def status(self, env):
-        return self.check_process_status()
-
-    def check_process_status(self):
-        if self.check_port_alive("localhost", int(self.get_port())):
-            pid, name = self.get_pid_by_port(int(self.get_port()))
-            module = "kudu-{role}".format(role=self.role)
-            if name == module:
-                # pidfile is not correct, fix pid
-                should_rewrite = False
-                if not os.path.exists(self._pid_file()):
-                    should_rewrite = True
-                else:
-                    durability_pid = int(sudo.read_file(self._pid_file()))
-                    if durability_pid != int(pid):
-                        should_rewrite = True
-                if should_rewrite:
-                    sudo.create_file(self._pid_file(), pid)
-                return
-            else:
-                Logger.info("port is occupied by other process!!!")
-                raise ComponentIsNotRunning()
-        # Maybe process is starting, so we should check again
-        if not os.path.exists(self._pid_file()):
-            Logger.info("no such pid file, kudu-{role}".format(role=self.role))
-            raise ComponentIsNotRunning()
-        durability_pid = sudo.read_file(self._pid_file()).strip()
-        shell_cmd = "ps -A -o pid,cmd | awk '{if(NF>=2)print $1,$2}'"
-        t_result = subprocess.Popen(shell_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        result = t_result.stdout.read().rstrip()
-        is_alive = False
-        for pid_line in result.split('\n'):
-            pid = pid_line.split(' ')[0]
-            name = os.path.basename(pid_line.split(' ')[1])
-            module = "kudu-{role}".format(role=self.role)
-            if durability_pid == pid and name == module:
-                is_alive = True
-                break
-        if not is_alive:
-            raise ComponentIsNotRunning()
+        check_process_status(self._pid_file(), self.get_port())
 
     def get_port(self):
         import params
@@ -200,30 +225,3 @@ class KuduBase(Script):
             Logger.info("Wrong kudu role!!!")
             raise ComponentIsNotRunning()
         return port
-
-    def check_port_alive(self, host="localhost", port=0):
-        import socket
-        is_alive = True
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        result = sock.connect_ex((host, port))
-        if result != 0:
-            Logger.info("process kudu-{name} not running, port: {port}".format(name=self.role, port=int(port)))
-            is_alive = False
-        return is_alive
-
-    def get_pid_by_port(self, port):
-        cmd = "ss -p -o state listening sport eq :{port} | sed 1d | sed " \
-              "'s/.*((//g;s/))//g;s/\"//g;s/pid=//g;s/,fd=.*//g;s/,/ /g'".format(port=port)
-        t_result = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        result = t_result.stdout.read().rstrip()
-        name = result.split(' ')[0]
-        pid = result.split(' ')[1]
-
-        # another implements:
-        # cmd = "sudo netstat -nap | grep :{port} | grep LISTEN | sed 's#.*LISTEN[[:space:]]*##g;s#/# #g'".
-        # format(port=port)
-        # t_result = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        # result = t_result.stdout.read().rstrip()
-        # pid = result.split(' ')[0]
-        # name = result.split(' ')[1]
-        return pid, name

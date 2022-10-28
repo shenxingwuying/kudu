@@ -17,10 +17,13 @@
 
 #include "kudu/collector/collector.h"
 
-#include <ostream>
+#include <cstdio>
+#include <cstdlib>
+
+#include <functional>
+#include <iostream>
 
 #include <gflags/gflags.h>
-#include <gflags/gflags_declare.h>
 #include <glog/logging.h>
 
 #include "kudu/collector/collector_util.h"
@@ -29,12 +32,13 @@
 #include "kudu/collector/prometheus_reporter.h"
 #include "kudu/collector/service_monitor.h"
 #include "kudu/gutil/strings/substitute.h"
-#include "kudu/security/init.h"
 #include "kudu/util/env.h"
+#include "kudu/util/faststring.h"
 #include "kudu/util/flag_validators.h"
 #include "kudu/util/logging.h"
 #include "kudu/util/monotime.h"
 #include "kudu/util/status.h"
+#include "kudu/util/subprocess.h"
 #include "kudu/util/thread.h"
 
 DEFINE_string(collector_cluster_name, "test",
@@ -52,8 +56,14 @@ DEFINE_uint32(collector_timeout_sec, 10,
 DEFINE_uint32(collector_warn_threshold_ms, 1000,
               "If a task takes more than this number of milliseconds, issue a warning with a "
               "trace");
+DEFINE_uint32(collector_do_kinit_interval_sec, 60 * 60,
+              "Number of interval seconds to do kinit operation.");
+
+DECLARE_string(keytab_file);
+DECLARE_string(principal);
 
 using std::string;
+using std::to_string;
 using strings::Substitute;
 
 namespace kudu {
@@ -92,6 +102,27 @@ bool ValidateCollectorFlags() {
 
 GROUP_FLAG_VALIDATOR(collector_flags, ValidateCollectorFlags);
 
+void Collector::RenewThread() {
+  const MonoDelta kWait = MonoDelta::FromSeconds(FLAGS_collector_do_kinit_interval_sec);
+  while (!stop_background_threads_latch_.WaitFor(kWait)) {
+    // try renew first
+    string renew_cmd = Substitute("kinit -R $0", FLAGS_principal);
+    CHECK_OK(Subprocess::Call({renew_cmd}));
+    string renew_result;
+    CHECK_OK(Subprocess::Call({"klist"}, "", &renew_result, nullptr));
+    size_t pos = renew_result.find(FLAGS_principal);
+    if (pos == string::npos) {
+      // if fail then do kinit
+      string kinit_cmd = Substitute("kinit -kt $0 $1", FLAGS_keytab_file, FLAGS_principal);
+      CHECK_OK(Subprocess::Call({kinit_cmd}));
+    }
+
+    string stdout;
+    CHECK_OK(Subprocess::Call({"klist"}, "", &stdout, nullptr));
+    LOG(INFO) << "After RenewThread renew, principals : " << stdout;
+  }
+}
+
 Collector::Collector()
   : initialized_(false),
     stop_background_threads_latch_(1) {
@@ -101,8 +132,21 @@ Collector::~Collector() {
   Shutdown();
 }
 
+static const char *kCollectorKrb5CCNamePrefix = "/tmp/krb5cc_kudu_collector";
+
 Status Collector::Init() {
   CHECK(!initialized_);
+
+  if (!FLAGS_keytab_file.empty()) {
+    string kKrb5CCName = kCollectorKrb5CCNamePrefix + to_string(rand() % 9000 + 1000);
+    setenv("KRB5CCNAME", kKrb5CCName.c_str(), 1);
+    string kinit_cmd = Substitute("kinit -kt $0 $1", FLAGS_keytab_file, FLAGS_principal);
+    RETURN_NOT_OK(Subprocess::Call({kinit_cmd}));
+    string stdout;
+    RETURN_NOT_OK(Subprocess::Call({"klist"}, "", &stdout, nullptr));
+    LOG(INFO) << "Collector kinit cmd :" << kinit_cmd
+              << ", after kinit, principals : " << stdout;
+  }
 
   nodes_checker_.reset(new NodesChecker());
   CHECK_OK(nodes_checker_->Init());
@@ -112,6 +156,13 @@ Status Collector::Init() {
   if (!RunOnceMode()) {
     service_monitor_.reset(new ServiceMonitor());
     CHECK_OK(service_monitor_->Init());
+  }
+
+  if (!FLAGS_keytab_file.empty()) {
+    // Start the renew thread.
+    RETURN_NOT_OK(Thread::Create("collector", "renew-thread",
+                                 [this]() { this->RenewThread(); },
+                                 &renew_thread_));
   }
 
   initialized_ = true;
@@ -150,6 +201,9 @@ void Collector::Shutdown() {
     stop_background_threads_latch_.CountDown();
     if (excess_log_deleter_thread_) {
       excess_log_deleter_thread_->Join();
+    }
+    if (renew_thread_) {
+      renew_thread_->Join();
     }
 
     LOG(INFO) << name << " shutdown complete.";

@@ -44,5 +44,16 @@ master_flag_config['fs_wal_dir'] = master_fs_wal_dir
 master_flag_config['rpc_bind_addresses'] = '0.0.0.0:' + str(params.master_service_port)
 master_flag_config['webserver_port'] = params.master_webserver_port
 
+# ranger 相关配置
+if params.enable_ranger:
+    master_flag_config['ranger_config_path'] = params.kudu_conf_dir
+    master_flag_config['ranger_java_path'] = params.java_exec
+    master_flag_config['ranger_jar_path'] = os.path.join(params.tool_home, 'kudu-subprocess.jar')
+# Kerberos 相关配置
+if params.enable_kerberos:
+    master_flag_config['keytab_file'] = params.keytab_file
+    master_flag_config['rpc_authentication'] = 'required'
+    master_flag_config['rpc_encryption'] = 'required'
+
 # 探活用
 webserver_port = params.master_service_port

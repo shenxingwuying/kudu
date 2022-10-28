@@ -32,5 +32,13 @@ collector_log_dir = os.path.join(params.log_dir, "collector")
 collector_flag_config['log_dir'] = collector_log_dir
 collector_flag_config['collector_prometheus_exposer_port'] = params.collector_webserver_port
 
+# Kerberos 相关配置
+if params.enable_kerberos:
+    collector_flag_config['keytab_file'] = params.keytab_file
+    collector_flag_config['principal'] = params.principal_info['kudu_tool'][0]
+    collector_flag_config['unlock_experimental_flags'] = 'true'
+    collector_flag_config['rpc_authentication'] = 'required'
+    collector_flag_config['rpc_encryption'] = 'required'
+
 # 探活用
 webserver_port = params.collector_webserver_port

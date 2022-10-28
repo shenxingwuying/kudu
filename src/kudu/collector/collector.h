@@ -19,8 +19,6 @@
 
 #include <string>
 
-#include <gtest/gtest_prod.h>
-
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/util/countdown_latch.h"
@@ -53,6 +51,7 @@ class Collector {
   // Start thread to remove excess glog files.
   Status StartExcessLogFileDeleterThread();
   void ExcessLogFileDeleterThread();
+  void RenewThread();
 
   bool initialized_;
 
@@ -62,6 +61,7 @@ class Collector {
 
   CountDownLatch stop_background_threads_latch_;
   scoped_refptr<Thread> excess_log_deleter_thread_;
+  scoped_refptr<Thread> renew_thread_;
 
   DISALLOW_COPY_AND_ASSIGN(Collector);
 };

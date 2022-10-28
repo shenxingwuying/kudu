@@ -93,6 +93,11 @@ spec:
             tag: ''
             desc: 'The list of usernames to allow as super users, comma-separated.'
             type: str
+          trusted_user_acl:
+            default_value: 'impala,kudu,sa_cluster,root,sdf'
+            tag: ''
+            desc: 'Comma-separated list of trusted users who may access the cluster without being authorized against fine-grained permissions.'
+            type: str
           trusted_subnets:
             default_value: '0.0.0.0/0'
             tag: ''
@@ -354,4 +359,38 @@ spec:
             default_value: ''
             tag: ''
             desc: 'A Unix command whose output returns the password to decrypt the private key of the webserver certificate pointed to by the --webserver_private_key_file flag.'
+            type: str
+        ranger_kudu_security:
+          ranger.plugin.kudu.policy.source.impl:
+            default_value: 'org.apache.ranger.admin.client.RangerAdminRESTClient'
+            tag: ''
+            desc: 'Ranger client implementation to retrieve policies from the Ranger service.'
+            type: str
+          ranger.plugin.kudu.policy.pollIntervalMs:
+            default_value: '30000'
+            tag: ''
+            desc: 'Ranger client policy polling interval.'
+            type: int
+        ranger_kudu_audit:
+          placeholder:
+            default_value: ''
+            tag: ''
+            desc: 'Only for placeholder.'
+            type: str
+        ranger_kudu_policymgr:
+          placeholder:
+            default_value: ''
+            tag: ''
+            desc: 'Only for placeholder.'
+            type: str
+        core-site:
+          hadoop.security.authentication:
+            default_value: 'kerberos'
+            tag: ''
+            desc: 'Security authentication.'
+            type: str
+          hadoop.security.group.mapping:
+            default_value: 'org.apache.hadoop.security.ShellBasedUnixGroupsMapping'
+            tag: ''
+            desc: 'Mapping for security group.'
             type: str

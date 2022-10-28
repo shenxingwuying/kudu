@@ -67,6 +67,11 @@ strip --remove-section=.strtab $INSTALL_DIR/sbin/kudu-collector
 strip --remove-section=.symtab $INSTALL_DIR/lib64/libkudu_client.so.0.1.0
 strip --remove-section=.strtab $INSTALL_DIR/lib64/libkudu_client.so.0.1.0
 
+cd ${CODE_ROOT}/java
+./gradlew :kudu-subprocess:jar
+cp ${CODE_ROOT}/java/kudu-subprocess/build/libs/kudu-subprocess-*-SA.jar $INSTALL_DIR/bin/
+mv $INSTALL_DIR/bin/kudu-subprocess-*-SA.jar  $INSTALL_DIR/bin/kudu-subprocess.jar
+
 cat << EOF > $INSTALL_DIR/files.yml
 files: ['kudu/bin', 'kudu/include', 'kudu/lib64', 'kudu/sbin', 'kudu/share', 'kudu/lib']
 EOF
