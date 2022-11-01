@@ -52,6 +52,10 @@
 #include "kudu/util/test_macros.h"
 #include "kudu/util/test_util.h"
 
+using std::shared_ptr;
+using std::string;
+using std::unique_ptr;
+using std::vector;
 using strings::Substitute;
 
 namespace kudu {
@@ -72,18 +76,19 @@ class KafkaConnectorTest : public KuduTest {
   KafkaConnectorTest()
       : schema_(GetSimpleSchema()),
         client_schema_(schema_.CopyWithoutColumnIds()),
-        arena_(256 * 1024), kafka_(kOffsetPort) {
+        arena_(256 * 1024),
+        kafka_(kOffsetPort) {
     connector_manager_.reset(new ConnectorManager());
-    ConnectorOptions options;
-    options.name = kTopicName;
-    options.type = consensus::DownstreamType::KAFKA;
-    options.uri = kBrokers;
-    connector_ = connector_manager_->GetOrNewConnector(options);
   }
 
   void SetUp() override {
     kafka_.DestroyKafka();
     kafka_.InitKafka();
+    ConnectorOptions options;
+    options.name = kTopicName;
+    options.type = consensus::DownstreamType::KAFKA;
+    options.uri = kBrokers;
+    connector_ = connector_manager_->GetOrNewConnector(options);
     InitConsumer();
   }
 
@@ -127,8 +132,8 @@ class KafkaConnectorTest : public KuduTest {
     return builder.Build();
   }
 
-  Status GenDecodedRowOperation(std::vector<kudu::RowOperationsPB>* pb_list,
-                                std::vector<DecodedRowOperation>* ops) {
+  Status GenDecodedRowOperation(vector<kudu::RowOperationsPB>* pb_list,
+                                vector<DecodedRowOperation>* ops) {
     int8_t int8_expected = 0xF0;
     int16_t int16_expected = 0xFFF0;
     int32_t int32_expected = 0xFFFFF0;
@@ -178,9 +183,8 @@ class KafkaConnectorTest : public KuduTest {
 
  private:
   void InitConsumer() {
-    cppkafka::Configuration configuration = {{"metadata.broker.list", kBrokers},
-                                             {"group.id", "default"},
-                                             {"enable.auto.commit", false}};
+    cppkafka::Configuration configuration = {
+        {"metadata.broker.list", kBrokers}, {"group.id", "default"}, {"enable.auto.commit", false}};
 
     consumer_ = std::make_shared<cppkafka::Consumer>(configuration);
 
@@ -194,20 +198,18 @@ class KafkaConnectorTest : public KuduTest {
       LOG(INFO) << "Got revoked: " << partitions;
     });
 
-    consumer_->subscribe({ kTopicName });
+    consumer_->subscribe({kTopicName});
   }
 
-  void DestroyConsumer() {
-    consumer_->unsubscribe();
-  }
+  void DestroyConsumer() { consumer_->unsubscribe(); }
 
  public:
   Schema schema_;
   Schema client_schema_;
   Arena arena_;
-  std::unique_ptr<duplicator::ConnectorManager> connector_manager_;
+  unique_ptr<duplicator::ConnectorManager> connector_manager_;
   Connector* connector_;
-  std::shared_ptr<cppkafka::Consumer> consumer_;
+  shared_ptr<cppkafka::Consumer> consumer_;
 
   duplication::kafka::SingleBrokerKafka kafka_;
 };
@@ -215,8 +217,8 @@ class KafkaConnectorTest : public KuduTest {
 using kudu::kafka::RawKuduRecord;
 
 TEST_F(KafkaConnectorTest, ParseRow) {
-  std::vector<DecodedRowOperation> ops;
-  std::vector<kudu::RowOperationsPB> pb_list;
+  vector<DecodedRowOperation> ops;
+  vector<kudu::RowOperationsPB> pb_list;
   GenDecodedRowOperation(&pb_list, &ops);
   ASSERT_EQ(7, ops.size());
 
@@ -243,27 +245,27 @@ TEST_F(KafkaConnectorTest, KafkaProducerWritebatchTest) {
   options.uri = kBrokers;
   connector_->Init(options);
 
-  std::vector<DecodedRowOperation> ops;
-  std::vector<kudu::RowOperationsPB> pb_list;
+  vector<DecodedRowOperation> ops;
+  vector<kudu::RowOperationsPB> pb_list;
   GenDecodedRowOperation(&pb_list, &ops);
-  std::vector<tablet::RowOp*> row_ops;
+  vector<tablet::RowOp*> row_ops;
   row_ops.reserve(ops.size());
   for (auto& op : ops) {
     google::protobuf::Arena pb_arena;
     row_ops.emplace_back(arena_.NewObject<tablet::RowOp>(&pb_arena, std::move(op)));
   }
 
-  std::shared_ptr<Schema> schema_ptr(new Schema(schema_));
-  std::string table_name("bailing");
+  shared_ptr<Schema> schema_ptr(new Schema(schema_));
+  string table_name("bailing");
 
-  std::vector<std::unique_ptr<duplicator::DuplicateMsg>> messages;
+  vector<unique_ptr<duplicator::DuplicateMsg>> messages;
   tserver::WriteRequestPB fake_request;
-  std::shared_ptr<tablet::WriteOpState> empty_ptr =
+  shared_ptr<tablet::WriteOpState> empty_ptr =
       std::make_shared<tablet::WriteOpState>(nullptr, &fake_request, nullptr);
   empty_ptr->TEST_set_row_ops(row_ops);
 
-  std::unique_ptr<duplicator::DuplicateMsg> dup_msg =
-      std::make_unique<duplicator::DuplicateMsg>(empty_ptr, schema_ptr, table_name);
+  unique_ptr<duplicator::DuplicateMsg> dup_msg =
+      std::make_unique<duplicator::DuplicateMsg>(empty_ptr.get(), table_name);
   messages.emplace_back(std::move(dup_msg));
 
   LOG(INFO) << "kafka connector running, write to kafka";
@@ -272,9 +274,7 @@ TEST_F(KafkaConnectorTest, KafkaProducerWritebatchTest) {
   ASSERT_OK(connector_->WriteBatch(kTopicName, messages));
 
   LOG(INFO) << "kafka connector running, write to kafka, async WriteBatch";
-  std::thread t([this, &messages]() {
-    ASSERT_OK(connector_->WriteBatch(kTopicName, messages));
-  });
+  std::thread t([this, &messages]() { ASSERT_OK(connector_->WriteBatch(kTopicName, messages)); });
   t.join();
 }
 
@@ -286,27 +286,27 @@ TEST_F(KafkaConnectorTest, KafkaProducerDown) {
   options.uri = kBrokers;
   connector_->Init(options);
 
-  std::vector<DecodedRowOperation> ops;
-  std::vector<kudu::RowOperationsPB> pb_list;
+  vector<DecodedRowOperation> ops;
+  vector<kudu::RowOperationsPB> pb_list;
   GenDecodedRowOperation(&pb_list, &ops);
-  std::vector<tablet::RowOp*> row_ops;
+  vector<tablet::RowOp*> row_ops;
   row_ops.reserve(ops.size());
   for (auto& op : ops) {
     google::protobuf::Arena pb_arena;
     row_ops.emplace_back(arena_.NewObject<tablet::RowOp>(&pb_arena, std::move(op)));
   }
 
-  std::shared_ptr<Schema> schema_ptr(new Schema(schema_));
-  std::string table_name("bailing");
+  shared_ptr<Schema> schema_ptr(new Schema(schema_));
+  string table_name("bailing");
 
-  std::vector<std::unique_ptr<duplicator::DuplicateMsg>> messages;
+  vector<unique_ptr<duplicator::DuplicateMsg>> messages;
   tserver::WriteRequestPB fake_request;
-  std::shared_ptr<tablet::WriteOpState> empty_ptr =
+  shared_ptr<tablet::WriteOpState> empty_ptr =
       std::make_shared<tablet::WriteOpState>(nullptr, &fake_request, nullptr);
   empty_ptr->TEST_set_row_ops(row_ops);
 
-  std::unique_ptr<duplicator::DuplicateMsg> dup_msg =
-      std::make_unique<duplicator::DuplicateMsg>(empty_ptr, schema_ptr, table_name);
+  unique_ptr<duplicator::DuplicateMsg> dup_msg =
+      std::make_unique<duplicator::DuplicateMsg>(empty_ptr.get(), table_name);
   messages.emplace_back(std::move(dup_msg));
 
   LOG(INFO) << "kafka connector running, write to kafka";
@@ -315,9 +315,7 @@ TEST_F(KafkaConnectorTest, KafkaProducerDown) {
   ASSERT_OK(connector_->WriteBatch(kTopicName, messages));
 
   LOG(INFO) << "kafka connector running, write to kafka, async WriteBatch";
-  std::thread t([this, &messages]() {
-    ASSERT_OK(connector_->WriteBatch(kTopicName, messages));
-  });
+  std::thread t([this, &messages]() { ASSERT_OK(connector_->WriteBatch(kTopicName, messages)); });
   t.join();
 }
 

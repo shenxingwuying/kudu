@@ -24,10 +24,11 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include <gflags/gflags_declare.h>
+#include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include "kudu/common/common.pb.h"
+#include "kudu/consensus/metadata.pb.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/port.h"
@@ -125,6 +126,16 @@ int CountVoters(const RaftConfigPB& config) {
   return voters;
 }
 
+int CountMembers(const RaftConfigPB& config, RaftPeerPB::MemberType type) {
+  int count = 0;
+  for (const RaftPeerPB& peer : config.peers()) {
+    if (peer.member_type() == type) {
+      count++;
+    }
+  }
+  return count;
+}
+
 int MajoritySize(int num_voters) {
   DCHECK_GE(num_voters, 1);
   return (num_voters / 2) + 1;
@@ -199,7 +210,9 @@ Status VerifyRaftConfig(const RaftConfigPB& config) {
   }
 
   for (const RaftPeerPB& peer : config.peers()) {
-    if (!peer.has_permanent_uuid() || peer.permanent_uuid().empty()) {
+    bool is_duplicator = IsDuplicator(peer);
+    if ((!peer.has_permanent_uuid() || peer.permanent_uuid().empty()) &&
+       !is_duplicator) {
       return Status::IllegalState(Substitute("One peer didn't have an uuid or had the empty"
           " string. RaftConfig: $0", SecureShortDebugString(config)));
     }
@@ -210,7 +223,7 @@ Status VerifyRaftConfig(const RaftConfigPB& config) {
     }
     uuids.insert(peer.permanent_uuid());
 
-    if (config.peers_size() > 1 && !peer.has_last_known_addr()) {
+    if (config.peers_size() > 1 && !peer.has_last_known_addr() && !is_duplicator) {
       return Status::IllegalState(
           Substitute("Peer: $0 has no address. RaftConfig: $1",
                      peer.permanent_uuid(), SecureShortDebugString(config)));
@@ -492,6 +505,9 @@ bool ShouldAddReplica(const RaftConfigPB& config,
           }
         }
         break;
+      case RaftPeerPB::DUPLICATOR:
+        // @TODO do something
+        break;
       default:
         LOG(DFATAL) << peer.member_type() << ": unsupported member type";
         break;
@@ -513,6 +529,24 @@ bool ShouldAddReplica(const RaftConfigPB& config,
           << "under-replicated; should" << (should_add_replica ? " " : " not ")
           << "add a non-voter replica";
   return should_add_replica;
+}
+
+// @TODO(duyuqi), duplicator failover
+bool ShouldAddDuplicator(const RaftConfigPB& config,
+                         int duplication_factor) {
+  int num_duplicators_total = 0;
+
+  for (const RaftPeerPB& peer : config.peers()) {
+    switch (peer.member_type()) {
+      case RaftPeerPB::DUPLICATOR:
+        ++num_duplicators_total;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return (num_duplicators_total < duplication_factor);
 }
 
 // Whether there is an excess replica to evict.
@@ -596,6 +630,9 @@ bool ShouldEvictReplica(const RaftConfigPB& config,
   // the appropriate default values of those fields.
   VLOG(2) << "config to evaluate: " << SecureDebugString(config);
   for (const RaftPeerPB& peer : config.peers()) {
+    if (IsDuplicator(peer)) {
+      continue;
+    }
     DCHECK(peer.has_permanent_uuid() && !peer.permanent_uuid().empty());
     const string& peer_uuid = peer.permanent_uuid();
     const auto overall_health = peer.health_report().overall_health();
@@ -844,6 +881,10 @@ bool ShouldEvictReplica(const RaftConfigPB& config,
           << (should_evict ? to_evict : "");
 
   return should_evict;
+}
+
+bool IsDuplicator(const RaftPeerPB& peer) {
+  return peer.has_member_type() && peer.member_type() == RaftPeerPB::DUPLICATOR;
 }
 
 }  // namespace consensus

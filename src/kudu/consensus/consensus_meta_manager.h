@@ -17,12 +17,18 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
+#include <ostream>
 #include <string>
 #include <unordered_map>
+#include <vector>
+
+#include <glog/logging.h>
 
 #include "kudu/consensus/consensus_meta.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
+#include "kudu/util/blocking_queue.h"
 #include "kudu/util/mutex.h"
 
 namespace kudu {
@@ -48,6 +54,8 @@ class RaftConfigPB;
 class ConsensusMetadataManager : public RefCountedThreadSafe<ConsensusMetadataManager> {
  public:
   explicit ConsensusMetadataManager(FsManager* fs_manager);
+
+  ~ConsensusMetadataManager();
 
   // Create a ConsensusMetadata instance keyed by 'tablet_id'.
   // Returns an error if a ConsensusMetadata instance with that key already exists.
@@ -81,6 +89,20 @@ class ConsensusMetadataManager : public RefCountedThreadSafe<ConsensusMetadataMa
   // for some reason, perhaps due to a permissions or I/O-related issue.
   Status Delete(const std::string& tablet_id);
 
+  void AppendNewLeaders(const std::string& tablet_id) {
+    new_leader_queue_.Put(tablet_id);
+  }
+
+  std::vector<std::string> DrainToNewLeaders() {
+    std::vector<std::string> leader_tablet_ids;
+    new_leader_queue_.BlockingDrainTo(&leader_tablet_ids);
+    return leader_tablet_ids;
+  }
+
+  void ShutdownNewLeaderQueue() {
+    new_leader_queue_.Shutdown();
+  }
+
  private:
   friend class RefCountedThreadSafe<ConsensusMetadataManager>;
 
@@ -91,6 +113,10 @@ class ConsensusMetadataManager : public RefCountedThreadSafe<ConsensusMetadataMa
 
   // Cache for ConsensusMetadata objects (tablet_id => cmeta).
   std::unordered_map<std::string, scoped_refptr<ConsensusMetadata>> cmeta_cache_;
+
+  // This queue reserves the voters' tablet uuid which becomes leader just now,
+  // and the tablets would start its duplicator, if needed.
+  BlockingQueue<std::string> new_leader_queue_;
 
   DISALLOW_COPY_AND_ASSIGN(ConsensusMetadataManager);
 };

@@ -72,7 +72,12 @@ class ConnectorManager {
 
   static Connector* NewConnector(const ConnectorOptions& options) {
     if (options.type == consensus::DownstreamType::KAFKA) {
-      return new kafka::KafkaConnector(options);
+      Connector* connector = new kafka::KafkaConnector(options);
+      if (!connector->Init(options).ok()) {
+        delete connector;
+        return nullptr;
+      }
+      return connector;
     }
     LOG(FATAL) << strings::Substitute("type: $0 is not kafka, support only kafka now.",
                                       consensus::DownstreamType_Name(options.type));

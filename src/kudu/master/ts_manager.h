@@ -31,6 +31,7 @@
 #include "kudu/util/metrics.h"
 #include "kudu/util/rw_mutex.h"
 #include "kudu/util/status.h"
+#include "kudu/util/threadpool.h"
 
 namespace kudu {
 

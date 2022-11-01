@@ -21,8 +21,11 @@
 #include <atomic>
 #include <cstdint>
 #include <ctime>
+#include <map>
+#include <memory>
 #include <new>
 #include <ostream>
+#include <utility>
 #include <vector>
 
 #include <boost/container/small_vector.hpp>
@@ -38,7 +41,11 @@
 #include "kudu/common/timestamp.h"
 #include "kudu/common/wire_protocol.h"
 #include "kudu/common/wire_protocol.pb.h"
+#include "kudu/consensus/consensus.pb.h"
+#include "kudu/consensus/consensus_meta.h"
+#include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid.pb.h"
+#include "kudu/consensus/opid_util.h"
 #include "kudu/consensus/raft_consensus.h"
 #include "kudu/gutil/dynamic_annotations.h"
 #include "kudu/gutil/map-util.h"
@@ -48,7 +55,9 @@
 #include "kudu/rpc/rpc_header.pb.h"
 #include "kudu/tablet/lock_manager.h"
 #include "kudu/tablet/mvcc.h"
+#include "kudu/tablet/ops/duplication_op.h"
 #include "kudu/tablet/row_op.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_metrics.h"
@@ -59,6 +68,7 @@
 #include "kudu/util/flag_tags.h"
 #include "kudu/util/memory/arena.h"
 #include "kudu/util/metrics.h"
+#include "kudu/util/monotime.h"
 #include "kudu/util/pb_util.h"
 #include "kudu/util/rw_semaphore.h"
 #include "kudu/util/slice.h"
@@ -86,6 +96,18 @@ using consensus::WRITE_OP;
 using tserver::TabletServerErrorPB;
 using tserver::WriteRequestPB;
 using tserver::WriteResponsePB;
+
+class DuplicationOpCompletionCallback : public OpCompletionCallback {
+ public:
+  explicit DuplicationOpCompletionCallback(TabletReplica* replica) : replica_(replica) {}
+
+  void OpCompleted() override {
+    replica_->set_duplicator_last_committed_opid(replica_->last_confirmed_opid());
+  }
+
+ private:
+  TabletReplica* replica_;
+};
 
 string WritePrivilegeToString(const WritePrivilegeType& type) {
   switch (type) {
@@ -140,8 +162,7 @@ Status WriteAuthorizationContext::CheckPrivileges() const {
 }
 
 WriteOp::WriteOp(unique_ptr<WriteOpState> state, DriverType type)
-  : Op(type, Op::WRITE_OP),
-  state_(std::move(state)) {
+    : Op(type, Op::WRITE_OP), state_(std::move(state)) {
   start_time_ = MonoTime::Now();
 }
 
@@ -193,8 +214,7 @@ Status WriteOp::Prepare() {
   if (state_->request()->has_txn_id()) {
     for (const auto& op : state_->row_ops()) {
       const auto& op_type = op->decoded_op.type;
-      if (op_type != RowOperationsPB::INSERT &&
-          op_type != RowOperationsPB::INSERT_IGNORE) {
+      if (op_type != RowOperationsPB::INSERT && op_type != RowOperationsPB::INSERT_IGNORE) {
         state()->completion_callback()->set_error(s, TabletServerErrorPB::INVALID_MUTATION);
         return Status::NotSupported("transactions may only insert");
       }
@@ -211,16 +231,13 @@ Status WriteOp::Prepare() {
     }
   }
 
-  // Now acquire row locks and prepare everything for apply
   RETURN_NOT_OK(tablet->AcquireRowLocks(state()));
 
   TRACE("PREPARE: Finished.");
   return Status::OK();
 }
 
-void WriteOp::AbortPrepare() {
-  state()->ReleaseMvccTxn(OpResult::ABORTED);
-}
+void WriteOp::AbortPrepare() { state()->ReleaseMvccTxn(OpResult::ABORTED); }
 
 Status WriteOp::Start() {
   TRACE_EVENT0("op", "WriteOp::Start");
@@ -264,7 +281,7 @@ Status WriteOp::Apply(CommitMsg** commit_msg) {
 
   Tablet* tablet = state()->tablet_replica()->tablet();
   RETURN_NOT_OK(tablet->ApplyRowOperations(state()));
-  TRACE("APPLY: Finished.");
+  TRACE("APPLY: Finished");
 
   UpdatePerRowErrors();
 
@@ -272,6 +289,51 @@ Status WriteOp::Apply(CommitMsg** commit_msg) {
   *commit_msg = google::protobuf::Arena::CreateMessage<CommitMsg>(state_->pb_arena());
   state()->ReleaseTxResultPB((*commit_msg)->mutable_result());
   (*commit_msg)->set_op_type(consensus::OperationType::WRITE_OP);
+
+  {
+    if (state()->tablet_replica()->shared_consensus()->ShouldDuplication()) {
+      // Use raft to replicate prepare log for duplicate_request
+      // and then commit the message.
+      const auto& dup_info = *state()->tablet_replica()->consensus()->duplication_info_pb();
+
+      // Step 1. duplicate to the remote destination storage system.
+      Status status = Duplicate();
+      // WARN_NOT_OK(Duplicate(), Substitute("Duplicate not ok, $0", status.ToString()));
+      if (!status.ok()) {
+        LOG(WARNING) << Substitute("Duplicate not ok, $0", status.ToString());
+        // This status, return the Apply() status, ignore the duplication op status.
+        return Status::OK();
+      }
+
+      // Step 2. Commit a specail log for duplicate Msg.
+      TabletReplica* tablet_replica = state()->tablet_replica();
+      consensus::OpId last_confirmed_opid = tablet_replica->last_confirmed_opid();
+      consensus::OpId last_committed_opid = tablet_replica->duplicator_last_committed_opid();
+
+      if (!consensus::OpIdBiggerThan(last_confirmed_opid, last_committed_opid)) {
+        return Status::OK();
+      }
+
+      consensus::DuplicateRequestPB request;
+      consensus::DuplicateResponsePB response;
+      request.mutable_op_id()->CopyFrom(last_confirmed_opid);
+      auto op_state = std::make_unique<DuplicationOpState>(
+          tablet_replica, std::move(request), std::move(response));
+      op_state->set_completion_callback(
+          unique_ptr<OpCompletionCallback>(new DuplicationOpCompletionCallback(tablet_replica)));
+      // Submit the write operation. The RPC will be responded asynchronously.
+      tablet_replica->SubmitDuplicationOp(
+          std::move(op_state), std::move(last_confirmed_opid), dup_info);
+    }
+  }
+  return Status::OK();
+}
+
+Status WriteOp::Duplicate() {
+  TRACE("Duplicate: Starting");
+  RETURN_NOT_OK(state_->tablet_replica()->Duplicate(
+      state_.get(), Tablet::DuplicationMode::REALTIME_DUPLICATION));
+  TRACE("Duplicate: Finished");
 
   return Status::OK();
 }
@@ -306,8 +368,7 @@ void WriteOp::Finish(OpResult result) {
       if (state()->external_consistency_mode() == COMMIT_WAIT) {
         metrics->commit_wait_duration->Increment(state_->metrics().commit_wait_duration_usec);
       }
-      uint64_t op_duration_usec =
-          (MonoTime::Now() - start_time_).ToMicroseconds();
+      uint64_t op_duration_usec = (MonoTime::Now() - start_time_).ToMicroseconds();
       switch (state()->external_consistency_mode()) {
         case CLIENT_PROPAGATED:
           metrics->write_op_duration_client_propagated_consistency->Increment(op_duration_usec);
@@ -329,7 +390,9 @@ string WriteOp::ToString() const {
   string abs_time_formatted;
   StringAppendStrftime(&abs_time_formatted, "%Y-%m-%d %H:%M:%S", (time_t)abs_time, true);
   return Substitute("WriteOp [type=$0, start_time=$1, state=$2]",
-                    DriverType_Name(type()), abs_time_formatted, state_->ToString());
+                    DriverType_Name(type()),
+                    abs_time_formatted,
+                    state_->ToString());
 }
 
 WriteOpState::WriteOpState(TabletReplica* tablet_replica,

@@ -108,7 +108,12 @@ class LocalTabletWriter {
       encoder.Add(op.type, *op.row);
     }
 
-    op_state_.reset(new WriteOpState(NULL, &req_, NULL));
+    consensus::RaftPeerPB local_peer_pb;
+    local_peer_pb.set_member_type(consensus::RaftPeerPB::VOTER);
+    // @TODO(duyuqi) duplication
+    // why change to a non-null tablet_replica_ptr?
+    scoped_refptr<TabletReplica> tablet_replica_ptr = new TabletReplica(local_peer_pb);
+    op_state_.reset(new WriteOpState(tablet_replica_ptr.get(), &req_, nullptr));
 
     RETURN_NOT_OK(tablet_->DecodeWriteOperations(client_schema_, op_state_.get()));
     RETURN_NOT_OK(tablet_->AcquireRowLocks(op_state_.get()));
