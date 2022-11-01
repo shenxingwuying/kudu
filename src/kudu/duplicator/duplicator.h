@@ -58,8 +58,7 @@ class Duplicator {
 
   bool is_started() const { return !stopped_; }
 
-  Status Duplicate(const std::shared_ptr<tablet::WriteOpState>& write_op_state,
-                   const SchemaPtr& schema,
+  Status Duplicate(tablet::WriteOpState* write_op_state,
                    tablet::Tablet::DuplicationMode expect_mode);
   void Apply();
 

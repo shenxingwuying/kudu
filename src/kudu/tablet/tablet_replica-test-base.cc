@@ -26,6 +26,7 @@
 #include <gtest/gtest.h>
 
 #include "kudu/common/common.pb.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.h"
 #include "kudu/consensus/consensus_meta.h"
 #include "kudu/consensus/consensus_meta_manager.h"
@@ -92,13 +93,14 @@ Status TabletReplicaTestBase::ExecuteWrite(TabletReplica* replica, const WriteRe
 
   RETURN_NOT_OK(replica->SubmitWrite(std::move(op_state)));
   rpc_latch.Wait();
+  Status status = Status::OK();
   if (resp.has_error()) {
-    return StatusFromPB(resp.error().status());
+    status = StatusFromPB(resp.error().status());
   }
   if (resp.per_row_errors_size() > 0) {
-    return StatusFromPB(resp.per_row_errors(0).error());
+    status = StatusFromPB(resp.per_row_errors(0).error());
   }
-  return Status::OK();
+  return status;
 }
 
 void TabletReplicaTestBase::SetUp() {
@@ -207,10 +209,10 @@ Status TabletReplicaTestBase::RestartReplica(bool reset_tablet) {
   RETURN_NOT_OK(BootstrapTablet(tablet_replica_->tablet_metadata(),
                                 cmeta->CommittedConfig(),
                                 clock(),
-                                /*mem_tracker*/nullptr,
-                                /*result_tracker*/nullptr,
+                                /*mem_tracker*/ nullptr,
+                                /*result_tracker*/ nullptr,
                                 &metric_registry_,
-                                /*file_cache*/nullptr,
+                                /*file_cache*/ nullptr,
                                 tablet_replica_,
                                 tablet_replica_->log_anchor_registry(),
                                 &tablet,
@@ -224,6 +226,7 @@ Status TabletReplicaTestBase::RestartReplica(bool reset_tablet) {
                                        log,
                                        prepare_pool_.get(),
                                        dns_resolver_.get()));
+  harness()->TEST_SetTablet(tablet);
   // Wait for the replica to be usable.
   return tablet_replica_->consensus()->WaitUntilLeader(kLeadershipTimeout);
 }

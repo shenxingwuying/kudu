@@ -32,6 +32,8 @@
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/rpc/service_if.h"
 #include "kudu/server/rpc_server.h"
+// TODO(duyuqi) check iwyu.
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tserver/heartbeater.h"
 #include "kudu/tserver/scanners.h"
 #include "kudu/tserver/tablet_copy_service.h"
@@ -42,6 +44,7 @@
 #include "kudu/util/net/dns_resolver.h"
 #include "kudu/util/net/net_util.h"
 #include "kudu/util/status.h"
+#include "kudu/util/threadpool.h"
 
 using kudu::fs::ErrorHandlerType;
 using kudu::rpc::ServiceIf;

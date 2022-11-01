@@ -123,7 +123,8 @@ ExternalMiniClusterOptions::ExternalMiniClusterOptions()
       enable_ranger(false),
       logtostderr(true),
       start_process_timeout(MonoDelta::FromSeconds(70)),
-      rpc_negotiation_timeout(MonoDelta::FromSeconds(3))
+      rpc_negotiation_timeout(MonoDelta::FromSeconds(3)),
+      enable_duplication(false)
 #if !defined(NO_CHRONY)
       , num_ntp_servers(1)
       , ntp_config_mode(BuiltinNtpConfigMode::ALL_SERVERS)

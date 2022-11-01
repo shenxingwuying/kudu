@@ -35,7 +35,11 @@ using std::string;
 using strings::Substitute;
 
 ConsensusMetadataManager::ConsensusMetadataManager(FsManager* fs_manager)
-    : fs_manager_(DCHECK_NOTNULL(fs_manager)) {
+    : fs_manager_(DCHECK_NOTNULL(fs_manager)), new_leader_queue_(1024) {
+}
+
+ConsensusMetadataManager::~ConsensusMetadataManager() {
+  ShutdownNewLeaderQueue();
 }
 
 Status ConsensusMetadataManager::Create(const string& tablet_id,

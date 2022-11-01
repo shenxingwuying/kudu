@@ -273,6 +273,10 @@ void PeerMessageQueue::TrackPeer(const RaftPeerPB& peer_pb) {
 }
 
 void PeerMessageQueue::TrackPeerUnlocked(const RaftPeerPB& peer_pb) {
+  if (IsDuplicator(peer_pb)) {
+    return;
+  }
+
   CHECK(!peer_pb.permanent_uuid().empty()) << SecureShortDebugString(peer_pb);
   CHECK(peer_pb.has_member_type()) << SecureShortDebugString(peer_pb);
   DCHECK(queue_lock_.is_locked());

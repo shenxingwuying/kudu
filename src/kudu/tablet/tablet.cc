@@ -73,9 +73,11 @@
 #include "kudu/tablet/rowset_metadata.h"
 #include "kudu/tablet/rowset_tree.h"
 #include "kudu/tablet/svg_dump.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_metrics.h"
 #include "kudu/tablet/tablet_mm_ops.h"
+#include "kudu/tablet/tablet_replica.h"
 #include "kudu/tablet/txn_metadata.h"
 #include "kudu/tserver/tserver.pb.h"
 #include "kudu/tserver/tserver_admin.pb.h"
@@ -1233,7 +1235,6 @@ Status Tablet::ApplyRowOperations(WriteOpState* op_state) {
   IOContext io_context({ tablet_id() });
   RETURN_NOT_OK(BulkCheckPresence(&io_context, op_state));
 
-  // Actually apply the ops.
   for (int op_idx = 0; op_idx < num_ops; op_idx++) {
     RowOp* row_op = op_state->row_ops()[op_idx];
     if (row_op->has_result()) continue;
@@ -1262,7 +1263,7 @@ Status Tablet::ApplyRowOperation(const IOContext* io_context,
   }
 
   {
-    State s;
+    State s = kInitialized;
     RETURN_NOT_OK_PREPEND(CheckHasNotBeenStopped(&s),
         Substitute("Apply of $0 exited early", op_state->ToString()));
     CHECK(s == kOpen || s == kBootstrapping);

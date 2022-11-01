@@ -236,7 +236,7 @@ TEST_F(SubprocessServerTest, TestTimeoutWhileQueueingCalls) {
   for (int i = 0; i < kNumRequests; i++) {
     threads.emplace_back([&, i] {
       SubprocessRequestPB request =
-          CreateEchoSubprocessRequestPB(kLargeRequest, /*sleep_ms*/500);
+          CreateEchoSubprocessRequestPB(kLargeRequest, /*sleep_ms*/900);
       SubprocessResponsePB response;
       results[i] = server_->Execute(&request, &response);
     });

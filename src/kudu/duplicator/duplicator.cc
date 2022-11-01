@@ -101,14 +101,13 @@ Status Duplicator::Shutdown() {
   return Status::OK();
 }
 
-Status Duplicator::Duplicate(const std::shared_ptr<tablet::WriteOpState>& write_op_state,
-                             const SchemaPtr& schema,
+Status Duplicator::Duplicate(tablet::WriteOpState* write_op_state,
                              tablet::Tablet::DuplicationMode /*expect_mode*/) {
   if (stopped_) {
     return Status::IllegalState("duplicator is stopped");
   }
   std::unique_ptr<DuplicateMsg> msg = std::make_unique<DuplicateMsg>(
-      write_op_state, schema, tablet_replica_->tablet_metadata()->table_name());
+      write_op_state, tablet_replica_->tablet_metadata()->table_name());
   consensus::OpId op_id = write_op_state->op_id();
 
   RETURN_NOT_OK_LOG(msg->ParseKafkaRecord(), ERROR, "parse kafka record failed");

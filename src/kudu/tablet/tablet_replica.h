@@ -356,16 +356,20 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
     return duplicator_;
   }
 
-  Status Duplicate(const std::shared_ptr<WriteOpState>& op_state_ptr,
-                   const SchemaPtr& schema,
+  Status StartDuplicator();
+
+  void ShutdownDuplicator();
+
+  Status Duplicate(WriteOpState* op_state,
                    Tablet::DuplicationMode mode) {
+    std::lock_guard<Mutex> l_lock(duplicator_mutex_);
     if (!duplicator_ || !duplicator_->is_started()) {
-      DCHECK(!op_state_ptr->row_ops().empty());
+      DCHECK(!op_state->row_ops().empty());
       return Status::IllegalState(
           Substitute("duplicator is not inited, first row_op: $0",
-                     op_state_ptr->row_ops()[0]->ToString(*schema)));
+                     op_state->row_ops()[0]->ToString(*op_state->schema_at_decode_time())));
     }
-    return duplicator_->Duplicate(op_state_ptr, schema, mode);
+    return duplicator_->Duplicate(op_state, mode);
   }
 
   // OpId of remote destination storage has received.
@@ -398,6 +402,8 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   TabletReplica();
 
   ~TabletReplica() override;
+
+  void ShutdownDuplicatorUnlocked();
 
   // Wait until the TabletReplica is fully in STOPPED, SHUTDOWN, or FAILED
   // state.

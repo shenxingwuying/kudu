@@ -58,6 +58,7 @@ class NodeInstancePB;
 class Partition;
 class PartitionSchema;
 class Schema;
+class Thread;
 class ThreadPool;
 
 namespace consensus {
@@ -360,6 +361,9 @@ class TSTabletManager : public tserver::TabletReplicaLookupIf {
   // Just for tests.
   void SetNextUpdateTimeForTests();
 
+  // RunLoop.
+  void DoDuplicationWhenSwitchToLeader();
+
   FsManager* const fs_manager_;
 
   const scoped_refptr<consensus::ConsensusMetadataManager> cmeta_manager_;
@@ -382,6 +386,9 @@ class TSTabletManager : public tserver::TabletReplicaLookupIf {
   //                to be able to work with RWMutex and use lock_ from above
   //                to create one to notify the task on shutdown
   CountDownLatch shutdown_latch_;
+
+  scoped_refptr<Thread> switch_to_leader_thread_;
+  CountDownLatch switch_to_leader_latch_;
 
   // Map from tablet ID to tablet
   TabletMap tablet_map_;
@@ -421,6 +428,12 @@ class TSTabletManager : public tserver::TabletReplicaLookupIf {
   // to run a long-running single periodic task to abort stale transactions
   // registered with corresponding transaction status tablets.
   std::unique_ptr<ThreadPool> txn_status_manager_pool_;
+
+  // Thread pool for duplicator operations
+  std::unique_ptr<ThreadPool> duplication_pool_;
+
+  // Thread pool for duplicator replay wal when lag too much or bootstrapping.
+  std::unique_ptr<ThreadPool> duplication_replay_pool_;
 
   // Ensures that we only update stats from a single thread at a time.
   mutable rw_spinlock lock_update_;

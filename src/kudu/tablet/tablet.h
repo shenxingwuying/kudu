@@ -218,14 +218,13 @@ class Tablet {
   }
 
   // Duplicate all of the row operations associated with this op.
-  Status DuplicateRowOperations(const std::shared_ptr<WriteOpState>& op_state_ptr,
-                                DuplicationMode mode = DuplicationMode::REALTIME_DUPLICATION);
+  Status DuplicateRowOperations(WriteOpState* op_state,
+                                DuplicationMode mode);
 
   // Duplicate a single row operation.
   Status DuplicateRowOperation(const fs::IOContext* io_context,
-                               const std::shared_ptr<WriteOpState>& op_state_ptr,
-                               ProbeStats* stats,
-                               DuplicationMode mode = DuplicationMode::REALTIME_DUPLICATION);
+                               WriteOpState* op_state,
+                               DuplicationMode mode);
 
   // Begins the transaction, recording its presence in the tablet metadata.
   // Upon calling this, 'op_id' will be anchored until the metadata is flushed,

@@ -66,15 +66,13 @@ struct KafkaMessage {
 
 class DuplicateMsg {
  public:
-  DuplicateMsg(std::shared_ptr<tablet::WriteOpState> op_state,
-               std::shared_ptr<Schema> schema_ptr,
+  DuplicateMsg(tablet::WriteOpState* op_state,
                string table_name)
-      : op_state_(std::move(op_state)),
-        schema_ptr_(std::move(schema_ptr)),
+      : op_state_(op_state),
         table_name_(std::move(table_name)) {}
   ~DuplicateMsg() {}
 
-  const std::shared_ptr<tablet::WriteOpState>& op_state() const { return op_state_; }
+  tablet::WriteOpState* op_state() const { return op_state_; }
 
   // TODO(duyuqi).
   // We should move the work into in duplicate_pool.
@@ -87,11 +85,12 @@ class DuplicateMsg {
   Status ParseKafkaRecord() {
     result_.clear();
     result_.reserve(op_state_->row_ops().size());
+    const Schema* schema = op_state_->schema_at_decode_time();
     for (const auto& row_op : op_state_->row_ops()) {
       kudu::kafka::RawKuduRecord record;
       string primary_key;
       RETURN_NOT_OK(
-          kudu::kafka::ParseRow(row_op->decoded_op, schema_ptr_.get(), &record, &primary_key));
+          kudu::kafka::ParseRow(row_op->decoded_op, schema, &record, &primary_key));
       record.set_table_name(table_name_);
       switch (row_op->decoded_op.type) {
         case RowOperationsPB::INSERT:
@@ -121,8 +120,7 @@ class DuplicateMsg {
   const std::vector<std::shared_ptr<KafkaMessage>>& result() const { return result_; }
 
  private:
-  std::shared_ptr<tablet::WriteOpState> op_state_;
-  std::shared_ptr<Schema> schema_ptr_;
+  tablet::WriteOpState* op_state_;
   string table_name_;
   std::vector<std::shared_ptr<KafkaMessage>> result_;
 
@@ -139,6 +137,12 @@ struct ConnectorOptions {
   string name;
   string uri;
   string options;
+  ConnectorOptions() {}
+  explicit ConnectorOptions(const consensus::DuplicationInfoPB& duplication_info_pb)
+      : type(duplication_info_pb.type()),
+        name(duplication_info_pb.name()),
+        uri(duplication_info_pb.uri()),
+        options(duplication_info_pb.has_options() ? duplication_info_pb.options() : "") {}
 };
 
 class Connector {

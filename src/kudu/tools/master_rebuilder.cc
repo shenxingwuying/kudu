@@ -46,6 +46,7 @@
 #include "kudu/master/master_options.h"
 #include "kudu/master/sys_catalog.h"
 #include "kudu/tablet/metadata.pb.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/tools/tool_action_common.h"

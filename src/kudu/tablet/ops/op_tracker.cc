@@ -34,6 +34,7 @@
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/tablet/ops/op.h"
 #include "kudu/tablet/ops/op_driver.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/util/flag_tags.h"
@@ -197,6 +198,10 @@ void OpTracker::IncrementCounters(const OpDriver& driver) const {
     case Op::PARTICIPANT_OP:
       // TODO(awong): implement me!
       break;
+    case Op::DUPLICATION_OP:
+      // TODO(duyuqi):
+      // If implement me? CHECK(false) ?
+      break;
   }
 }
 
@@ -218,6 +223,10 @@ void OpTracker::DecrementCounters(const OpDriver& driver) const {
       break;
     case Op::PARTICIPANT_OP:
       // TODO(awong): implement me!
+      break;
+    case Op::DUPLICATION_OP:
+      // TODO(duyuqi):
+      // If implement me? CHECK(false) ?
       break;
   }
 }

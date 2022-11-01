@@ -22,6 +22,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <boost/optional/optional.hpp>
@@ -29,6 +30,7 @@
 #include <google/protobuf/stubs/port.h>
 
 #include "kudu/common/row_operations.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/gutil/macros.h"
@@ -44,7 +46,6 @@
 
 namespace kudu {
 
-class Schema;
 class rw_semaphore;
 
 namespace rpc {
@@ -65,7 +66,7 @@ struct TxnRowSets;
 enum WritePrivilegeType {
   INSERT,
   UPDATE,
-  DELETE,
+  DELETE
 };
 static constexpr size_t kWritePrivilegeMax = WritePrivilegeType::DELETE + 1;
 std::string WritePrivilegeToString(const WritePrivilegeType& type);
@@ -366,6 +367,8 @@ class WriteOp : public Op {
   // original requests) which is already a requirement of the consensus
   // algorithm.
   Status Apply(consensus::CommitMsg** commit_msg) override;
+
+  Status Duplicate() override;
 
   // If result == COMMITTED, commits the mvcc op and updates the metrics, if
   // result == ABORTED aborts the mvcc op.

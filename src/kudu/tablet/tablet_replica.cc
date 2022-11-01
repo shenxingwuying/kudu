@@ -52,6 +52,7 @@
 #include "kudu/rpc/result_tracker.h"
 #include "kudu/tablet/mvcc.h"
 #include "kudu/tablet/ops/alter_schema_op.h"
+#include "kudu/tablet/ops/duplication_op.h"
 #include "kudu/tablet/ops/op_driver.h"
 #include "kudu/tablet/ops/participant_op.h"
 #include "kudu/tablet/ops/write_op.h"
@@ -175,7 +176,7 @@ TabletReplica::TabletReplica(consensus::RaftPeerPB local_peer_pb) :
     local_peer_pb_(std::move(local_peer_pb)), log_anchor_registry_(nullptr),
     apply_pool_(nullptr),
     txn_coordinator_(nullptr),
-    mark_dirty_clbk_([](const std::string& reason){}),
+    mark_dirty_clbk_([](const string& reason){}),
     state_(SHUTDOWN),
     last_status_("Tablet initializing..."),
     connector_manager_(nullptr),
@@ -308,6 +309,49 @@ Status TabletReplica::Start(const ConsensusBootstrapInfo& bootstrap_info,
   return Status::OK();
 }
 
+Status TabletReplica::StartDuplicator() {
+  std::lock_guard<Mutex> l_lock(duplicator_mutex_);
+  // StartDuplicator is called when switch Candidate to Leader.
+  // 1. If duplicator_ is nullptr, it's should new and init.
+  // 2. If duplicator_ is not nullptr, that's means initted in the past,
+  // duplicator_ should re-init, when the duplicator's new options maybe changed.
+  // The scenario:
+  //   1. Users add a duplicator with error topic/uri options.
+  //   2. Users want to fix it error and drop the duplicator and add an new duplicator.
+  // 3. If not changed, re-init is no confluence.
+  ShutdownDuplicatorUnlocked();
+
+  ThreadPool* duplicate_pool = shared_consensus()->duplication_pool();
+  CHECK(duplicate_pool);
+  duplicator_.reset(new duplicator::Duplicator(duplicate_pool, this));
+
+  consensus::DuplicationInfoPB& info = *consensus_->duplication_info_pb();
+  duplicator::ConnectorOptions options(info);
+  Status status = duplicator_->Init(options);
+  if (!status.ok()) {
+    LOG_WITH_PREFIX(ERROR) << Substitute(
+        "start duplicator failed, table $0, status $1", meta_->table_name(), status.ToString());
+    ShutdownDuplicatorUnlocked();
+    return status;
+  }
+  VLOG_WITH_PREFIX(0) << "start duplicator success.";
+
+  return Status::OK();
+}
+
+void TabletReplica::ShutdownDuplicator() {
+  std::lock_guard<Mutex> l_lock(duplicator_mutex_);
+  ShutdownDuplicatorUnlocked();
+}
+
+void TabletReplica::ShutdownDuplicatorUnlocked() {
+  if (duplicator_) {
+    duplicator_->Shutdown();
+    duplicator_.reset();
+    VLOG_WITH_PREFIX(0) << "shutdown duplicator.";
+  }
+}
+
 string TabletReplica::StateName() const {
   return TabletStatePB_Name(state());
 }
@@ -342,8 +386,6 @@ void TabletReplica::Stop() {
 
   if (duplicator_) {
     duplicator_->Shutdown();
-    // delete duplicator_;
-    // duplicator_ = nullptr;
   }
 
   // TODO(KUDU-183): Keep track of the pending tasks and send an "abort" message.
@@ -489,6 +531,18 @@ Status TabletReplica::SubmitWrite(unique_ptr<WriteOpState> op_state) {
   return driver->ExecuteAsync();
 }
 
+Status TabletReplica::SubmitDuplicationOp(std::unique_ptr<DuplicationOpState> op_state,
+                                          consensus::OpId confirmed_opid,
+                                          consensus::DuplicationInfoPB dup_info) {
+  RETURN_NOT_OK(CheckRunning());
+  op_state->SetResultTracker(result_tracker_);
+  unique_ptr<DuplicationOp> op(new DuplicationOp(
+      std::move(op_state), std::move(confirmed_opid), std::move(dup_info)));
+  scoped_refptr<OpDriver> driver;
+  RETURN_NOT_OK(NewLeaderOpDriver(std::move(op), &driver));
+  return driver->ExecuteAsync();
+}
+
 Status TabletReplica::SubmitTxnParticipantOp(std::unique_ptr<ParticipantOpState> op_state) {
   RETURN_NOT_OK(CheckRunning());
 
@@ -607,6 +661,9 @@ void TabletReplica::GetInFlightOps(Op::TraceType trace_type,
           break;
         case Op::PARTICIPANT_OP:
           status_pb.set_op_type(consensus::PARTICIPANT_OP);
+          break;
+        case Op::DUPLICATION_OP:
+          status_pb.set_op_type(consensus::DUPLICATE_OP);
           break;
       }
       status_pb.set_description(driver->ToString());

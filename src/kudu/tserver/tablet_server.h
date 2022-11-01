@@ -30,6 +30,7 @@
 namespace kudu {
 
 class MaintenanceManager;
+class ThreadPool;
 
 namespace duplicator {
 class ConnectorManager;

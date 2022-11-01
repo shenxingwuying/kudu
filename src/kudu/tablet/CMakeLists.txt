@@ -25,6 +25,7 @@ set(TABLET_SRCS
   txn_participant.cc
   ops/op.cc
   ops/alter_schema_op.cc
+  ops/duplication_op.cc
   ops/op_driver.cc
   ops/op_tracker.cc
   ops/participant_op.cc
