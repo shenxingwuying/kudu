@@ -8,11 +8,12 @@ variables:
   NO_REBUILD_THIRDPARTY: 1
 
 cache:
-  key: kudu_114_java_cache
-  when: 'always'
+  key: kudu_114_3_java_cache
+  when: 'on_success'
   paths:
     - ${GRADLE_USER_HOME}/caches
     - ${GRADLE_USER_HOME}/wrapper
+  policy: pull-push
 
 stages:
   - style_check
@@ -27,8 +28,18 @@ job ilint:
     - make ilint -j32
   tags:
     - skv-kudu-docker
-  only:
-    - merge_requests
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "CMakeLists.txt"
+        - "build-support/**/*"
+        - "check_test.sh"
+        - "cmake_modules/*"
+        - "src/kudu/**/*"
+        - "thirdparty/**/*"
+        - ".gitlab-ci.yml"
+      when: always
+    - when: never
 
 job tidy:
   stage: style_check
@@ -39,8 +50,18 @@ job tidy:
     - make tidy -j32
   tags:
     - skv-kudu-docker
-  only:
-    - merge_requests
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "CMakeLists.txt"
+        - "build-support/**/*"
+        - "check_test.sh"
+        - "cmake_modules/*"
+        - "src/kudu/**/*"
+        - "thirdparty/**/*"
+        - ".gitlab-ci.yml"
+      when: always
+    - when: never
 
 job iwyu:
   stage: style_check
@@ -51,8 +72,18 @@ job iwyu:
     - make iwyu -j32
   tags:
     - skv-kudu-docker
-  only:
-    - merge_requests
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "CMakeLists.txt"
+        - "build-support/**/*"
+        - "check_test.sh"
+        - "cmake_modules/*"
+        - "src/kudu/**/*"
+        - "thirdparty/**/*"
+        - ".gitlab-ci.yml"
+      when: always
+    - when: never
 
 job asan:
   stage: test
@@ -66,8 +97,18 @@ job asan:
     - bash check_test.sh
   tags:
     - skv-kudu-docker
-  only:
-    - merge_requests
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "CMakeLists.txt"
+        - "build-support/**/*"
+        - "check_test.sh"
+        - "cmake_modules/*"
+        - "src/kudu/**/*"
+        - "thirdparty/**/*"
+        - ".gitlab-ci.yml"
+      when: always
+    - when: never
 
 job debug:
   stage: test
@@ -81,8 +122,18 @@ job debug:
     - bash check_test.sh
   tags:
     - skv-kudu-docker
-  only:
-    - merge_requests
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "CMakeLists.txt"
+        - "build-support/**/*"
+        - "check_test.sh"
+        - "cmake_modules/*"
+        - "src/kudu/**/*"
+        - "thirdparty/**/*"
+        - ".gitlab-ci.yml"
+      when: always
+    - when: never
 
 job tsan:
   stage: test
@@ -96,6 +147,16 @@ job tsan:
     - bash -x check_test.sh
   tags:
     - skv-kudu-docker
-  only:
-    - merge_requests
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "CMakeLists.txt"
+        - "build-support/**/*"
+        - "check_test.sh"
+        - "cmake_modules/*"
+        - "src/kudu/**/*"
+        - "thirdparty/**/*"
+        - ".gitlab-ci.yml"
+      when: always
+    - when: never
 
