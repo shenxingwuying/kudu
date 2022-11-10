@@ -436,6 +436,11 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
     return server_ctx_.replay_pool;
   }
 
+  void TEST_set_duplication_and_replay_pool(ThreadPool* duplicate_pool, ThreadPool* replay_pool) {
+    server_ctx_.duplicate_pool = duplicate_pool;
+    server_ctx_.replay_pool = replay_pool;
+  }
+
   void DuplicateTxRoundReplicationFinished(ConsensusRound* round,
                                            const std::function<void(const OpId& opid)>& f,
                                            const OpId& opid,
@@ -903,7 +908,7 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   const scoped_refptr<ConsensusMetadataManager> cmeta_manager_;
 
   // State shared by Raft instances on a given server.
-  const ServerContext server_ctx_;
+  ServerContext server_ctx_;
 
   // TODO(dralves) hack to serialize updates due to repeated/out-of-order messages
   // should probably be refactored out.

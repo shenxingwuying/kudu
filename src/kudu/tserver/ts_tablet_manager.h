@@ -30,7 +30,6 @@
 
 #include "kudu/common/common.pb.h"
 #include "kudu/consensus/metadata.pb.h"
-#include "kudu/duplicator/connector_manager.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/tablet/metadata.pb.h"

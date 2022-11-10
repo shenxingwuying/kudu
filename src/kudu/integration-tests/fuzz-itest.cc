@@ -63,6 +63,7 @@
 #include "kudu/mini-cluster/internal_mini_cluster.h"
 #include "kudu/tablet/key_value_test_schema.h"
 #include "kudu/tablet/rowset.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/tablet/txn_participant-test-util.h"

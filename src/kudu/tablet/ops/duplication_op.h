@@ -78,7 +78,10 @@ class DuplicationOpState : public OpState {
 // Executes the alter schema op.
 class DuplicationOp : public Op {
  public:
+  // TODO(duyuqi) duplication.
+  // If last_confirmed_opid and dup_info can be removed ?
   DuplicationOp(std::unique_ptr<DuplicationOpState> state,
+                consensus::DriverType type,
                 consensus::OpId last_confirmed_opid,
                 consensus::DuplicationInfoPB dup_info);
 

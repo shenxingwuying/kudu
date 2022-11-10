@@ -202,29 +202,36 @@ class Tablet {
   // REALTIME_DUPLICATION is slow, then REALTIME_DUPLICATION downgrade to WAL_DUPLICATION,
   // because the queue is limited.
   enum class DuplicationMode {
+    // Temporary mode, duplicator's init state.
+    // Next mode: WAL_DUPLICATION.
+    INIT,
+    // Temporary mode, read ops from wal and duplication them
+    // after switch leader(include bootstrap) or queue full.
+    // Next mode: WAL_DUPLICATION_FINISH.
     WAL_DUPLICATION,
+    // Temporary mode, after replay wal finish, switch WAL_DUPLICATION to WAL_DUPLICATION_FINISH,
+    // check and switch to proper mode.
+    // Next mode: REALTIME_DUPLICATION or WAL_DUPLICATION.
+    WAL_DUPLICATION_FINISH,
+    // Stable mode, we expect duplicator stay in REALTIME_DUPLICATION.
+    // If duplicator's queue full, it will switch to WAL_DUPLICATION.
     REALTIME_DUPLICATION
   };
 
   static const char* DuplicationMode_Name(const DuplicationMode mode) {
     switch (mode) {
+      case DuplicationMode::INIT:
+        return "INIT";
       case DuplicationMode::WAL_DUPLICATION:
         return "WAL_DUPLICATION";
+      case DuplicationMode::WAL_DUPLICATION_FINISH:
+        return "WAL_DUPLICATION_FINISH";
       case DuplicationMode::REALTIME_DUPLICATION:
         return "REALTIME_DUPLICATION";
       default:
         return "Unknown";
     }
   }
-
-  // Duplicate all of the row operations associated with this op.
-  Status DuplicateRowOperations(WriteOpState* op_state,
-                                DuplicationMode mode);
-
-  // Duplicate a single row operation.
-  Status DuplicateRowOperation(const fs::IOContext* io_context,
-                               WriteOpState* op_state,
-                               DuplicationMode mode);
 
   // Begins the transaction, recording its presence in the tablet metadata.
   // Upon calling this, 'op_id' will be anchored until the metadata is flushed,

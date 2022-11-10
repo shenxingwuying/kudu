@@ -20,21 +20,21 @@
 
 #pragma once
 
-#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <gflags/gflags_declare.h>
-
 #include "kudu/common/schema.h"
 #include "kudu/common/types.h"
+#include "kudu/consensus/metadata.pb.h"
 #include "kudu/duplicator/connector.h"
 #include "kudu/duplicator/kafka/kafka.pb.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/util/bitmap.h"
+#include "kudu/util/metrics.h"
 #include "kudu/util/status.h"
-
 
 namespace cppkafka {
 class Producer;
@@ -51,6 +51,7 @@ void RangeToPB(const Schema& schema,
   size_t low = schema.num_key_columns();
   size_t high = schema.num_columns();
   for (size_t i = low; i < high; ++i) {
+
     if (!BitmapTest(isset_bitmap, i)) {
       continue;
     }

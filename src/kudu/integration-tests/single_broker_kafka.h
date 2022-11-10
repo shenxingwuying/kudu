@@ -21,23 +21,32 @@
 
 #include <glog/logging.h>
 #include <kudu/gutil/strings/substitute.h>
+#include <kudu/util/env.h>
+#include <kudu/util/path_util.h>
 #include <kudu/util/subprocess.h>
 
 namespace kudu {
 namespace duplication {
 namespace kafka {
 
+using std::string;
 using strings::Substitute;
 
 constexpr int kKafkaBasePort = 9092;
-constexpr const char* kControlCommand = "sh bin/testdata/kafka-simple-control.sh";
 
 class SingleBrokerKafka {
  public:
-  explicit SingleBrokerKafka(int offset_port) : offset_port_(offset_port) {}
+  explicit SingleBrokerKafka(int offset_port) : command_(), offset_port_(offset_port) {
+    string exe_file;
+    CHECK_OK(Env::Default()->GetExecutablePath(&exe_file));
+    // The path should be ${kudu_code_path}/build/latest/bin/testdata/kafka-simple-control.sh
+    command_ = Substitute("sh $0",
+                          JoinPathSegments(DirName(exe_file), "testdata/kafka-simple-control.sh"));
+    VLOG(0) << "Kafka Command: " << command_;
+  }
 
   void InitKafka() {
-    std::string start_cmd = Substitute("$0 start $1", kControlCommand, offset_port_);
+    std::string start_cmd = Substitute("$0 start $1", command_, offset_port_);
     Status status = Subprocess::Call({"/bin/bash", "-c", start_cmd});
     if (!status.ok()) {
       LOG(FATAL) << "start kafka failed";
@@ -46,7 +55,7 @@ class SingleBrokerKafka {
   }
 
   void StartKafka() {
-    std::string start_cmd = Substitute("$0 start_only $1", kControlCommand, offset_port_);
+    std::string start_cmd = Substitute("$0 start_only $1", command_, offset_port_);
     Status status = Subprocess::Call({"/bin/bash", "-c", start_cmd});
     if (!status.ok()) {
       LOG(FATAL) << "start kafka failed";
@@ -55,7 +64,7 @@ class SingleBrokerKafka {
   }
 
   void StopKafka() {
-    std::string stop_cmd = Substitute("$0 stop_only $1", kControlCommand, offset_port_);
+    std::string stop_cmd = Substitute("$0 stop_only $1", command_, offset_port_);
     Status status = Subprocess::Call({"/bin/bash", "-c", stop_cmd});
     if (!status.ok()) {
       LOG(FATAL) << "start kafka failed";
@@ -64,7 +73,7 @@ class SingleBrokerKafka {
   }
 
   void DestroyKafka() {
-    std::string stop_cmd = Substitute("$0 stop $1", kControlCommand, offset_port_);
+    std::string stop_cmd = Substitute("$0 stop $1", command_, offset_port_);
     Status status = Subprocess::Call({"/bin/bash", "-c", stop_cmd});
     if (!status.ok()) {
       LOG(FATAL) << "stop kafka failed";
@@ -73,6 +82,7 @@ class SingleBrokerKafka {
   }
 
  private:
+  std::string command_;
   int offset_port_ = 0;
 };
 

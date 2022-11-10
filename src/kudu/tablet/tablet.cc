@@ -77,7 +77,6 @@
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_metrics.h"
 #include "kudu/tablet/tablet_mm_ops.h"
-#include "kudu/tablet/tablet_replica.h"
 #include "kudu/tablet/txn_metadata.h"
 #include "kudu/tserver/tserver.pb.h"
 #include "kudu/tserver/tserver_admin.pb.h"

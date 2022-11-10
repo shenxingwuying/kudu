@@ -60,6 +60,7 @@ using kudu::tserver::TabletServerErrorPB;
 using kudu::tserver::WriteRequestPB;
 using kudu::tserver::WriteResponsePB;;
 using std::string;
+using std::shared_ptr;
 using std::unique_ptr;
 using std::vector;
 using strings::Substitute;

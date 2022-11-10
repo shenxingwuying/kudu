@@ -161,13 +161,6 @@ class BootstrapTest : public LogTestBase {
     RETURN_NOT_OK(log_->Close());
 
     scoped_refptr<LogAnchorRegistry> log_anchor_registry(new LogAnchorRegistry());
-    // MockTabletReplica
-    consensus::RaftPeerPB local_peer_pb;
-    local_peer_pb.set_member_type(consensus::RaftPeerPB::VOTER);
-    // @TODO(duyuqi), duplication.
-    // why tablet_replica_ptr non-null?
-    scoped_refptr<TabletReplica> tablet_replica_ptr = new TabletReplica(local_peer_pb);
-
     // Now attempt to recover the log
     RETURN_NOT_OK(BootstrapTablet(
         meta,
@@ -177,7 +170,7 @@ class BootstrapTest : public LogTestBase {
         /*result_tracker*/nullptr,
         metric_registry_.get(),
         file_cache_.get(),
-        tablet_replica_ptr.get(),
+        /*tablet_replica*/nullptr,
         std::move(log_anchor_registry),
         tablet,
         &log_,

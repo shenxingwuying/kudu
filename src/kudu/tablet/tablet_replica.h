@@ -24,13 +24,14 @@
 #include <string>
 #include <vector>
 
+#include <glog/logging.h>
 #include <gtest/gtest_prod.h>
 
 #include "kudu/consensus/log.h"
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid.pb.h"
+#include "kudu/consensus/opid_util.h"
 #include "kudu/consensus/raft_consensus.h"
-#include "kudu/duplicator/connector_manager.h"
 #include "kudu/duplicator/duplicator.h"
 #include "kudu/fs/fs_manager.h"
 #include "kudu/gutil/macros.h"
@@ -56,7 +57,6 @@ class DnsResolver;
 class MaintenanceManager;
 class MaintenanceOp;
 class MonoDelta;
-class Schema;
 class ThreadPool;
 class ThreadPoolToken;
 
@@ -71,6 +71,7 @@ class Clock;
 }
 
 namespace duplicator {
+class ConnectorManager;
 class DuplicationReplayWalTest;
 }
 
@@ -95,7 +96,6 @@ class ParticipantOpState;
 class TabletStatusPB;
 class TxnCoordinator;
 class TxnCoordinatorFactory;
-struct ProbeStats;
 
 // A replica in a tablet consensus configuration, which coordinates writes to tablets.
 // Each time Write() is called this class appends a new entry to a replicated
@@ -372,6 +372,14 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
     return duplicator_->Duplicate(op_state, mode);
   }
 
+  void TEST_set_duplication_and_replay_pool(ThreadPool* duplicate_pool, ThreadPool* replay_pool) {
+    consensus_->TEST_set_duplication_and_replay_pool(duplicate_pool, replay_pool);
+  }
+
+  void TEST_set_connector_manager(duplicator::ConnectorManager* connector_manager) {
+    connector_manager_ = connector_manager;
+  }
+
   // OpId of remote destination storage has received.
   consensus::OpId last_confirmed_opid() const {
     return duplicator_->last_confirmed_opid();
@@ -389,11 +397,13 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   }
 
  private:
+  friend class duplicator::DuplicationReplayWalTest;
   friend class kudu::tools::TabletCopier;
   friend class kudu::AlterTableTest;
   friend class RefCountedThreadSafe<TabletReplica>;
   friend class TabletReplicaTest;
   friend class TabletReplicaTestBase;
+
   FRIEND_TEST(DuplicationReplayWalTest, PrepareAndReplay);
   FRIEND_TEST(TabletReplicaTest, TestActiveOpPreventsLogGC);
   FRIEND_TEST(TabletReplicaTest, TestDMSAnchorPreventsLogGC);
@@ -470,7 +480,7 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
 
   // duplicate write ops to thirdparty destination storage system.
   std::unique_ptr<duplicator::Duplicator> duplicator_;
-  // To pretect duplicator_'s Init and Start.
+  // To protect duplicator init.
   Mutex duplicator_mutex_;
   // Record last committed_opid for duplication.
   consensus::OpId duplicator_last_committed_opid_;

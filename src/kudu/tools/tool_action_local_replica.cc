@@ -72,6 +72,8 @@
 #include "kudu/rpc/messenger.h"
 #include "kudu/tablet/diskrowset.h"
 #include "kudu/tablet/metadata.pb.h"
+#include "kudu/tablet/tablet-harness.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/rowset.h"
 #include "kudu/tablet/rowset_metadata.h"
 #include "kudu/tablet/tablet.pb.h"
@@ -99,6 +101,7 @@
 #include "kudu/util/status.h"
 #include "kudu/util/thread.h"
 #include "kudu/util/threadpool.h"
+
 namespace kudu {
 namespace rpc {
 class RpcController;

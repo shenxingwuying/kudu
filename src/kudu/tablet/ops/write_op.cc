@@ -21,7 +21,6 @@
 #include <atomic>
 #include <cstdint>
 #include <ctime>
-#include <map>
 #include <memory>
 #include <new>
 #include <ostream>
@@ -42,10 +41,7 @@
 #include "kudu/common/wire_protocol.h"
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/consensus.pb.h"
-#include "kudu/consensus/consensus_meta.h"
-#include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid.pb.h"
-#include "kudu/consensus/opid_util.h"
 #include "kudu/consensus/raft_consensus.h"
 #include "kudu/gutil/dynamic_annotations.h"
 #include "kudu/gutil/map-util.h"
@@ -298,32 +294,30 @@ Status WriteOp::Apply(CommitMsg** commit_msg) {
 
       // Step 1. duplicate to the remote destination storage system.
       Status status = Duplicate();
-      // WARN_NOT_OK(Duplicate(), Substitute("Duplicate not ok, $0", status.ToString()));
       if (!status.ok()) {
         LOG(WARNING) << Substitute("Duplicate not ok, $0", status.ToString());
         // This status, return the Apply() status, ignore the duplication op status.
         return Status::OK();
       }
 
-      // Step 2. Commit a specail log for duplicate Msg.
+      // Step 2. Commit a special log for duplicate Msg.
       TabletReplica* tablet_replica = state()->tablet_replica();
       consensus::OpId last_confirmed_opid = tablet_replica->last_confirmed_opid();
       consensus::OpId last_committed_opid = tablet_replica->duplicator_last_committed_opid();
 
-      if (!consensus::OpIdBiggerThan(last_confirmed_opid, last_committed_opid)) {
-        return Status::OK();
+      if (last_confirmed_opid.term() >= last_committed_opid.term() ||
+          last_confirmed_opid.index() > last_committed_opid.index()) {
+        consensus::DuplicateRequestPB request;
+        consensus::DuplicateResponsePB response;
+        request.mutable_op_id()->CopyFrom(last_confirmed_opid);
+        auto op_state = std::make_unique<DuplicationOpState>(
+            tablet_replica, std::move(request), std::move(response));
+        op_state->set_completion_callback(
+            unique_ptr<OpCompletionCallback>(new DuplicationOpCompletionCallback(tablet_replica)));
+        // Submit the write operation. The RPC will be responded asynchronously.
+        tablet_replica->SubmitDuplicationOp(
+            std::move(op_state), std::move(last_confirmed_opid), dup_info);
       }
-
-      consensus::DuplicateRequestPB request;
-      consensus::DuplicateResponsePB response;
-      request.mutable_op_id()->CopyFrom(last_confirmed_opid);
-      auto op_state = std::make_unique<DuplicationOpState>(
-          tablet_replica, std::move(request), std::move(response));
-      op_state->set_completion_callback(
-          unique_ptr<OpCompletionCallback>(new DuplicationOpCompletionCallback(tablet_replica)));
-      // Submit the write operation. The RPC will be responded asynchronously.
-      tablet_replica->SubmitDuplicationOp(
-          std::move(op_state), std::move(last_confirmed_opid), dup_info);
     }
   }
   return Status::OK();

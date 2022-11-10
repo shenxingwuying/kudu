@@ -77,13 +77,14 @@ class KafkaConnectorTest : public KuduTest {
       : schema_(GetSimpleSchema()),
         client_schema_(schema_.CopyWithoutColumnIds()),
         arena_(256 * 1024),
-        kafka_(kOffsetPort) {
-    connector_manager_.reset(new ConnectorManager());
-  }
+        connector_manager_(new ConnectorManager()),
+        kafka_(kOffsetPort) {}
 
   void SetUp() override {
     kafka_.DestroyKafka();
     kafka_.InitKafka();
+
+    // New KafkaConnector and init producer.
     ConnectorOptions options;
     options.name = kTopicName;
     options.type = consensus::DownstreamType::KAFKA;

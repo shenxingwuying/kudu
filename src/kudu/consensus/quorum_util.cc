@@ -506,7 +506,8 @@ bool ShouldAddReplica(const RaftConfigPB& config,
         }
         break;
       case RaftPeerPB::DUPLICATOR:
-        // @TODO do something
+        // @TODO(duyuqi) duplication
+        // do something
         break;
       default:
         LOG(DFATAL) << peer.member_type() << ": unsupported member type";

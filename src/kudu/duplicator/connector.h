@@ -30,6 +30,7 @@
 #include <glog/logging.h>
 
 #include "kudu/common/row_operations.h"
+#include "kudu/consensus/opid.pb.h"
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/duplicator/kafka/kafka.pb.h"
@@ -66,13 +67,13 @@ struct KafkaMessage {
 
 class DuplicateMsg {
  public:
-  DuplicateMsg(tablet::WriteOpState* op_state,
-               string table_name)
-      : op_state_(op_state),
-        table_name_(std::move(table_name)) {}
+  DuplicateMsg(tablet::WriteOpState* op_state, string table_name)
+      : op_state_(op_state), table_name_(std::move(table_name)), op_id_(op_state_->op_id()) {}
   ~DuplicateMsg() {}
 
   tablet::WriteOpState* op_state() const { return op_state_; }
+
+  consensus::OpId op_id() const { return op_id_; }
 
   // TODO(duyuqi).
   // We should move the work into in duplicate_pool.
@@ -122,6 +123,11 @@ class DuplicateMsg {
  private:
   tablet::WriteOpState* op_state_;
   string table_name_;
+
+  // OpId of op_state_.
+  consensus::OpId op_id_;
+
+  // Convert ops of op_state_ into result.
   std::vector<std::shared_ptr<KafkaMessage>> result_;
 
   DISALLOW_COPY_AND_ASSIGN(DuplicateMsg);
@@ -162,4 +168,3 @@ class Connector {
 
 }  // namespace duplicator
 }  // namespace kudu
-

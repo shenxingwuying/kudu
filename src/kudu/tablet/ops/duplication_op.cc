@@ -64,9 +64,10 @@ string DuplicationOpState::ToString() const {
 }
 
 DuplicationOp::DuplicationOp(unique_ptr<DuplicationOpState> state,
+                             consensus::DriverType type,
                              consensus::OpId last_confirmed_opid,
                              consensus::DuplicationInfoPB dup_info)
-    : Op(consensus::LEADER, Op::DUPLICATION_OP),
+    : Op(type, Op::DUPLICATION_OP),
       state_(std::move(state)),
       last_confirmed_opid_(std::move(last_confirmed_opid)),
       dup_info_(std::move(dup_info)) {}

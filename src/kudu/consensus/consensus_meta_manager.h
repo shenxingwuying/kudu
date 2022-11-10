@@ -18,12 +18,9 @@
 
 #include <cstdint>
 #include <deque>
-#include <ostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-#include <glog/logging.h>
 
 #include "kudu/consensus/consensus_meta.h"
 #include "kudu/gutil/macros.h"
