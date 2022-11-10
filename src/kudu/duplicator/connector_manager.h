@@ -39,10 +39,12 @@ namespace duplicator {
 // A kind Connector exist only one.
 class ConnectorManager {
  public:
-  ConnectorManager() {}
+  ConnectorManager() : connector_(nullptr) {}
   ~ConnectorManager() {
-    delete connector_;
-    connector_ = nullptr;
+    if (connector_) {
+      delete connector_;
+      connector_ = nullptr;
+    }
   }
 
   Connector* GetOrNewConnector(const ConnectorOptions& options) {
@@ -75,7 +77,7 @@ class ConnectorManager {
       Connector* connector = new kafka::KafkaConnector(options);
       if (!connector->Init(options).ok()) {
         delete connector;
-        return nullptr;
+        connector = nullptr;
       }
       return connector;
     }

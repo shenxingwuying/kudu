@@ -20,6 +20,7 @@
 
 #include "kudu/duplicator/kafka/kafka_connector.h"
 
+#include <chrono>
 #include <ostream>
 #include <string>
 #include <utility>
@@ -32,9 +33,11 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
+#include "kudu/gutil/macros.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/util/flag_tags.h"
 #include "kudu/util/flag_validators.h"
+#include "kudu/util/monotime.h"
 
 using std::string;
 using std::vector;
@@ -160,6 +163,8 @@ Status KafkaConnector::WriteBatch(
   if (messages.empty()) {
     return Status::OK();
   }
+  // TODO(duyuqi)
+  // Limit the number of kafka_messages
   for (const auto& duplicate_message : messages) {
     for (const auto& kafka_message : duplicate_message->result()) {
       string json_data;
@@ -171,8 +176,6 @@ Status KafkaConnector::WriteBatch(
             cppkafka::MessageBuilder(topic_name).key(hash_key_str).payload(json_data));
       } catch (const cppkafka::Exception& e) {
         LOG(WARNING) << "produce message failed, try to re new producer, " << e.what();
-        // producer_.reset();
-        // InitPrepare(options_);
         return Status::ServiceUnavailable("kafka client produce failed");
       }
     }

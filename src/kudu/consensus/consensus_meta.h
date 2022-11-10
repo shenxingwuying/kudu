@@ -18,11 +18,9 @@
 
 #include <atomic>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <tuple>
 #include <utility>
 
 #include <gtest/gtest_prod.h>

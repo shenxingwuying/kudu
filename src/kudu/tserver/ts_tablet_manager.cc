@@ -1796,10 +1796,12 @@ void TSTabletManager::DoDuplicationWhenSwitchToLeader() {
         continue;
       }
       if (replica->consensus()->role() == consensus::RaftPeerPB::LEADER) {
-        if (!replica->StartDuplicator().ok()) {
+        Status status = replica->StartDuplicator();
+        if (!status.ok()) {
           // If duplicator start failed, retry it again until is succeed or replica is gone.
           LOG(ERROR) << Substitute(
-              "start duplicator failed, would retry, tablet id: $0, peer uuid: $1",
+              "start duplicator failed status: $0, would retry, tablet id: $1, peer uuid: $2",
+              status.ToString(),
               replica->tablet_id(),
               replica->permanent_uuid());
           cmeta_manager_->AppendNewLeaders(tablet_id);

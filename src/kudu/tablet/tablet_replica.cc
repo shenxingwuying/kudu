@@ -23,7 +23,6 @@
 #include <mutex>
 #include <ostream>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <boost/optional/optional.hpp>
@@ -33,7 +32,6 @@
 #include "kudu/common/partition.h"
 #include "kudu/common/timestamp.h"
 #include "kudu/consensus/consensus.pb.h"
-#include "kudu/consensus/consensus_meta.h"
 #include "kudu/consensus/consensus_meta_manager.h"
 #include "kudu/consensus/consensus_peers.h"
 #include "kudu/consensus/log.h"
@@ -68,6 +66,12 @@
 #include "kudu/util/stopwatch.h"
 #include "kudu/util/threadpool.h"
 #include "kudu/util/trace.h"
+
+namespace kudu {
+namespace duplicator {
+class ConnectorManager;
+}  // namespace duplicator
+}  // namespace kudu
 
 METRIC_DEFINE_histogram(tablet, op_prepare_queue_length, "Operation Prepare Queue Length",
                         kudu::MetricUnit::kTasks,
@@ -537,7 +541,7 @@ Status TabletReplica::SubmitDuplicationOp(std::unique_ptr<DuplicationOpState> op
   RETURN_NOT_OK(CheckRunning());
   op_state->SetResultTracker(result_tracker_);
   unique_ptr<DuplicationOp> op(new DuplicationOp(
-      std::move(op_state), std::move(confirmed_opid), std::move(dup_info)));
+      std::move(op_state), consensus::LEADER, std::move(confirmed_opid), std::move(dup_info)));
   scoped_refptr<OpDriver> driver;
   RETURN_NOT_OK(NewLeaderOpDriver(std::move(op), &driver));
   return driver->ExecuteAsync();
@@ -690,10 +694,16 @@ log::RetentionIndexes TabletReplica::GetRetentionIndexes() const {
   if (ret.for_durability == 0) return ret;
 
   log::LogAnchor anchor;
-  if (duplicator_) {
-    log_anchor_registry_->Register(duplicator_last_committed_opid_.index(),  "duplicator", &anchor);
+  if (consensus_->HasDuplicator()) {
+    CHECK_GE(duplicator_last_committed_opid_.index(), 0);
+    log_anchor_registry_->Register(
+        duplicator_last_committed_opid_.index(), "duplicator", &anchor);
   }
-  SCOPED_CLEANUP({ if (duplicator_) { log_anchor_registry_->Unregister(&anchor); }});
+  SCOPED_CLEANUP({
+    if (consensus_->HasDuplicator()) {
+      log_anchor_registry_->Unregister(&anchor);
+    }
+  });
 
   // Next, we interrogate the anchor registry.
   // Returns OK if minimum known, NotFound if no anchors are registered.
@@ -786,6 +796,16 @@ Status TabletReplica::StartFollowerOp(const scoped_refptr<ConsensusRound>& round
                                  nullptr));
       op.reset(
           new AlterSchemaOp(std::move(op_state), consensus::REPLICA));
+      break;
+    }
+    case DUPLICATE_OP:
+    {
+      const consensus::DuplicateRequestPB& request = replicate_msg->duplicate_request();
+      consensus::DuplicateResponsePB response;
+      auto op_state = std::make_unique<DuplicationOpState>(this, request, response);
+      auto* duplication_info_pb = consensus_->duplication_info_pb();
+      op.reset(new DuplicationOp(
+          std::move(op_state), consensus::REPLICA, request.op_id(), *duplication_info_pb));
       break;
     }
     default:

@@ -252,6 +252,7 @@ message DuplicateRequestPB {
 // DuplicateRequest need not a response, the response required by
 // structure of dealing DuplicationOp.
 message DuplicateResponsePB {
+  optional fixed64 timestamp = 1;
 }
 
 // Status message received in the peer responses.

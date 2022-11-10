@@ -26,10 +26,12 @@ ADD_EXPORTABLE_LIBRARY(kafka_proto
   DEPS protobuf
   NONLINK_DEPS ${KAFKA_PROTO_TGTS})
 
-add_library(kafka duplicator.cc connector.cc kafka/kafka_connector.cc)
+add_library(kafka duplicator.cc duplication_replay.cc log_segment_reader.cc connector.cc kafka/kafka_connector.cc)
 
 target_link_libraries(kafka cppkafka rdkafka kafka_proto log_proto)
 
 SET_KUDU_TEST_LINK_LIBS(tablet kafka kudu_test_util kudu_common tablet_test_util)
 ADD_KUDU_TEST(kafka/kafka_connector-test
+  DATA_FILES ../scripts/kafka-simple-control.sh)
+ADD_KUDU_TEST(duplication_replay-test
   DATA_FILES ../scripts/kafka-simple-control.sh)

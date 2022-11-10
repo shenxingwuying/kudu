@@ -44,7 +44,6 @@
 #include "kudu/util/net/dns_resolver.h"
 #include "kudu/util/net/net_util.h"
 #include "kudu/util/status.h"
-#include "kudu/util/threadpool.h"
 
 using kudu::fs::ErrorHandlerType;
 using kudu::rpc::ServiceIf;
