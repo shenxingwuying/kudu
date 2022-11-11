@@ -23,11 +23,11 @@ else
 fi
 
 script_path=$(cd "$(dirname "$0")"; pwd)
-bin_path='/opt/kudu'
+bin_path='./binary'
 
-if [ ! -d ${script_path}/../_dragon/build/kudu-${od} ]; then
-    # kudu 未编译，先执行编译流程
-    sh ${script_path}/../build.sh
+if [ ! "$(ls -A ${bin_path}/installed/)" ]; then
+    # kudu 制品未下载，先执行下载流程
+    sh prebuild-tools/get_prebuid_package.sh
 fi
 
 #去首尾空格

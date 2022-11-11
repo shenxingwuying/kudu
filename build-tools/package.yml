@@ -7,6 +7,7 @@ package_modules:
     version: "1.14.2"
     pub:
       - type: dragon
+      - type: docker
 
   cdh_parcel:
     source: local

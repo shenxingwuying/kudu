@@ -72,7 +72,7 @@ spec:
       user_groups:
         - sa_group
       captain_module_conf:
-        containerized: false
+        containerized: true
         strategy:
           detached: false  # 是否 captain 监控
       roles:

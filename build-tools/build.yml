@@ -12,8 +12,13 @@ build_modules:
       - type: dragon
         # 添加自定义 build 命令
         add_cmds:
-          - ["RUN", "sh build.sh"]
-          - ["COPY", "/opt/kudu/installed/*", "./"]
+          - ["RUN", "sh ./prebuild-tools/get_prebuid_package.sh"]
+          - ["COPY", "./binary/installed/*", "./"]
+      - type: docker
+        args:
+          DOCKERFILE_PATH: build-tools/dockerfiles/kudu
+        add_cmds:
+          - ["RUN", "sh ./prebuild-tools/collect_artifacts.sh"]
 
   cdh_parcel:
     variants:
@@ -23,7 +28,7 @@ build_modules:
       - type: dragon
         add_cmds:
           - ["RUN", "sh ./parcel-tools/soku_parcel.sh --version $MOD_FULL_VER"]
-          - ["COPY", "/opt/kudu/cdh_parcel/*", "./"]
+          - ["COPY", "./binary/cdh_parcel/*", "./"]
 
   collector:
     variants:
@@ -32,8 +37,9 @@ build_modules:
     types:
       - type: dragon
         add_cmds:
-          - ["RUN", "sh build_collector.sh"]
-          - ["COPY", "/opt/collector/installed/*", "./"]
+          # 这里需要执行get_prebuid_package的原因是整个编译不会按build.yml的顺序来保证执行顺序
+          - ["RUN", "sh ./prebuild-tools/get_prebuid_package.sh"]
+          - ["COPY", "./binary/installed/*", "./"]
           - ["COPY", "soku-construction-blueprint/step/start_kudu_collector.sh", "./"]
 
   soku_tool:
@@ -43,10 +49,10 @@ build_modules:
     types:
       - type: dragon
         add_cmds:
-          # 这里需要执行build的原因是整个编译不会按build.yml的顺序来保证执行顺序
-          - ["RUN", "sh build.sh"]
-          - ["COPY", "/opt/kudu/installed/sbin/kudu", "./"]
-          - ["COPY", "/opt/kudu/installed/sbin/kudu", "./sp_kudu"]
+          # 这里需要执行get_prebuid_package的原因是整个编译不会按build.yml的顺序来保证执行顺序
+          - ["RUN", "sh ./prebuild-tools/get_prebuid_package.sh"]
+          - ["COPY", "./binary/installed/sbin/kudu", "./"]
+          - ["COPY", "./binary/installed/sbin/kudu", "./sp_kudu"]
 
   kudu_guidance:
     variants:
@@ -55,7 +61,7 @@ build_modules:
     types:
       - type: dragon
         add_cmds:
-          # 这里需要执行build的原因是整个编译不会按build.yml的顺序来保证执行顺序
-          - ["RUN", "sh build.sh"]
+          # 这里需要执行get_prebuid_package的原因是整个编译不会按build.yml的顺序来保证执行顺序
+          - ["RUN", "sh ./prebuild-tools/get_prebuid_package.sh"]
           - ["COPY", "./guidance/*", "./" ]
-          - ["COPY", "/opt/kudu/installed/sbin/kudu", "./kudu/command"]
+          - ["COPY", "./binary/installed/sbin/kudu", "./kudu/command"]

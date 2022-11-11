@@ -52,6 +52,7 @@ package_modules:
       - os_distro: el6
       - os_distro: el7
     version: "1.14.2"
+    containerized: true
     pub:
       - type: dragon
 
