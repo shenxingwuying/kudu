@@ -10,14 +10,6 @@ variables:
 stages:
   - full_parallel
 
-cache:
-  key: kudu_114_5_java_cache
-  when: 'on_success'
-  paths:
-    - ${GRADLE_USER_HOME}/caches
-    - ${GRADLE_USER_HOME}/wrapper
-  policy: push
-
 job ilint:
   stage: full_parallel
   script:
@@ -26,7 +18,7 @@ job ilint:
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
     - make ilint -j$(nproc)
   tags:
-    - docker
+    - skv-kudu-docker
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -48,7 +40,7 @@ job tidy:
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
     - make tidy -j$(nproc)
   tags:
-    - docker
+    - skv-kudu-docker
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -70,7 +62,7 @@ job iwyu:
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
     - make iwyu -j$(nproc)
   tags:
-    - docker
+    - skv-kudu-docker
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:

@@ -128,7 +128,7 @@ Status Duplicator::Duplicate(tablet::WriteOpState* write_op_state,
   std::unique_ptr<DuplicateMsg> msg = std::make_unique<DuplicateMsg>(
       write_op_state, tablet_replica_->tablet_metadata()->table_name());
 
-  RETURN_NOT_OK_LOG(msg->ParseKafkaRecord(), WARNING, "parse kafka record failed");
+  RETURN_NOT_OK_LOG(msg->ParseKafkaRecord(), ERROR, "parse kafka record failed");
 
   // TODO(duyuqi)
   // adding metrics for the 'duplication_mode_'.
@@ -237,7 +237,18 @@ Status Duplicator::WorkAtWalReplay(unique_ptr<DuplicateMsg> msg,
     return WorkAtWalReplayFinished(std::move(msg), expect_mode);
   }
   if (expect_mode == DuplicationMode::WAL_DUPLICATION) {
-    return queue_.BlockingPut(std::move(msg));
+    // Avoid using BlockingPut, because it will cause apply pool stuck indrection.
+    switch (queue_.Put(std::move(msg))) {
+      case QueueStatus::QUEUE_SUCCESS:
+        return Status::OK();
+      case QueueStatus::QUEUE_FULL:
+        return Status::Incomplete("queue full, put fail, please retry put again");
+      case QueueStatus::QUEUE_SHUTDOWN:
+        return Status::IllegalState("queue shutdown when replay wals");
+      default:
+        LOG_WITH_PREFIX(FATAL) << "impossble state";
+    }
+    __builtin_unreachable();
   }
   CHECK(DuplicationMode::REALTIME_DUPLICATION == expect_mode);
   // If expect_mode is realtime mode.
@@ -375,7 +386,7 @@ Status Duplicator::WorkAtRealtime(unique_ptr<DuplicateMsg> msg,
 
 string Duplicator::LogPrefix() const {
   return Substitute("duplicator info: confirmed opid $0, tablet id $1, peer uuid $2 ",
-                    last_confirmed_opid().ShortDebugString(),
+                    last_confirmed_opid_.ShortDebugString(),
                     tablet_replica_->tablet_id(),
                     tablet_replica_->permanent_uuid());
 }

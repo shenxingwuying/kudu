@@ -49,7 +49,6 @@ namespace duplicator {
 class ConnectorManager;
 class LogReplayer;
 
-
 // Duplicator is a wrapper for Connector,
 // It write ops to thirdparty destination storage system.
 class Duplicator {

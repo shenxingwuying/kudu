@@ -66,6 +66,9 @@ class KuduTableAlterer::Data {
 
     // The dimension label for tablet. Only set when the StepType is ADD_RANGE_PARTITION.
     boost::optional<std::string> dimension_label;
+
+    // Duplication Info
+    boost::optional<client::DuplicationInfo> dup_info;
   };
   std::vector<Step> steps_;
 

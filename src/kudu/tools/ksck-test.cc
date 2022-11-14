@@ -28,7 +28,6 @@
 #include <set>
 #include <sstream>
 #include <string>
-#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -1217,19 +1216,19 @@ TEST_F(KsckTest, TestBadTabletServer) {
       "Tablet tablet-id-0 of table 'test' is under-replicated: 1 replica(s) not RUNNING\n"
       "  ts-id-0 (<mock>): RUNNING [LEADER]\n"
       "  ts-id-1 (<mock>): TS unavailable\n"
-      "  ts-id-2 (<mock>): RUNNING\n");
+      "  ts-id-2 (<mock>): RUNNING [FOLLOWER]\n");
   ASSERT_STR_CONTAINS(
       err_stream_.str(),
       "Tablet tablet-id-1 of table 'test' is under-replicated: 1 replica(s) not RUNNING\n"
       "  ts-id-0 (<mock>): RUNNING [LEADER]\n"
       "  ts-id-1 (<mock>): TS unavailable\n"
-      "  ts-id-2 (<mock>): RUNNING\n");
+      "  ts-id-2 (<mock>): RUNNING [FOLLOWER]\n");
   ASSERT_STR_CONTAINS(
       err_stream_.str(),
       "Tablet tablet-id-2 of table 'test' is under-replicated: 1 replica(s) not RUNNING\n"
       "  ts-id-0 (<mock>): RUNNING [LEADER]\n"
       "  ts-id-1 (<mock>): TS unavailable\n"
-      "  ts-id-2 (<mock>): RUNNING\n");
+      "  ts-id-2 (<mock>): RUNNING [FOLLOWER]\n");
 
   CheckJsonStringVsKsckResults(KsckResultsToJsonString(), ksck_->results());
 }
@@ -1595,8 +1594,8 @@ TEST_F(KsckTest, TestMismatchedAssignments) {
                       "Tablet tablet-id-2 of table 'test' is under-replicated: "
                       "1 replica(s) not RUNNING\n"
                       "  ts-id-0 (<mock>): missing [LEADER]\n"
-                      "  ts-id-1 (<mock>): RUNNING\n"
-                      "  ts-id-2 (<mock>): RUNNING\n");
+                      "  ts-id-1 (<mock>): RUNNING [FOLLOWER]\n"
+                      "  ts-id-2 (<mock>): RUNNING [FOLLOWER]\n");
   ASSERT_STR_CONTAINS(err_stream_.str(),
                      ExpectedTableSummary("test",
                                           /*replication_factor=*/ 3,

@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 #pragma once
 
 #include <memory>
@@ -75,7 +76,7 @@ class DuplicationOpState : public OpState {
   boost::optional<OperationResultPB> error_;
 };
 
-// Executes the alter schema op.
+// Executes durable duplication op.
 class DuplicationOp : public Op {
  public:
   // TODO(duyuqi) duplication.
@@ -90,13 +91,13 @@ class DuplicationOp : public Op {
 
   void NewReplicateMsg(std::unique_ptr<consensus::ReplicateMsg>* replicate_msg) override;
 
-  // Executes a Prepare for the alter schema op.
+  // Executes a Prepare for the duplication op.
   Status Prepare() override;
 
   // Starts the DuplicationOp by assigning it a timestamp.
   Status Start() override;
 
-  // Executes an Apply for the alter schema op
+  // Executes an Apply for the duplication op
   Status Apply(consensus::CommitMsg** commit_msg) override;
 
   // Actually commits the op.

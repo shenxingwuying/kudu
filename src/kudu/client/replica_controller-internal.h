@@ -46,6 +46,8 @@ class ReplicaController {
 
   static bool is_voter(const KuduReplica& replica);
 
+  static bool is_duplicator(const KuduReplica& replica);
+
  private:
   ReplicaController();
 

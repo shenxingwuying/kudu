@@ -59,6 +59,7 @@
 #include "kudu/tools/tool_action_common.h"
 #include "kudu/util/flag_validators.h"
 #include "kudu/util/jsonreader.h"
+#include "kudu/util/monotime.h"
 #include "kudu/util/status.h"
 #include "kudu/util/string_case.h"
 
@@ -140,6 +141,13 @@ DEFINE_string(compression_type, "DEFAULT_COMPRESSION",
 DEFINE_string(default_value, "", "Default value for this column.");
 DEFINE_string(comment, "", "Comment for this column.");
 
+DEFINE_string(downstream_uri, "localhost:9092",
+              "Uri of destination storage system for duplication. Only support: Kafka brokers");
+DEFINE_string(downstream_type, "kafka",
+              "type of destination storage system for duplication, Only support kafka");
+DEFINE_string(downstream_options, "",
+              "options of destination storage system for duplication, not used now");
+
 DECLARE_bool(show_values);
 DECLARE_string(tables);
 
@@ -188,9 +196,12 @@ class TableLister {
         for (const auto* replica : token->tablet().replicas()) {
           const bool is_voter = ReplicaController::is_voter(*replica);
           const bool is_leader = replica->is_leader();
+          const bool is_duplicator = replica->is_duplicator();
           cout << Substitute("    $0 $1 $2:$3",
-              is_leader ? "L" : (is_voter ? "V" : "N"), replica->ts().uuid(),
-              replica->ts().hostname(), replica->ts().port()) << endl;
+                             is_leader ? "L" : (is_voter ? "V" : (is_duplicator ? "D" : "N")),
+                             replica->ts().uuid(), replica->ts().hostname(),
+                             replica->ts().port())
+               << endl;
         }
         cout << endl;
       }
@@ -218,6 +229,10 @@ namespace {
 
 const char* const kNewTableNameArg = "new_table_name";
 const char* const kColumnNameArg = "column_name";
+const char* const kDuplicatorNameArg = "duplicator_name";
+const char* const kDownstreamTypeArg = "downstream_type";
+const char* const kDownstreamUriArg = "downstream_uri";
+const char* const kDownstreamOptionsArg = "downstream_options";
 const char* const kNewColumnNameArg = "new_column_name";
 const char* const kKeyArg = "primary_key";
 const char* const kConfigNameArg = "config_name";
@@ -981,6 +996,77 @@ Status AddColumn(const RunnerContext& context) {
   return alterer->Alter();
 }
 
+client::DuplicationDownstream StringToDuplicationDownstream(const string& type) {
+  string new_type;
+  kudu::ToLowerCase(type, &new_type);
+  if (new_type == "kafka") {
+    return client::DuplicationDownstream::KAFKA;
+  }
+  return client::DuplicationDownstream::UNKNOWN;
+}
+
+Status AddDuplicator(const RunnerContext& context) {
+  const string& table_name = FindOrDie(context.required_args, kTableNameArg);
+  const string& duplicator_name = FindOrDie(context.required_args, kDuplicatorNameArg);
+
+  client::DuplicationInfo info;
+  info.name = duplicator_name;
+  if (!FLAGS_downstream_type.empty()) {
+    info.type = StringToDuplicationDownstream(FLAGS_downstream_type);
+  }
+  if (!FLAGS_downstream_uri.empty()) {
+    info.uri = FLAGS_downstream_uri;
+  }
+  if (!FLAGS_downstream_options.empty()) {
+    info.options = FLAGS_downstream_options;
+  }
+
+  client::sp::shared_ptr<KuduClient> client;
+  RETURN_NOT_OK(CreateKuduClient(context, &client));
+  unique_ptr<KuduTableAlterer> alterer(client->NewTableAlterer(table_name));
+  alterer->AddDuplicationInfo(info);
+  RETURN_NOT_OK(alterer->Alter());
+  bool is_altering = true;
+  constexpr const int kMaxRetries = 40;
+  int i = 0;
+  while (is_altering && i++ < kMaxRetries) {
+    client->IsAlterTableInProgress(table_name, &is_altering);
+    SleepFor(MonoDelta::FromMilliseconds(500));
+  }
+  if (is_altering) {
+    return Status::TimedOut("add duplication timeout");
+  }
+  return Status::OK();
+}
+
+Status DropDuplicator(const RunnerContext& context) {
+  const string& table_name = FindOrDie(context.required_args, kTableNameArg);
+  const string& duplicator_name = FindOrDie(context.required_args, kDuplicatorNameArg);
+
+  client::DuplicationInfo info;
+  info.name = duplicator_name;
+  if (!FLAGS_downstream_type.empty()) {
+    info.type = StringToDuplicationDownstream(FLAGS_downstream_type);
+  }
+
+  client::sp::shared_ptr<KuduClient> client;
+  RETURN_NOT_OK(CreateKuduClient(context, &client));
+  unique_ptr<KuduTableAlterer> alterer(client->NewTableAlterer(table_name));
+  alterer->DropDuplicationInfo(info);
+  RETURN_NOT_OK(alterer->Alter());
+  bool is_altering = true;
+  constexpr const int kMaxRetries = 40;
+  int i = 0;
+  while (is_altering && i++ < kMaxRetries) {
+    client->IsAlterTableInProgress(table_name, &is_altering);
+    SleepFor(MonoDelta::FromMilliseconds(500));
+  }
+  if (is_altering) {
+    return Status::TimedOut("drop duplication timeout");
+  }
+  return Status::OK();
+}
+
 Status DeleteColumn(const RunnerContext& context) {
   const string& table_name = FindOrDie(context.required_args, kTableNameArg);
   const string& column_name = FindOrDie(context.required_args, kColumnNameArg);
@@ -1503,12 +1589,31 @@ unique_ptr<Mode> BuildTableMode() {
       .AddOptionalParameter("comment")
       .Build();
 
+  unique_ptr<Action> add_duplicator =
+      ActionBuilder("add_duplicator", &AddDuplicator)
+      .Description("Add a duplicator for a table")
+      .AddRequiredParameter({ kMasterAddressesArg, kMasterAddressesArgDesc })
+      .AddRequiredParameter({ kTableNameArg, "Name of the table to alter" })
+      .AddRequiredParameter({ kDuplicatorNameArg, "Name of the duplicator to add" })
+      .AddOptionalParameter(kDownstreamTypeArg)
+      .AddOptionalParameter(kDownstreamUriArg)
+      .AddOptionalParameter(kDownstreamOptionsArg)
+      .Build();
 
   unique_ptr<Action> delete_column =
       ClusterActionBuilder("delete_column", &DeleteColumn)
       .Description("Delete a column")
       .AddRequiredParameter({ kTableNameArg, "Name of the table to alter" })
       .AddRequiredParameter({ kColumnNameArg, "Name of the table column to delete" })
+      .Build();
+
+  unique_ptr<Action> drop_duplicator =
+      ActionBuilder("drop_duplicator", &DropDuplicator)
+      .Description("Drop a duplicator for a table")
+      .AddRequiredParameter({ kMasterAddressesArg, kMasterAddressesArgDesc })
+      .AddRequiredParameter({ kTableNameArg, "Name of the table to alter" })
+      .AddRequiredParameter({ kDuplicatorNameArg, "Name of the duplicator to drop" })
+      .AddOptionalParameter(kDownstreamTypeArg)
       .Build();
 
   unique_ptr<Action> set_replication_factor =
@@ -1547,6 +1652,7 @@ unique_ptr<Mode> BuildTableMode() {
   return ModeBuilder("table")
       .Description("Operate on Kudu tables")
       .AddAction(std::move(add_column))
+      .AddAction(std::move(add_duplicator))
       .AddAction(std::move(add_range_partition))
       .AddAction(std::move(column_remove_default))
       .AddAction(std::move(column_set_block_size))
@@ -1559,6 +1665,7 @@ unique_ptr<Mode> BuildTableMode() {
       .AddAction(std::move(delete_column))
       .AddAction(std::move(delete_table))
       .AddAction(std::move(describe_table))
+      .AddAction(std::move(drop_duplicator))
       .AddAction(std::move(drop_range_partition))
       .AddAction(std::move(get_extra_configs))
       .AddAction(std::move(list_tables))

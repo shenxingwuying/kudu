@@ -35,6 +35,8 @@ allprojects {
   // top level parent project.
   repositories {
     maven { url "https://jfrog-internal.sensorsdata.cn/artifactory/maven-public" }
+    maven { url "https://jfrog-internal.sensorsdata.cn/artifactory/spring-plugin-cache" }
+    maven { url "https://jfrog-internal.sensorsdata.cn/artifactory/gradle-plugin-cache" }
     maven { url 'http://maven.aliyun.com/nexus/content/groups/public/' }
     mavenCentral()
     mavenLocal()
