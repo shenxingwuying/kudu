@@ -220,6 +220,40 @@ message DeleteTabletResponsePB {
   optional TabletServerErrorPB error = 1;
 }
 
+enum CompactType {
+  kCompaction = 1;
+}
+
+enum CompactionType {
+  // Compact all of rowsets, delta files.
+  kCompactRowsets = 1;
+  // Compact all delta files as one.
+  kMajorDeltaCompaction = 2;
+  //
+  kMinorDeltaCompaction = 3;
+  kUndoDeltaBlockGc = 4;
+  kDeleteRowsetGc = 5;
+  kFlushMemrowset = 6;
+  kFlushDeltarowset = 7;
+  kLogGc = 8;
+};
+
+// 1. Compact table_name's all tablets.
+message CompactRequestPB {
+  message CompactionInfo {  
+    required CompactionType compaction_type = 1;
+    optional string table_name = 2;
+    optional string tablet_id = 3;
+    optional string tserver_address = 4;
+  };
+
+  optional CompactionInfo compaction_info = 1;
+};
+
+message CompactResponsePB {
+  optional TabletServerErrorPB error = 1;
+};
+
 // Enum of the server's Tablet Manager state: currently this is only
 // used for assertions, but this can also be sent to the master.
 enum TSTabletManagerStatePB {
@@ -263,6 +297,8 @@ service TabletServerAdminService {
   // Request that a tablet participate in a transaction, or update the state of
   // an existing transaction participant.
   rpc ParticipateInTransaction(ParticipantRequestPB) returns (ParticipantResponsePB);
+
+  rpc Compact(CompactRequestPB) returns (CompactResponsePB);
 }
 
 message QuiesceTabletServerRequestPB {

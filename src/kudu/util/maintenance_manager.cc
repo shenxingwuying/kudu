@@ -535,6 +535,11 @@ pair<MaintenanceOp*, string> MaintenanceManager::FindBestOp() {
   return {nullptr, "no ops with positive improvement"};
 }
 
+Status MaintenanceManager::ManualCompaction(std::unique_ptr<MaintenanceOp> op_ptr) {
+  MaintenanceOp* op = op_ptr.release();
+  return (thread_pool_->Submit([this, op] { this->LaunchOp(op); }));
+}
+
 double MaintenanceManager::AdjustedPerfScore(double perf_improvement,
                                              double workload_score,
                                              int32_t priority) {

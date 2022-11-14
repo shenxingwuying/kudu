@@ -88,6 +88,7 @@
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_metadata.h"
 #include "kudu/tablet/tablet_metrics.h"
+#include "kudu/tablet/tablet_mm_ops.h"
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/tablet/txn_coordinator.h"
 #include "kudu/transactions/transactions.pb.h"
@@ -1396,6 +1397,25 @@ void TabletServiceAdminImpl::ParticipateInTransaction(const ParticipantRequestPB
                          TabletServerErrorPB::UNKNOWN_ERROR,
                          context);
   }
+}
+
+void TabletServiceAdminImpl::Compact(const CompactRequestPB* req,
+                                     CompactResponsePB* resp,
+                                     rpc::RpcContext* context) {
+  scoped_refptr<TabletReplica> replica;
+  if (!LookupRunningTabletReplicaOrRespond(
+          server_->tablet_manager(), req->compaction_info().tablet_id(), resp, context, &replica)) {
+    return;
+  }
+  shared_ptr<Tablet> tablet;
+  TabletServerErrorPB::Code error_code;
+  Status s = GetTabletRef(replica, &tablet, &error_code);
+  if (PREDICT_FALSE(!s.ok())) {
+    SetupErrorAndRespond(resp->mutable_error(), s, error_code, context);
+    return;
+  }
+
+  tablet->ManualCompact(req, resp);
 }
 
 bool TabletServiceAdminImpl::SupportsFeature(uint32_t feature) const {

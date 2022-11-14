@@ -47,6 +47,7 @@
 #include "kudu/tablet/tablet_mem_trackers.h"
 #include "kudu/tablet/tablet_metadata.h"
 #include "kudu/tablet/txn_participant.h"
+#include "kudu/tserver/tserver_admin.pb.h"
 #include "kudu/util/bloom_filter.h"
 #include "kudu/util/locks.h"
 #include "kudu/util/maintenance_manager.h"
@@ -292,6 +293,8 @@ class Tablet {
   typedef int CompactFlags;
 
   Status Compact(CompactFlags flags);
+
+  Status ManualCompact(const tserver::CompactRequestPB* req, tserver::CompactResponsePB* resp);
 
   // Update the statistics for performing a compaction.
   void UpdateCompactionStats(MaintenanceOpStats* stats);

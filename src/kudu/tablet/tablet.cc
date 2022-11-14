@@ -2276,6 +2276,14 @@ Status Tablet::Compact(CompactFlags flags) {
   return DoMergeCompactionOrFlush(input, TabletMetadata::kNoMrsFlushed, {});
 }
 
+Status Tablet::ManualCompact(const tserver::CompactRequestPB* req,
+                             tserver::CompactResponsePB* resp) {
+  tablet::CompactRowSetsOp op(this);
+  op.Prepare();
+  op.Perform();
+  return Status::OK();
+}
+
 void Tablet::UpdateCompactionStats(MaintenanceOpStats* stats) {
 
   if (mvcc_.GetCleanTimestamp() == Timestamp::kInitialTimestamp &&

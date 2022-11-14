@@ -236,6 +236,10 @@ class TabletServiceAdminImpl : public TabletServerAdminServiceIf {
                                 ParticipantResponsePB* resp,
                                 rpc::RpcContext* context) override;
 
+  void Compact(const CompactRequestPB* req,
+               CompactResponsePB* resp,
+               rpc::RpcContext* context) override;
+
   bool SupportsFeature(uint32_t feature) const override;
 
  private:

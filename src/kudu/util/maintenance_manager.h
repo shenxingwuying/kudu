@@ -34,6 +34,7 @@
 
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
+#include "kudu/util/blocking_queue.h"
 #include "kudu/util/condition_variable.h"
 #include "kudu/util/locks.h"
 #include "kudu/util/maintenance_manager_metrics.h"
@@ -334,6 +335,8 @@ class MaintenanceManager : public std::enable_shared_from_this<MaintenanceManage
     memory_pressure_func_ = std::move(f);
   }
 
+  Status ManualCompaction(std::unique_ptr<MaintenanceOp> op);
+
   static const Options kDefaultOptions;
 
  private:
@@ -439,6 +442,8 @@ class MaintenanceManager : public std::enable_shared_from_this<MaintenanceManage
 
   // MM-specific metrics.
   MaintenanceManagerMetrics metrics_;
+
+  BlockingQueue<std::unique_ptr<MaintenanceOp>> manual_compaction_queue_;
 
   DISALLOW_COPY_AND_ASSIGN(MaintenanceManager);
 };
