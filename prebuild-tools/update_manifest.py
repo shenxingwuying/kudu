@@ -23,8 +23,8 @@ if __name__ == "__main__":
             data.append(json.load(infile, object_pairs_hook=OrderedDict))
 
     # 只记录最近20次记录
+    data.sort(key=lambda x: x["lastUpdated"])
     if len(data) > 20:
-        data.sort(key=lambda x: x["lastUpdated"])
         data = data[-20:]
 
     package_index = {"package_index": []}
