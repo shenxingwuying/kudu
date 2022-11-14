@@ -60,7 +60,7 @@ using kudu::consensus::RaftPeerPB;
 using std::unique_ptr;
 
 static std::string kTopicName = "kudu_profile_record_stream";
-static constexpr int kOffsetPort = 5;
+static constexpr const int kOffsetPort = 5;
 // Kafka Uri.
 static std::string kBrokers =
     Substitute("localhost:$0", duplication::kafka::kKafkaBasePort + kOffsetPort);
@@ -116,7 +116,7 @@ class DuplicationReplayWalTest : public tablet::TabletReplicaTestBase {
 
     consumer_->subscribe({kTopicName});
 
-    std::chrono::milliseconds timeout(2000);
+    std::chrono::milliseconds timeout(3000);
     int count = 0;
     int max_batch_size = 4;
     std::vector<cppkafka::Message> messages;

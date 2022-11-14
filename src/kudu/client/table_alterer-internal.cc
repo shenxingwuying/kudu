@@ -24,12 +24,14 @@
 #include <glog/logging.h>
 #include <google/protobuf/stubs/common.h>
 
+#include "kudu/client/client.h"
 #include "kudu/client/schema-internal.h"
 #include "kudu/client/schema.h"
 #include "kudu/common/row_operations.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.h"
 #include "kudu/common/wire_protocol.pb.h"
+#include "kudu/consensus/metadata.pb.h"
 #include "kudu/master/master.pb.h"
 
 using std::string;
@@ -37,6 +39,7 @@ using std::string;
 namespace kudu {
 namespace client {
 
+using consensus::DuplicationInfoPB;
 using master::AlterTableRequestPB;
 
 KuduTableAlterer::Data::Data(KuduClient* client, string name)
@@ -186,6 +189,40 @@ Status KuduTableAlterer::Data::ToRequest(AlterTableRequestPB* req) {
 
         encoder.Add(lower_bound_type, *s.lower_bound);
         encoder.Add(upper_bound_type, *s.upper_bound);
+        break;
+      }
+      case AlterTableRequestPB::ADD_DUPLICATION:
+      {
+        DuplicationInfoPB* info = pb_step->mutable_add_duplication()->mutable_dup_info();
+        info->set_name(s.dup_info->name);
+        if (s.dup_info->type == DuplicationDownstream::KAFKA) {
+          info->set_type(consensus::KAFKA);
+        } else {
+          LOG(FATAL) << "unknown, unsupported downstream type";
+        }
+        if (!s.dup_info->uri.empty()) {
+          info->set_uri(s.dup_info->uri);
+          if (!s.dup_info->options.empty()) {
+            info->set_options(s.dup_info->options);
+          }
+        }
+        break;
+      }
+      case AlterTableRequestPB::DROP_DUPLICATION:
+      {
+        DuplicationInfoPB* info = pb_step->mutable_drop_duplication()->mutable_dup_info();
+        info->set_name(s.dup_info->name);
+        if (s.dup_info->type == DuplicationDownstream::KAFKA) {
+          info->set_type(consensus::KAFKA);
+        } else {
+          LOG(FATAL) << "unknown, unsupported downstream type";
+        }
+        if (!s.dup_info->uri.empty()) {
+          info->set_uri(s.dup_info->uri);
+          if (!s.dup_info->options.empty()) {
+            info->set_options(s.dup_info->options);
+          }
+        }
         break;
       }
       default:

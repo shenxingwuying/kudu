@@ -40,7 +40,6 @@
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/client/tablet-internal.h"
 #include "kudu/client/tablet_server-internal.h"
-#include "kudu/common/column_predicate.h"
 #include "kudu/common/common.pb.h"
 #include "kudu/common/encoded_key.h"
 #include "kudu/common/partition.h"
@@ -60,6 +59,10 @@
 #include "kudu/util/net/net_util.h"
 #include "kudu/util/slice.h"
 #include "kudu/util/status.h"
+
+namespace kudu {
+class ColumnPredicate;
+}  // namespace kudu
 
 using std::string;
 using std::map;
@@ -483,8 +486,10 @@ Status KuduScanTokenBuilder::Data::Build(vector<KuduScanToken*>* tokens) {
                                                     r.ts->location());
       bool is_leader = r.role == consensus::RaftPeerPB::LEADER;
       bool is_voter = is_leader || r.role == consensus::RaftPeerPB::FOLLOWER;
+      bool is_duplicator = r.role == consensus::RaftPeerPB::DUP_LEARNER;
       unique_ptr<KuduReplica> client_replica(new KuduReplica);
       client_replica->data_ = new KuduReplica::Data(is_leader, is_voter,
+                                                    is_duplicator,
                                                     std::move(client_ts));
       client_replicas.push_back(client_replica.release());
     }

@@ -31,6 +31,7 @@
 
 #include "kudu/gutil/port.h"
 #include "kudu/util/monotime.h"
+#include "kudu/util/test_macros.h"
 
 #define SKIP_IF_SLOW_NOT_ALLOWED() do { \
   if (!AllowSlowTests()) { \
@@ -43,6 +44,11 @@
   AssertEventually(expr); \
   NO_PENDING_FATALS(); \
 } while (0)
+
+#define ASSERT_EVENTUALLY_WITH_TIMEOUT(expr, timeout) do { \
+  AssertEventually(expr, timeout); \
+  NO_PENDING_FATALS(); \
+} while (0);
 
 namespace google {
 class FlagSaver;

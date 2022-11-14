@@ -290,7 +290,6 @@ Status WriteOp::Apply(CommitMsg** commit_msg) {
     if (state()->tablet_replica()->shared_consensus()->ShouldDuplication()) {
       // Use raft to replicate prepare log for duplicate_request
       // and then commit the message.
-      const auto& dup_info = *state()->tablet_replica()->consensus()->duplication_info_pb();
 
       // Step 1. duplicate to the remote destination storage system.
       Status status = Duplicate();
@@ -299,13 +298,15 @@ Status WriteOp::Apply(CommitMsg** commit_msg) {
         // This status, return the Apply() status, ignore the duplication op status.
         return Status::OK();
       }
+      const auto& dup_info =
+          *CHECK_NOTNULL(state()->tablet_replica()->consensus()->duplication_info_pb());
 
       // Step 2. Commit a special log for duplicate Msg.
       TabletReplica* tablet_replica = state()->tablet_replica();
       consensus::OpId last_confirmed_opid = tablet_replica->last_confirmed_opid();
       consensus::OpId last_committed_opid = tablet_replica->duplicator_last_committed_opid();
 
-      if (last_confirmed_opid.term() >= last_committed_opid.term() ||
+      if (last_confirmed_opid.term() >= last_committed_opid.term() &&
           last_confirmed_opid.index() > last_committed_opid.index()) {
         consensus::DuplicateRequestPB request;
         consensus::DuplicateResponsePB response;

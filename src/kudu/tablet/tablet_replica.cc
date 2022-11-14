@@ -36,6 +36,7 @@
 #include "kudu/consensus/consensus_peers.h"
 #include "kudu/consensus/log.h"
 #include "kudu/consensus/log_anchor_registry.h"
+#include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid.pb.h"
 #include "kudu/consensus/opid_util.h"
 #include "kudu/consensus/raft_consensus.h"
@@ -696,8 +697,7 @@ log::RetentionIndexes TabletReplica::GetRetentionIndexes() const {
   log::LogAnchor anchor;
   if (consensus_->HasDuplicator()) {
     CHECK_GE(duplicator_last_committed_opid_.index(), 0);
-    log_anchor_registry_->Register(
-        duplicator_last_committed_opid_.index(), "duplicator", &anchor);
+    log_anchor_registry_->Register(duplicator_last_committed_opid_.index(), "duplicator", &anchor);
   }
   SCOPED_CLEANUP({
     if (consensus_->HasDuplicator()) {
@@ -803,9 +803,8 @@ Status TabletReplica::StartFollowerOp(const scoped_refptr<ConsensusRound>& round
       const consensus::DuplicateRequestPB& request = replicate_msg->duplicate_request();
       consensus::DuplicateResponsePB response;
       auto op_state = std::make_unique<DuplicationOpState>(this, request, response);
-      auto* duplication_info_pb = consensus_->duplication_info_pb();
       op.reset(new DuplicationOp(
-          std::move(op_state), consensus::REPLICA, request.op_id(), *duplication_info_pb));
+          std::move(op_state), consensus::REPLICA, request.op_id(), request.dup_info()));
       break;
     }
     default:

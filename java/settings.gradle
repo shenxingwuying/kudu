@@ -18,6 +18,15 @@
 // This file contains the configuration of the project hierarchy.
 // Mainly we just define what subprojects are in the build.
 
+pluginManagement {
+    println "sensorsdata jfrog pluginManagement"
+    repositories {
+        maven { url "https://jfrog-internal.sensorsdata.cn/artifactory/gradle-plugin-cache" }
+        maven { url "https://jfrog-internal.sensorsdata.cn/artifactory/spring-plugin-cache" }
+        gradlePluginPortal()
+    }
+}
+
 rootProject.name = "kudu-parent"
 include "kudu-backup"
 include "kudu-backup-common"

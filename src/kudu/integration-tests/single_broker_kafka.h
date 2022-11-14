@@ -46,16 +46,18 @@ class SingleBrokerKafka {
   }
 
   void InitKafka() {
-    std::string start_cmd = Substitute("$0 start $1", command_, offset_port_);
+    string start_cmd = Substitute("$0 start $1", command_, offset_port_);
+    LOG(INFO) << "Init kafka cmd: " << start_cmd;
     Status status = Subprocess::Call({"/bin/bash", "-c", start_cmd});
     if (!status.ok()) {
       LOG(FATAL) << "start kafka failed";
     }
-    LOG(INFO) << "init kafka success, cmd: " << start_cmd;
+    LOG(INFO) << "Init kafka success, cmd: " << start_cmd;
   }
 
   void StartKafka() {
-    std::string start_cmd = Substitute("$0 start_only $1", command_, offset_port_);
+    string start_cmd = Substitute("$0 start_only $1", command_, offset_port_);
+    LOG(INFO) << "start kafka cmd: " << start_cmd;
     Status status = Subprocess::Call({"/bin/bash", "-c", start_cmd});
     if (!status.ok()) {
       LOG(FATAL) << "start kafka failed";
@@ -64,7 +66,8 @@ class SingleBrokerKafka {
   }
 
   void StopKafka() {
-    std::string stop_cmd = Substitute("$0 stop_only $1", command_, offset_port_);
+    string stop_cmd = Substitute("$0 stop_only $1", command_, offset_port_);
+    LOG(INFO) << "stop kafka cmd: " << stop_cmd;
     Status status = Subprocess::Call({"/bin/bash", "-c", stop_cmd});
     if (!status.ok()) {
       LOG(FATAL) << "start kafka failed";
@@ -73,7 +76,8 @@ class SingleBrokerKafka {
   }
 
   void DestroyKafka() {
-    std::string stop_cmd = Substitute("$0 stop $1", command_, offset_port_);
+    string stop_cmd = Substitute("$0 stop $1", command_, offset_port_);
+    LOG(INFO) << "destroy kafka cmd: " << stop_cmd;
     Status status = Subprocess::Call({"/bin/bash", "-c", stop_cmd});
     if (!status.ok()) {
       LOG(FATAL) << "stop kafka failed";
@@ -82,7 +86,7 @@ class SingleBrokerKafka {
   }
 
  private:
-  std::string command_;
+  string command_;
   int offset_port_ = 0;
 };
 

@@ -360,8 +360,7 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
 
   void ShutdownDuplicator();
 
-  Status Duplicate(WriteOpState* op_state,
-                   Tablet::DuplicationMode mode) {
+  Status Duplicate(WriteOpState* op_state, Tablet::DuplicationMode mode) {
     std::lock_guard<Mutex> l_lock(duplicator_mutex_);
     if (!duplicator_ || !duplicator_->is_started()) {
       DCHECK(!op_state->row_ops().empty());
@@ -387,7 +386,8 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
 
   // OpId what less or equal, should replicate to remote destination.
   void set_duplicator_last_committed_opid(const consensus::OpId& duplicator_last_committed_opid) {
-    if (OpIdLessThan(duplicator_last_committed_opid_, duplicator_last_committed_opid)) {
+    if (!duplicator_last_committed_opid_.IsInitialized() ||
+        OpIdLessThan(duplicator_last_committed_opid_, duplicator_last_committed_opid)) {
       duplicator_last_committed_opid_ = duplicator_last_committed_opid;
     }
   }

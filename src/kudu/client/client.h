@@ -490,6 +490,7 @@ class KUDU_EXPORT KuduTransaction :
    private:
     friend class KuduTransaction;
     class KUDU_NO_EXPORT Data;
+
     Data* data_; // Owned.
 
     DISALLOW_COPY_AND_ASSIGN(SerializationOptions);
@@ -1021,6 +1022,9 @@ class KUDU_EXPORT KuduReplica {
   /// any time.
   bool is_leader() const;
 
+  /// @return Whether or not this replica is a duplicator.
+  bool is_duplicator() const;
+
   /// @return The tablet server hosting this remote replica.
   const KuduTabletServer& ts() const;
 
@@ -1067,6 +1071,18 @@ class KUDU_EXPORT KuduTablet {
   Data* data_;
 
   DISALLOW_COPY_AND_ASSIGN(KuduTablet);
+};
+
+enum class DuplicationDownstream {
+  UNKNOWN = 0,
+  KAFKA
+};
+
+struct DuplicationInfo {
+  std::string name;
+  DuplicationDownstream type;
+  std::string uri;
+  std::string options;
 };
 
 /// @brief A helper class to create a new table with the desired options.
@@ -1248,6 +1264,17 @@ class KUDU_EXPORT KuduTableCreator {
   ///   The table's extra configuration properties.
   /// @return Reference to the modified table creator.
   KuduTableCreator& extra_configs(const std::map<std::string, std::string>& extra_configs);
+
+
+  /// With one or more duplicators for tablet of table
+  ///
+  /// If the value of the kv pair is empty, the property will be ignored.
+  ///
+  /// @param [in] extra_configs
+  ///   The table's extra configuration properties.
+  /// @return Reference to the modified table creator.
+  KuduTableCreator& duplication(const DuplicationInfo& dup_info);
+
 
   /// Set the timeout for the table creation operation.
   ///
@@ -1783,6 +1810,11 @@ class KUDU_EXPORT KuduTableAlterer {
       KuduPartialRow* upper_bound,
       KuduTableCreator::RangePartitionBound lower_bound_type = KuduTableCreator::INCLUSIVE_BOUND,
       KuduTableCreator::RangePartitionBound upper_bound_type = KuduTableCreator::EXCLUSIVE_BOUND);
+
+
+  KuduTableAlterer* AddDuplicationInfo(const DuplicationInfo& info);
+
+  KuduTableAlterer* DropDuplicationInfo(const DuplicationInfo& info);
 
   /// Change the table's extra configuration properties.
   ///

@@ -30,9 +30,9 @@
 #include <glog/logging.h>
 
 #include "kudu/common/row_operations.h"
-#include "kudu/consensus/opid.pb.h"
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/metadata.pb.h"
+#include "kudu/consensus/opid.pb.h"
 #include "kudu/duplicator/kafka/kafka.pb.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/tablet/ops/write_op.h"

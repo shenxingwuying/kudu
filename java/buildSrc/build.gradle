@@ -20,10 +20,12 @@
 repositories {
   // sensorsdata jfrog repo.
   maven { url "https://jfrog-internal.sensorsdata.cn/artifactory/maven-public" }
+  maven { url "https://jfrog-internal.sensorsdata.cn/artifactory/spring-plugin-cache" }
+  maven { url "https://jfrog-internal.sensorsdata.cn/artifactory/gradle-plugin-cache" }
   mavenCentral()
   // maven { url "https://clojars.org/repo" } // Only used for the clojure plugin below.
-  maven { url "https://repo.spring.io/plugins-release" } // Only used for the propdeps plugin below.
-  maven { url "https://plugins.gradle.org/m2/" }
+  // maven { url "https://repo.spring.io/plugins-release" } // Only used for the propdeps plugin below.
+  // maven { url "https://plugins.gradle.org/m2/" }
 }
 
 // Manage plugin dependencies since the plugin block can't be used in included build scripts yet.

@@ -1098,7 +1098,7 @@ Status RaftConsensus::Update(const ConsensusRequestPB* request,
 
 // Helper function to check if the op is a no-op op.
 static bool IsConsensusOnlyOperation(OperationType op_type) {
-  return op_type == NO_OP || op_type == CHANGE_CONFIG_OP || op_type == DUPLICATE_OP;
+  return op_type == NO_OP || op_type == CHANGE_CONFIG_OP;
 }
 
 Status RaftConsensus::StartFollowerOpUnlocked(const ReplicateRefPtr& msg) {

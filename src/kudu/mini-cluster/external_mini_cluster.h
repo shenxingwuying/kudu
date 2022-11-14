@@ -230,9 +230,6 @@ struct ExternalMiniClusterOptions {
   // Default: empty
   LocationInfo location_info;
 
-  // Default: false
-  bool enable_duplication;
-
 #if !defined(NO_CHRONY)
   // Number of NTP servers to start as part of the cluster. The NTP servers are
   // used as true time references for the NTP client built into masters and

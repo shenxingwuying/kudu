@@ -10,17 +10,6 @@ variables:
 stages:
   - full_parallel
 
-cache:
-  key: kudu_114_5_java_cache
-  when: 'on_success'
-  paths:
-    - ${GRADLE_USER_HOME}/caches
-    - ${GRADLE_USER_HOME}/wrapper
-  policy: pull-push
-
-stages:
-  - full_parallel
-
 job ilint:
   stage: full_parallel
   script:

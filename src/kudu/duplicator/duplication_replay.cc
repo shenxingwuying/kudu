@@ -51,6 +51,7 @@
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/tserver/tserver.pb.h"
 #include "kudu/util/metrics.h"
+#include "kudu/util/monotime.h"
 #include "kudu/util/pb_util.h"
 #include "kudu/util/scoped_cleanup.h"
 #include "kudu/util/threadpool.h"
@@ -209,9 +210,20 @@ Status LogReplayer::Replay(int64_t task_id) {
               tablet->DecodeWriteOperations(&inserts_schema, op_state_ptr.get()),
               Substitute("Could not decode row operations: $0",
                          SecureDebugString(op_state_ptr->request()->row_operations())));
-
-          RETURN_NOT_OK(tablet_replica_->Duplicate(
-              op_state_ptr.get(), tablet::Tablet::DuplicationMode::WAL_DUPLICATION));
+          while (true) {
+            Status status = tablet_replica_->Duplicate(
+                op_state_ptr.get(), tablet::Tablet::DuplicationMode::WAL_DUPLICATION);
+            if (status.ok()) {
+              break;
+            }
+            if (status.IsIncomplete()) {
+              // TODO(duyuqi) exponiential backoff.
+              SleepFor(MonoDelta::FromMilliseconds(100));
+              continue;
+            }
+            // Other status (program is shutdown)
+            return status;
+          }
           dup_write_count++;
           ops_count += op_state_ptr->row_ops().size();
           break;

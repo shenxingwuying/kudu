@@ -104,6 +104,7 @@
 using kudu::client::internal::AsyncLeaderMasterRpc;
 using kudu::client::internal::MetaCache;
 using kudu::client::sp::shared_ptr;
+using kudu::consensus::DuplicationInfoPB;
 using kudu::consensus::RaftPeerPB;
 using kudu::master::AlterTableRequestPB;
 using kudu::master::AlterTableResponsePB;
@@ -265,6 +266,27 @@ string GetShortVersionString() {
 string GetAllVersionInfo() {
   return VersionInfo::GetAllVersionInfo();
 }
+
+namespace {
+bool ToDuplicationInfoPB(const DuplicationInfo& info, consensus::DuplicationInfoPB* dup_info) {
+  dup_info->set_name(info.name);
+  switch (info.type) {
+    case DuplicationDownstream::KAFKA:
+      dup_info->set_type(consensus::KAFKA);
+      break;
+    default:
+      LOG(WARNING) << "not support DuplicationDownstream";
+      return false;
+  }
+  if (!info.uri.empty()) {
+    dup_info->set_uri(info.uri);
+  }
+  if (!info.options.empty()) {
+    dup_info->set_options(info.options);
+  }
+  return true;
+}
+}  // namespace
 
 KuduClientBuilder::KuduClientBuilder()
   : data_(new KuduClientBuilder::Data()) {
@@ -647,8 +669,9 @@ Status KuduClient::GetTablet(const string& tablet_id, KuduTablet** tablet) {
     // TODO(aserbin): try to use member_type instead of role for metacache.
     bool is_leader = role == RaftPeerPB::LEADER;
     bool is_voter = is_leader || role == RaftPeerPB::FOLLOWER;
+    bool is_duplicator = role == RaftPeerPB::DUP_LEARNER;
     unique_ptr<KuduReplica> replica(new KuduReplica);
-    replica->data_ = new KuduReplica::Data(is_leader, is_voter, std::move(ts));
+    replica->data_ = new KuduReplica::Data(is_leader, is_voter, is_duplicator, std::move(ts));
 
     replicas->push_back(replica.release());
     return Status::OK();
@@ -870,6 +893,11 @@ KuduTableCreator& KuduTableCreator::extra_configs(const map<string, string>& ext
   return *this;
 }
 
+KuduTableCreator& KuduTableCreator::duplication(const client::DuplicationInfo& dup_info) {
+  data_->dup_info_ = dup_info;
+  return *this;
+}
+
 KuduTableCreator& KuduTableCreator::timeout(const MonoDelta& timeout) {
   data_->timeout_ = timeout;
   return *this;
@@ -907,6 +935,10 @@ Status KuduTableCreator::Create() {
   if (data_->extra_configs_) {
     req.mutable_extra_configs()->insert(data_->extra_configs_->begin(),
                                         data_->extra_configs_->end());
+  }
+  if (data_->dup_info_ != boost::none) {
+    DuplicationInfoPB* dup_info = req.add_dup_infos();
+    CHECK(ToDuplicationInfoPB(data_->dup_info_.get(), dup_info));
   }
   if (data_->owner_ != boost::none) {
     req.set_owner(data_->owner_.get());
@@ -1460,6 +1492,20 @@ KuduTableAlterer* KuduTableAlterer::DropRangePartition(
                  upper_bound_type };
   data_->steps_.emplace_back(std::move(s));
   data_->has_alter_partitioning_steps = true;
+  return this;
+}
+
+KuduTableAlterer* KuduTableAlterer::AddDuplicationInfo(const client::DuplicationInfo& info) {
+  Data::Step s {AlterTableRequestPB::ADD_DUPLICATION, nullptr};
+  s.dup_info = info;
+  data_->steps_.emplace_back(std::move(s));
+  return this;
+}
+
+KuduTableAlterer* KuduTableAlterer::DropDuplicationInfo(const client::DuplicationInfo& info) {
+  Data::Step s {AlterTableRequestPB::DROP_DUPLICATION, nullptr};
+  s.dup_info = info;
+  data_->steps_.emplace_back(std::move(s));
   return this;
 }
 
@@ -2092,6 +2138,10 @@ KuduReplica::~KuduReplica() {
 
 bool KuduReplica::is_leader() const {
   return data_->is_leader_;
+}
+
+bool KuduReplica::is_duplicator() const {
+  return data_->is_duplicator_;
 }
 
 const KuduTabletServer& KuduReplica::ts() const {
