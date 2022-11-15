@@ -68,10 +68,6 @@ class KuduClient;
 class KuduTable;
 } // namespace client
 
-namespace consensus {
-class DuplicationInfoPB;
-} // namespace consensus
-
 namespace tablet {
 class FuzzTest;
 } // namespace tablet

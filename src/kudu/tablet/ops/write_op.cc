@@ -585,7 +585,9 @@ void WriteOpState::AcquireRowLocks(LockManager* lock_manager) {
   rows_lock_ = ScopedRowLock(lock_manager, this, keys, LockManager::LOCK_EXCLUSIVE);
 }
 
-void WriteOpState::ReleaseRowLocks() { rows_lock_.Release(); }
+void WriteOpState::ReleaseRowLocks() {
+  rows_lock_.Release();
+}
 
 void WriteOpState::ReleaseTxnLock() {
   shared_lock<rw_semaphore> temp;

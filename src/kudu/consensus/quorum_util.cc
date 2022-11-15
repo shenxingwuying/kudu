@@ -569,7 +569,6 @@ bool ShouldEvictReplica(const RaftConfigPB& config,
 
   PeerPriorityQueue pq_non_voters(kCmp);
   PeerPriorityQueue pq_voters(kCmp);
-  PeerPriorityQueue pq_duplicators(kCmp);
 
   const auto peer_to_elem = [](const RaftPeerPB& peer) {
     const string& peer_uuid = peer.permanent_uuid();

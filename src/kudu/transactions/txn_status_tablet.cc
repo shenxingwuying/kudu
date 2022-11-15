@@ -367,10 +367,11 @@ Status TxnStatusTablet::SyncWrite(const WriteRequestPB& req, TabletServerErrorPB
   WriteResponsePB resp;
   unique_ptr<OpCompletionCallback> op_cb(
       new LatchOpCompletionCallback<WriteResponsePB>(&latch, &resp));
-  unique_ptr<WriteOpState> op_state = std::make_unique<WriteOpState>(tablet_replica_,
+  unique_ptr<WriteOpState> op_state(
+      new WriteOpState(tablet_replica_,
                        &req,
                        nullptr, // RequestIdPB
-                       &resp);
+                       &resp));
   op_state->set_completion_callback(std::move(op_cb));
   RETURN_NOT_OK(tablet_replica_->SubmitWrite(std::move(op_state)));
   latch.Wait();

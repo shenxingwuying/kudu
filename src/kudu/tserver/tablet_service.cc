@@ -1586,12 +1586,12 @@ void TabletServiceImpl::Write(const WriteRequestPB* req,
     }
   }
 
-  unique_ptr<WriteOpState> op_state = std::make_unique<WriteOpState>(
+  unique_ptr<WriteOpState> op_state(new WriteOpState(
       replica.get(),
       req,
       context->AreResultsTracked() ? context->request_id() : nullptr,
       resp,
-      std::move(authz_context));
+      std::move(authz_context)));
 
   // If the client sent us a timestamp, decode it and update the clock so that all future
   // timestamps are greater than the passed timestamp.
