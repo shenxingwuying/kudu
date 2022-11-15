@@ -112,6 +112,7 @@ class KuduBase(Script):
         sudo.kill(pid, signal.SIGTERM)
         Logger.info("kill %s succeed" % pid)
         wait_process_stopped(pid_file)
+        os.remove(pid_file)
 
     KUDU_MASTER = 'master'
     KUDU_TSERVER = 'tserver'
