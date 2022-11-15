@@ -260,7 +260,7 @@ Status Duplicator::WorkAtWalReplay(unique_ptr<DuplicateMsg> msg,
   realtime_tmp_queue_.Put(std::move(msg));
   if (realtime_tmp_queue_.size() > FLAGS_duplicator_max_queue_size / 2) {
     realtime_tmp_queue_.Clear();
-    LOG(INFO) << Substitute(
+    LOG_WITH_PREFIX(INFO) << Substitute(
         "At mode $0, realtime_tmp_queue has too many elements, clear all elements",
         Tablet::DuplicationMode_Name(DuplicationMode::WAL_DUPLICATION));
     need_replay_again_ = true;

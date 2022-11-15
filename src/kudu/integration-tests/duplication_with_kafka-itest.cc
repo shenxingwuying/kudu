@@ -586,18 +586,15 @@ TEST_F(DuplicationITest, DuplicatorKafkaDownAndCheckKuduWriteOK) {
   WriteRows(0, pre_count);
   kafka_.StopKafka();
   std::thread write_thread(&DuplicationITest::WriteRows, this, pre_count, insert_count);
-  write_thread.join();
-
   // Check Kudu data is 20000 rows.
   client::sp::shared_ptr<client::KuduTable> table;
   ASSERT_OK(client_->OpenTable(options.table_name, &table));
-  ASSERT_EVENTUALLY_WITH_TIMEOUT(
-      [&]() {
-        int row_count = -1;
-        ScanRows(table, &row_count);
-        ASSERT_EQ(insert_count, row_count);
-      },
-      MonoDelta::FromSeconds(300));
+  ASSERT_EVENTUALLY([&]() {
+    int row_count = -1;
+    ScanRows(table, &row_count);
+    ASSERT_EQ(insert_count, row_count);
+  });
+  write_thread.join();
 }
 
 TEST_F(DuplicationITest, DuplicatorKafkaDownAndRecover) {

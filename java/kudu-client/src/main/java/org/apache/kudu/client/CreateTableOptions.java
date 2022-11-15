@@ -268,7 +268,7 @@ public class CreateTableOptions {
   */
   public CreateTableOptions enableDuplication(String name) {
     Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
-    builder.setName(name).setType(Metadata.DownstreamType.KAFKA).setUri("localhost:9092");
+    builder.setName(name).setType(Metadata.DownstreamType.KAFKA);
     pb.addDupInfos(builder.build());
     return this;
   }
@@ -277,39 +277,38 @@ public class CreateTableOptions {
    * Enable the table's duplication
    * TODO(duyuqi) support more than one duplication
    *
-   * @param name
+   * @param name destination system entity name, eg: kafka topic name.
    * @param streamType duplication's destination system, such as Kafka
    * @return CreateTableOptions
    */
-  public CreateTableOptions addDuplications(String name, Metadata.DownstreamType streamType) {
-    return addDuplications(name, streamType, null, null);
+  public CreateTableOptions addDuplication(String name, Metadata.DownstreamType streamType) {
+    return addDuplication(name, streamType, null, null);
   }
 
   /**
    * Enable the table's duplication
    * TODO(duyuqi) support more than one duplication
    *
-   * @param name
+   * @param name destination system entity name, eg: kafka topic name.
    * @param streamType duplication's destination system, such as Kafka
    * @param uri optional, destination's discovered service name
    * @return CreateTableOptions
    */
-  public CreateTableOptions addDuplications(String name, Metadata.DownstreamType streamType,
-          String uri) {
-    return addDuplications(name, streamType, uri, null);
+  public CreateTableOptions addDuplication(String name, Metadata.DownstreamType streamType, String uri) {
+    return addDuplication(name, streamType, uri, null);
   }
 
   /**
    * Enable the table's duplication
    * TODO(duyuqi) support more than one duplication
    *
-   * @param name
+   * @param name destination system entity name, eg: kafka topic name.
    * @param streamType duplication's destination system, such as Kafka
    * @param uri optional, destination's discovered service name
-   * @param options such as user token infomation, json format
+   * @param options optional, such as user token information, json format
    * @return CreateTableOptions
    */
-  public CreateTableOptions addDuplications(String name, Metadata.DownstreamType streamType,
+  public CreateTableOptions addDuplication(String name, Metadata.DownstreamType streamType,
       String uri, String options) {
     Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
     builder.setName(name)
