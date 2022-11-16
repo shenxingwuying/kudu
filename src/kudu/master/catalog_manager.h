@@ -647,6 +647,11 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
                         boost::optional<const std::string&> user,
                         const security::TokenSigner* token_signer);
 
+  // Get the information about duplications.
+  Status ListDuplications(const ListDuplicationInfoRequestPB* req,
+                          ListDuplicationInfoResponsePB* resp,
+                          boost::optional<const std::string&> user);
+
   // Lists all the running tables. If 'user' is provided, only lists those that
   // the given user is authorized to see.
   Status ListTables(const ListTablesRequestPB* req,

@@ -3328,6 +3328,34 @@ Status CatalogManager::GetTableSchema(const GetTableSchemaRequestPB* req,
   return Status::OK();
 }
 
+Status CatalogManager::ListDuplications(const ListDuplicationInfoRequestPB* /*req*/,
+                                        ListDuplicationInfoResponsePB* resp,
+                                        boost::optional<const std::string&> user) {
+  leader_lock_.AssertAcquiredForReading();
+
+  auto authz_func = [&](const string& username, const string& table_name, const string& owner) {
+    return;
+  };
+
+  shared_lock<LockType> l(lock_);
+  for (const TableInfoMap::value_type& entry : normalized_table_names_map_) {
+    const auto& table_info = entry.second;
+    TableMetadataLock ltm(table_info.get(), LockMode::READ);
+    auto& table_data = ltm.data();
+    // TODO(duyuqi), support more than one duplication.
+    CHECK_LE(table_data.pb.dup_infos_size(), 1);
+    if (table_data.pb.dup_infos_size() >= 1) {
+      auto* table_and_duplication_info = resp->add_duplications();
+      table_and_duplication_info->set_table_name(table_data.name());
+      for (auto& dup_info : table_data.pb.dup_infos()) {
+        table_and_duplication_info->add_dup_info()->CopyFrom(dup_info);
+      }
+    }
+  }
+
+  return Status::OK();
+}
+
 Status CatalogManager::ListTables(const ListTablesRequestPB* req,
                                   ListTablesResponsePB* resp,
                                   optional<const string&> user) {
@@ -6203,6 +6231,7 @@ INITTED_AND_LEADER_OR_RESPOND(IsCreateTableDoneResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(ListTablesResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(GetTableLocationsResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(GetTableSchemaResponsePB);
+INITTED_AND_LEADER_OR_RESPOND(ListDuplicationInfoResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(GetTableStatisticsResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(GetTabletLocationsResponsePB);
 INITTED_AND_LEADER_OR_RESPOND(RecallDeletedTableResponsePB);

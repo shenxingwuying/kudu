@@ -62,6 +62,8 @@ class IsAlterTableDoneRequestPB;
 class IsAlterTableDoneResponsePB;
 class IsCreateTableDoneRequestPB;
 class IsCreateTableDoneResponsePB;
+class ListDuplicationInfoRequestPB;
+class ListDuplicationInfoResponsePB;
 class ListMastersRequestPB;
 class ListMastersResponsePB;
 class ListTablesRequestPB;
@@ -71,10 +73,10 @@ class ListTabletServersResponsePB;
 class Master;
 class PingRequestPB;
 class PingResponsePB;
-class RefreshAuthzCacheRequestPB;
-class RefreshAuthzCacheResponsePB;
 class RecallDeletedTableRequestPB;
 class RecallDeletedTableResponsePB;
+class RefreshAuthzCacheRequestPB;
+class RefreshAuthzCacheResponsePB;
 class ReplaceTabletRequestPB;
 class ReplaceTabletResponsePB;
 class TSHeartbeatRequestPB;
@@ -162,6 +164,10 @@ class MasterServiceImpl : public MasterServiceIf {
   void GetTableSchema(const GetTableSchemaRequestPB* req,
                       GetTableSchemaResponsePB* resp,
                       rpc::RpcContext* rpc) override;
+
+  void ListDuplications(const ListDuplicationInfoRequestPB* req,
+                        ListDuplicationInfoResponsePB* resp,
+                        rpc::RpcContext* rpc) override;
 
   void ListTabletServers(const ListTabletServersRequestPB* req,
                          ListTabletServersResponsePB* resp,

@@ -282,15 +282,22 @@ public class KuduClient implements AutoCloseable {
    */
   public Status createKsyncerLearnerForTable(KuduTable kuduTable) {
     // Check kudu-master version whether kudu cluster support duplication.
-    if (asyncClient.supportDuplication()) {
+    boolean supportDuplication = false;
+    try {
+      supportDuplication = joinAndHandleException(asyncClient.supportsDuplication());
+    } catch (KuduException e) {
+      LOG.error("Problem occurred when check duplication feature. ", e);
+      return Status.Aborted("Something error happened, make sure duplication feature failed.");
+    }
+    if (supportDuplication) {
       try {
         asyncClient.addDuplicator(kuduTable, AsyncKuduClient.DEFAULT_TOPIC_NAME);
-        return Status.OK();
       } catch (Exception e) {
         // This is throw by defered.join().
         LOG.error("Problem occurred when add a duplicator for table. ", e);
         return Status.Aborted("Something error happened, check status of kudu cluster.");
       }
+      return Status.OK();
     }
 
     Map<String, HostPortPB> serverMap;
@@ -324,8 +331,19 @@ public class KuduClient implements AutoCloseable {
   public Set<String> getTablesAtServer(String serverUuid) throws KuduException, RuntimeException {
     Set<String> subscribedTables = new TreeSet<>();
 
-    // TODO(duyuqi)
-    // support duplication.
+    // Check kudu-master version whether kudu cluster support duplication.
+    boolean supportDuplication = false;
+    try {
+      supportDuplication = joinAndHandleException(asyncClient.supportsDuplication());
+    } catch (KuduException e) {
+      throw e;
+    }
+    if (supportDuplication) {
+      // TODO(duyuqi). Must Must add it.
+      // getSubscribedTables when support duplication.
+      // Add a kudu rpc(request and response)
+      return subscribedTables;
+    }
 
     // The code below adapt to ksyncer.
     // Map: <server uuid, server info>

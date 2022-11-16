@@ -1188,46 +1188,6 @@ public class AsyncKuduClient implements AutoCloseable {
   }
 
   /**
-   * @return whether kudu cluster support duplication.
-   */
-  public boolean supportDuplication() {
-    boolean supportDuplication = false;;
-    Runtime runtime = Runtime.getRuntime();
-    for (HostAndPort hostAndPort : masterAddresses) {
-      String host = hostAndPort.getHost();
-      int webPort = hostAndPort.getPort() + 1000;
-      String bashCommand = new StringBuilder().append("curl http://")
-                                              .append(host).append(":")
-                                              .append(webPort).append("/version")
-                                              .toString();
-      try {
-        Process pro = runtime.exec(bashCommand);
-        int status = pro.waitFor();
-        if (status != 0) {
-          continue;
-        }
-        BufferedReader br = new BufferedReader(
-            new InputStreamReader(pro.getInputStream(),
-            java.nio.charset.Charset.forName("utf8")));
-        StringBuilder result = new StringBuilder();
-        String line;
-        while ((line = br.readLine()) != null) {
-          result.append(line);
-        }
-        if (result.indexOf("duplication") >= 0) {
-          supportDuplication = true;
-        }
-        break;
-      } catch (IOException e) {
-        LOG.error("run bash command error ", e.getMessage());
-      } catch (Exception e) {
-        LOG.error("something error ", e.getMessage());
-      }
-    }
-    return supportDuplication;
-  }
-
-  /**
    * Check if statistics collection is enabled for this client.
    * @return true if it is enabled, else false
    */
@@ -2836,12 +2796,31 @@ public class AsyncKuduClient implements AutoCloseable {
   public Deferred<Boolean> supportsIgnoreOperations() {
     PingRequest ping = PingRequest.makeMasterPingRequest(
         this.masterTable, timer, defaultAdminOperationTimeoutMs);
-    ping.addRequiredFeature(Master.MasterFeatures.IGNORE_OPERATIONS_VALUE);
+    int feature = Master.MasterFeatures.IGNORE_OPERATIONS_VALUE;
+    ping.addRequiredFeature(feature);
     Deferred<PingResponse> response = sendRpcToTablet(ping);
-    return AsyncUtil.addBoth(response, new PingSupportsFeatureCallback());
+    return AsyncUtil.addBoth(response, new PingSupportsFeatureCallback(feature));
+  }
+  
+  /**
+   * Sends a request to the master to check if the cluster supports ignore operations.
+   * @return true if the cluster supports ignore operations
+   */
+  @InterfaceAudience.Private
+  public Deferred<Boolean> supportsDuplication() {
+    PingRequest ping = PingRequest.makeMasterPingRequest(
+        this.masterTable, timer, defaultAdminOperationTimeoutMs);
+    int feature = Master.MasterFeatures.DUPLICATION_VALUE;
+    ping.addRequiredFeature(feature);
+    Deferred<PingResponse> response = sendRpcToTablet(ping);
+    return AsyncUtil.addBoth(response, new PingSupportsFeatureCallback(feature));
   }
 
   private static final class PingSupportsFeatureCallback implements Callback<Boolean, Object> {
+    int feature;
+    public PingSupportsFeatureCallback(int feature) {
+      this.feature = feature;
+    }
     @Override
     public Boolean call(final Object resp) {
       if (resp instanceof Exception) {
@@ -2860,7 +2839,7 @@ public class AsyncKuduClient implements AutoCloseable {
 
     @Override
     public String toString() {
-      return "ping supports ignore operations";
+      return "ping supports " + Master.MasterFeatures.forNumber(feature);
     }
   }
 

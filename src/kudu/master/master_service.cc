@@ -668,6 +668,23 @@ void MasterServiceImpl::GetTableSchema(const GetTableSchemaRequestPB* req,
   rpc->RespondSuccess();
 }
 
+void MasterServiceImpl::ListDuplications(const ListDuplicationInfoRequestPB* req,
+                                         ListDuplicationInfoResponsePB* resp,
+                                         rpc::RpcContext* rpc) {
+  Status s;
+  {
+    CatalogManager::ScopedLeaderSharedLock l(server_->catalog_manager());
+    if (!l.CheckIsInitializedAndIsLeaderOrRespond(resp, rpc)) {
+      return;
+    }
+
+    s = server_->catalog_manager()->ListDuplications(req, resp, rpc->remote_user().username());
+  }
+
+  CheckRespErrorOrSetUnknown(s, resp);
+  rpc->RespondSuccess();
+}
+
 void MasterServiceImpl::ListTabletServers(const ListTabletServersRequestPB* req,
                                           ListTabletServersResponsePB* resp,
                                           rpc::RpcContext* rpc) {
