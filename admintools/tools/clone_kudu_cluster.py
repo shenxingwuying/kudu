@@ -236,6 +236,8 @@ def parse_args():
                         --ignore_dest_cluster_ksck must be True too.""")
     parser.add_argument('--timeout', type=int, default=14400,
                         help='timeout for execute local or remote command, default is 4h.')
+    parser.add_argument('--dst_table_name', default='',
+                        help='specify the destination table name when migrate a table.')
     args = parser.parse_args()
     print("倒计时3秒，在开始执行前，请确保目标集群和源集群主机的域名互相可识别，参见配置/etc/hosts")
     time.sleep(3)
@@ -321,9 +323,10 @@ def migrate_table(progress, args, progress_file):
         result = run_cmd(cmd)
         if len(result['stdout']) <= 0:
             die("Table:%s not exists in local cluster" % args.table)
-
         cmd = "%s table copy %s %s %s -num_threads=%s -write_type=upsert -create_table=true" % \
-            (_config_kudu_tool, args.local_source_cluster, args.table, args.dest_cluster, args.parallel)
+                  (_config_kudu_tool, args.local_source_cluster, args.table, args.dest_cluster, args.parallel)
+        if len(args.dst_table_name) > 0:
+            cmd = cmd = "%s --dst_table=%s" % (cmd, args.dst_table_name)
         run_cmd(cmd, _long_timeout)
         progress = set_progress_stage_1plus(progress, 2)
         with open(progress_file, 'w+') as f:
