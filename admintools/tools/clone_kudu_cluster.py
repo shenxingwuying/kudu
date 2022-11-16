@@ -326,7 +326,7 @@ def migrate_table(progress, args, progress_file):
         cmd = "%s table copy %s %s %s -num_threads=%s -write_type=upsert -create_table=true" % \
                   (_config_kudu_tool, args.local_source_cluster, args.table, args.dest_cluster, args.parallel)
         if len(args.dst_table_name) > 0:
-            cmd = cmd = "%s --dst_table=%s" % (cmd, args.dst_table_name)
+            cmd = "%s --dst_table=%s" % (cmd, args.dst_table_name)
         run_cmd(cmd, _long_timeout)
         progress = set_progress_stage_1plus(progress, 2)
         with open(progress_file, 'w+') as f:
