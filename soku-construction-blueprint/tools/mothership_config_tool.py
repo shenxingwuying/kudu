@@ -77,6 +77,12 @@ class MothershipKuduConfigTool:
                 self.logger.info('%s: conf (%s: %s) already exists, and the value is the same, no update'
                                  % (role_type, key, value))
             break
+
+        # 判断是否需要强制更新，最高优先级
+        if key in config_common.FORCE_UPDATE_CONFIG:
+            need_update = True
+            value = config_common.FORCE_UPDATE_CONFIG[key]
+
         # 配置项需要更新配置
         if need_update:
             if self.check_mutual_config_need_update(module, role, key):

@@ -69,6 +69,11 @@ params:
     old_role_config_dict: 当前配置组角色已存在的配置字典, 非默认值, 也是传出参数, 用于保存待更新的配置
     old_all_assign_config_dict: 所有配置组(包括 common 和 role) 已存在的配置
     config_modified_group_set: 用于标志当前相互影响的配置,如果已存在的value非默认值, 则会将此组加到set中, 下次就不用遍历整个list'''
+        # 判断是否需要强制更新
+        if key in config_common.FORCE_UPDATE_CONFIG:
+            old_role_config_dict[key] = config_common.FORCE_UPDATE_CONFIG[key]
+            return True, old_role_config_dict, config_modified_group_set
+
         if key in old_all_assign_config_dict:
             return False, old_role_config_dict, config_modified_group_set
         modified, config_modified_group_set = self.check_mutual_config_need_update(key, old_all_assign_config_dict, config_modified_group_set)
@@ -100,12 +105,19 @@ params:
             old_master_config_dict = self.get_role_config_dict(cloudera_config_setter, 'KUDU_MASTER')
             old_tserver_config_dict = self.get_role_config_dict(cloudera_config_setter, 'KUDU_TSERVER')
             for (key, value) in new_config_dict.items():
+                # 判断是否需要强制更新，最高优先级
+                if key in config_common.FORCE_UPDATE_CONFIG:
+                    need_update = True
+                    old_common_config_dict[key] = config_common.FORCE_UPDATE_CONFIG[key]
+                    continue
+
                 if key in old_master_config_dict or key in old_tserver_config_dict:
                     self.logger.info('%s: the conf item [ %s ] already exists in role conf, no update'
                                      % (role, key))
                     continue
                 if len(value) == 0:
                     value = config_common.get_dynamic_config_value(key, self.is_simplified_cluster, self.tserver_random_dirs_count, self.tserver_mem_gb)
+
                 if key not in old_common_config_dict:
                     flag, config_modified_group_set = self.check_mutual_config_need_update(key, old_common_config_dict_cache, config_modified_group_set)
                     if flag:
@@ -117,6 +129,7 @@ params:
                 else:
                     self.logger.info('%s: conf (%s) already exists, but the value is inconsistent, no update,'
                                      ' old_val: %s, new_val: %s' % (role, key, old_common_config_dict[key], value))
+
             if need_update:
                 new_common_configs = '\n'.join('--' + key + '=' + value for key, value in old_common_config_dict.items())
                 self.logger.info('%s: new common gflagfile = %s' % (role, new_common_configs))
@@ -142,6 +155,7 @@ params:
                     need_update_value, old_role_config_dict, config_modified_group_set = self.update_config(
                         key, value, old_role_config_dict, old_all_assign_config_dict, config_modified_group_set)
                     need_update = need_update_value or need_update
+
                 if need_update:
                     new_common_configs = '\n'.join('--' + key + '=' + value for key, value in old_role_config_dict.items())
                     self.logger.info('%s: new gflagfile_role_safety_valve = [%s]' % (role, new_common_configs))

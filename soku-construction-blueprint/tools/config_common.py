@@ -122,3 +122,8 @@ MOTHERSHIP_UPDATE_CONFIG = {
 MUTUAL_RESTRICT_CONFIG = {
     'group_0': ['block_cache_capacity_mb', 'memory_limit_hard_bytes'],
 }
+
+FORCE_UPDATE_CONFIG = {
+    "unlock_experimental_flags": "true",
+    "unlock_unsafe_flags": "true"
+}
