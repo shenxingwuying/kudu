@@ -262,62 +262,21 @@ public class CreateTableOptions {
   }
 
   /**
-   *  Enable the table's duplication, default kafka
-   *
-   * @param name Kafka Topic Name
-  */
-  public CreateTableOptions enableDuplication(String name) {
-    Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
-    builder.setName(name).setType(Metadata.DownstreamType.KAFKA);
-    pb.addDupInfos(builder.build());
-    return this;
-  }
-
-  /**
-   * Enable the table's duplication
+   * Add the table's duplication
    * TODO(duyuqi) support more than one duplication
    *
-   * @param name destination system entity name, eg: kafka topic name.
+   * @param name destination system data entity name, eg: kafka topic name
    * @param streamType duplication's destination system, such as Kafka
-   * @return CreateTableOptions
-   */
-  public CreateTableOptions addDuplication(String name, Metadata.DownstreamType streamType) {
-    return addDuplication(name, streamType, null, null);
-  }
-
-  /**
-   * Enable the table's duplication
-   * TODO(duyuqi) support more than one duplication
-   *
-   * @param name destination system entity name, eg: kafka topic name.
-   * @param streamType duplication's destination system, such as Kafka
-   * @param uri optional, destination's discovered service name
-   * @return CreateTableOptions
-   */
-  public CreateTableOptions addDuplication(String name, Metadata.DownstreamType streamType, String uri) {
-    return addDuplication(name, streamType, uri, null);
-  }
-
-  /**
-   * Enable the table's duplication
-   * TODO(duyuqi) support more than one duplication
-   *
-   * @param name destination system entity name, eg: kafka topic name.
-   * @param streamType duplication's destination system, such as Kafka
-   * @param uri optional, destination's discovered service name
-   * @param options optional, such as user token information, json format
-   * @return CreateTableOptions
+   * @param uri destination's discovered service name, optional
+   * @return this instance
    */
   public CreateTableOptions addDuplication(String name, Metadata.DownstreamType streamType,
-      String uri, String options) {
+      String uri) {
     Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
     builder.setName(name)
         .setType(streamType);
     if (uri != null && !uri.isEmpty()) {
       builder.setUri(uri);
-    }
-    if (options != null && !options.isEmpty()) {
-      builder.setOptions(options);
     }
     pb.addDupInfos(builder.build());
     return this;

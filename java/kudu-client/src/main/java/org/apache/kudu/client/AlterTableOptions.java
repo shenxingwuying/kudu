@@ -450,80 +450,20 @@ public class AlterTableOptions {
   }
 
   /**
-   * Enable the table's duplication, default Kafka
-   *
-   * @param name Kafka Topic Name
-   */
-  public AlterTableOptions enableDuplication(String name) {
-    Metadata.DuplicationInfoPB dupInfo = Metadata.DuplicationInfoPB.newBuilder()
-        .setName(name)
-        .setType(Metadata.DownstreamType.KAFKA)
-        .build();
-    Master.AlterTableRequestPB.AddDuplication addDuplication =
-        Master.AlterTableRequestPB.AddDuplication.newBuilder()
-        .setDupInfo(dupInfo)
-        .build();
-    Master.AlterTableRequestPB.Step addDuplicationStep = pb.addAlterSchemaStepsBuilder()
-        .setType(AlterTableRequestPB.StepType.ADD_DUPLICATION)
-        .setAddDuplication(addDuplication)
-        .build();
-    pb.addAlterSchemaSteps(addDuplicationStep);
-    return this;
-  }
-
-  public AlterTableOptions disableDuplication(String name) {
-    Metadata.DuplicationInfoPB dupInfo = Metadata.DuplicationInfoPB.newBuilder()
-        .setName(name)
-        .setType(Metadata.DownstreamType.KAFKA)
-        .build();
-    Master.AlterTableRequestPB.DropDuplication dropDuplication =
-        Master.AlterTableRequestPB.DropDuplication.newBuilder()
-        .setDupInfo(dupInfo)
-        .build();
-    Master.AlterTableRequestPB.Step dropDuplicationStep = pb.addAlterSchemaStepsBuilder()
-        .setType(AlterTableRequestPB.StepType.DROP_DUPLICATION)
-        .setDropDuplication(dropDuplication)
-        .build();
-    pb.addAlterSchemaSteps(dropDuplicationStep);
-    return this;
-  }
-
-  /**
-   * Enable the table's duplication
+   * Add a table's duplication. Only support one duplication.
    * TODO(duyuqi) support more than one duplication
    *
-   * @param name
-   * @param streamType duplication's destination system, such as Kafka
+   * @param name destination system data entity, eg Kafka topic name
+   * @param streamType duplication's destination system, Kafka only
+   * @param uri        optional
    * @return this instance
    */
-  public AlterTableOptions addDuplication(String name, Metadata.DownstreamType streamType) {
-    return addDuplication(name, streamType, null, null);
-  }
-
   public AlterTableOptions addDuplication(String name, Metadata.DownstreamType streamType,
       String uri) {
-    return addDuplication(name, streamType, uri, null);
-  }
-
-  /**
-   * Enable the table's duplication
-   * TODO(duyuqi) support more than one duplication
-   *
-   * @param name
-   * @param streamType duplication's destination system, such as Kafka
-   * @param uri        optional
-   * @param options    such as user token infomation, json format
-   * @return this instance
-   */
-  public AlterTableOptions addDuplication(String name, Metadata.DownstreamType streamType,
-      String uri, String options) {
     Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
     builder.setName(name).setType(streamType);
     if (uri != null && !uri.isEmpty()) {
       builder.setUri(uri);
-    }
-    if (options != null && !options.isEmpty()) {
-      builder.setOptions(options);
     }
     Master.AlterTableRequestPB.Step.Builder stepBuilder = pb.addAlterSchemaStepsBuilder();
     stepBuilder.setType(AlterTableRequestPB.StepType.ADD_DUPLICATION)
@@ -535,13 +475,23 @@ public class AlterTableOptions {
     return this;
   }
 
+  /**
+   * Drop a table's duplication
+   * TODO(duyuqi) support more than one duplication
+   *
+   * @param name destination system data entity, eg Kafka topic name
+   * @param streamType duplication's destination system, Kafka only
+   * @param uri        optional
+   * @return this instance
+   */
   public AlterTableOptions dropDuplication(String name, Metadata.DownstreamType streamType,
       String uri) {
-    Metadata.DuplicationInfoPB dupInfo = Metadata.DuplicationInfoPB.newBuilder()
-        .setName(name)
-        .setType(streamType)
-        .setUri(uri)
-        .build();
+    Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
+    builder.setName(name).setType(streamType);
+    if (uri != null && !uri.isEmpty()) {
+      builder.setUri(uri);
+    }
+    Metadata.DuplicationInfoPB dupInfo = builder.build();
     Master.AlterTableRequestPB.Step dropDuplicationStep = pb.addAlterSchemaStepsBuilder()
         .setType(AlterTableRequestPB.StepType.DROP_DUPLICATION)
         .setDropDuplication(Master.AlterTableRequestPB.DropDuplication.newBuilder()

@@ -350,7 +350,8 @@ public class KuduClient implements AutoCloseable {
         proxy.sendRpc(req);
         try {
           ListTabletsResponse resp = d.join();
-          for (Tserver.ListTabletsResponsePB.StatusAndSchemaPB tabletInfo : resp.getTabletInfoMap()) {
+          for (Tserver.ListTabletsResponsePB.StatusAndSchemaPB tabletInfo :
+              resp.getTabletInfoMap()) {
             if (tabletInfo.getTabletStatus().getState() == Metadata.TabletStatePB.RUNNING) {
               subscribedTables.add(tabletInfo.getTabletStatus().getTableName());
             }
