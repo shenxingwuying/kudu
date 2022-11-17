@@ -1,5 +1,5 @@
 #FROM jfrog-internal.sensorsdata.cn/docker-test/com.sensorsdata.armada/el9_base_nojava:0.1.6.9
-FROM jfrog-internal.sensorsdata.cn/docker-develop/com.sensorsdata.armada/el7_base_python:0.3.0.2
+FROM jfrog-internal.sensorsdata.cn/docker-test/com.sensorsdata.armada/el7_base_nojava:0.3.0
 
 ## 设置组件相关参数和环境变量
 ARG PRODUCT_NAME=soku
