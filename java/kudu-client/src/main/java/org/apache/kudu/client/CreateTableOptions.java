@@ -17,6 +17,7 @@
 
 package org.apache.kudu.client;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -291,11 +292,14 @@ public class CreateTableOptions {
   }
 
   List<Integer> getRequiredFeatureFlags() {
-    if (rangePartitions.isEmpty()) {
-      return ImmutableList.of();
-    } else {
-      return ImmutableList.of(Master.MasterFeatures.RANGE_PARTITION_BOUNDS_VALUE);
+    List<Integer> requiredFeatureFlags = new ArrayList<>();
+    if (!rangePartitions.isEmpty()) {
+      requiredFeatureFlags.add(Master.MasterFeatures.RANGE_PARTITION_BOUNDS_VALUE);
     }
+    if (!pb.getDupInfosList().isEmpty()) {
+      requiredFeatureFlags.add(Master.MasterFeatures.DUPLICATION_VALUE);
+    }
+    return requiredFeatureFlags;
   }
 
   boolean shouldWait() {

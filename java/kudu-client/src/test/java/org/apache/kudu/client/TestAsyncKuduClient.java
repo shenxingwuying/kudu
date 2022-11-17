@@ -310,6 +310,7 @@ public class TestAsyncKuduClient {
     ListTabletServersWithUUIDResponse response = client.listTabletServersWithUUID();
     ServerInfo serverInfo = null;
 
+    // Use first tserver mock ksyncer.
     for (Map.Entry<String, ServerInfo> kvServerInfo : response.getServerInfoMap().entrySet()) {
       serverInfo = kvServerInfo.getValue();
       break;
@@ -318,5 +319,8 @@ public class TestAsyncKuduClient {
     tables = client.getTablesAtServer(serverInfo.getUuid());
     assertEquals(1, tables.size());
     assertTrue(tables.contains(tableName));
+
+    // TODO(duyuqi) add duplication test cases when finish listDuplication.
+    // Mark, Mark. Should do this.
   }
 }

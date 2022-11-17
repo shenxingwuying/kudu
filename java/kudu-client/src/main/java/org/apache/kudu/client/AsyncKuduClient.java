@@ -2803,7 +2803,7 @@ public class AsyncKuduClient implements AutoCloseable {
   }
   
   /**
-   * Sends a request to the master to check if the cluster supports ignore operations.
+   * Sends a request to the master to check if the cluster supports duplication operations.
    * @return true if the cluster supports ignore operations
    */
   @InterfaceAudience.Private

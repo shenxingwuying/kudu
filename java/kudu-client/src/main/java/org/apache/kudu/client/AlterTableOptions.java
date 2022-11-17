@@ -21,7 +21,9 @@ import static org.apache.kudu.ColumnSchema.CompressionAlgorithm;
 import static org.apache.kudu.ColumnSchema.Encoding;
 import static org.apache.kudu.master.Master.AlterTableRequestPB;
 
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 
 import com.google.common.base.Preconditions;
@@ -465,13 +467,13 @@ public class AlterTableOptions {
     if (uri != null && !uri.isEmpty()) {
       builder.setUri(uri);
     }
-    Master.AlterTableRequestPB.Step.Builder stepBuilder = pb.addAlterSchemaStepsBuilder();
-    stepBuilder.setType(AlterTableRequestPB.StepType.ADD_DUPLICATION)
+    Master.AlterTableRequestPB.Step step = pb.addAlterSchemaStepsBuilder()
+        .setType(AlterTableRequestPB.StepType.ADD_DUPLICATION)
         .setAddDuplication(Master.AlterTableRequestPB.AddDuplication
             .newBuilder()
-            .setDupInfo(builder.build())
-            .build());
-    pb.addAlterSchemaSteps(stepBuilder.build());
+            .setDupInfo(builder.build()))
+        .build();
+    pb.addAlterSchemaSteps(step);
     return this;
   }
 
@@ -491,13 +493,13 @@ public class AlterTableOptions {
     if (uri != null && !uri.isEmpty()) {
       builder.setUri(uri);
     }
-    Metadata.DuplicationInfoPB dupInfo = builder.build();
-    Master.AlterTableRequestPB.Step dropDuplicationStep = pb.addAlterSchemaStepsBuilder()
+    Master.AlterTableRequestPB.Step step = pb.addAlterSchemaStepsBuilder()
         .setType(AlterTableRequestPB.StepType.DROP_DUPLICATION)
-        .setDropDuplication(Master.AlterTableRequestPB.DropDuplication.newBuilder()
-            .setDupInfo(dupInfo))
+        .setDropDuplication(Master.AlterTableRequestPB.DropDuplication
+            .newBuilder()
+            .setDupInfo(builder.build()))
         .build();
-    pb.addAlterSchemaSteps(dropDuplicationStep);
+    pb.addAlterSchemaSteps(step);
     return this;
   }
 
@@ -539,5 +541,19 @@ public class AlterTableOptions {
 
   boolean shouldWait() {
     return wait;
+  }
+
+  List<Integer> getRequiredFeatureFlags() {
+    List<Integer> requiredFeatureFlags = new ArrayList<>();
+    if (hasAddDropRangePartitions()) {
+      requiredFeatureFlags.add(Master.MasterFeatures.RANGE_PARTITION_BOUNDS_VALUE);
+    }
+    for (Master.AlterTableRequestPB.Step step : pb.getAlterSchemaStepsList()) {
+      if (step.hasAddDuplication() || step.hasDropDuplication()) {
+        requiredFeatureFlags.add(Master.MasterFeatures.DUPLICATION_VALUE);
+        break;
+      }
+    }
+    return requiredFeatureFlags;
   }
 }
