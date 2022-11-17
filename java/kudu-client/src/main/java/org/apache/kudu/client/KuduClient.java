@@ -35,6 +35,7 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.kudu.Common.HostPortPB;
 import org.apache.kudu.Schema;
+import org.apache.kudu.master.Master;
 import org.apache.kudu.master.Master.TableIdentifierPB;
 
 import java.io.BufferedReader;
@@ -325,12 +326,7 @@ public class KuduClient implements AutoCloseable {
   }
 
   public Set<String> getSubscribedTables() throws KuduException, RuntimeException {
-    return getTablesAtServer(AsyncKuduClient.BEEF_ID);
-  }
-
-  public Set<String> getTablesAtServer(String serverUuid) throws KuduException, RuntimeException {
     Set<String> subscribedTables = new TreeSet<>();
-
     // Check kudu-master version whether kudu cluster support duplication.
     boolean supportDuplication = false;
     try {
@@ -339,12 +335,27 @@ public class KuduClient implements AutoCloseable {
       throw e;
     }
     if (supportDuplication) {
-      // TODO(duyuqi). Must Must add it.
-      // getSubscribedTables when support duplication.
-      // Add a kudu rpc(request and response)
+      Deferred<ListDuplicationsResponse> d = asyncClient.listDuplications();
+      ListDuplicationsResponse response = null;
+      try {
+        response = joinAndHandleException(d);
+      } catch (KuduException e) {
+        throw e;
+      }
+      for (Master.ListDuplicationInfoResponsePB.TableAndDuplicationInfo tableAndDupinfo : response
+          .duplication_infos()) {
+        subscribedTables.add(tableAndDupinfo.getTableName());
+      }
       return subscribedTables;
     }
+    // For ksyncer.
+    return getTablesAtServer(AsyncKuduClient.BEEF_ID);
+  }
 
+  // At a test case, use a serverUuid that not AsyncKuduClient.BEEF_ID to mock ksyncer.
+  public Set<String> getTablesAtServer(String serverUuid) throws KuduException, RuntimeException {
+    Set<String> subscribedTables = new TreeSet<>();
+  
     // The code below adapt to ksyncer.
     // Map: <server uuid, server info>
     Map<String, ServerInfo> serverInfoByUuid = null;

@@ -54,6 +54,7 @@ import org.apache.kudu.test.ProtobufUtils;
 public class TestAsyncKuduClient {
 
   private static final Schema basicSchema = ClientTestUtil.getBasicSchema();
+  private static final String testDefaultUri = "localhost:9092";
 
   private KuduClient client;
   private AsyncKuduClient asyncClient;
@@ -302,6 +303,7 @@ public class TestAsyncKuduClient {
 
   @Test(timeout = 100000)
   public void testGetSubscribedTables() throws Exception {
+    // For ksyncer.
     CreateTableOptions options = getBasicCreateTableOptions();
     String tableName = "testGetSubscribedTables" + System.currentTimeMillis();
     client.createTable(tableName, basicSchema, options);
@@ -310,7 +312,7 @@ public class TestAsyncKuduClient {
     ListTabletServersWithUUIDResponse response = client.listTabletServersWithUUID();
     ServerInfo serverInfo = null;
 
-    // Use first tserver mock ksyncer.
+    // Test ksyncer, use first tserver mock ksyncer.
     for (Map.Entry<String, ServerInfo> kvServerInfo : response.getServerInfoMap().entrySet()) {
       serverInfo = kvServerInfo.getValue();
       break;
@@ -319,8 +321,47 @@ public class TestAsyncKuduClient {
     tables = client.getTablesAtServer(serverInfo.getUuid());
     assertEquals(1, tables.size());
     assertTrue(tables.contains(tableName));
+    // For duplication, see 'testCreateTableWithDuplication' and 'testAlterTableWithDuplication'.
+  }
 
-    // TODO(duyuqi) add duplication test cases when finish listDuplication.
-    // Mark, Mark. Should do this.
+  @Test
+  public void testCreateTableWithDuplication() throws Exception {
+    // Test duplication.
+    String tableName = "testCreateTableWithDuplication" + System.currentTimeMillis();
+    CreateTableOptions options = getBasicCreateTableOptions();
+    // Uri is not exist.
+    options.addDuplication("topic_name", Metadata.DownstreamType.KAFKA, testDefaultUri);
+    client.createTable(tableName, basicSchema, options);
+
+    Set<String> subscribedTables = client.getSubscribedTables();
+    assertEquals(1, subscribedTables.size());
+    assertTrue(subscribedTables.contains(tableName));
+  }
+
+  @Test
+  public void testAlterTableWithDuplication() throws Exception {
+    String tableName = "testAlterTableWithDuplication" + System.currentTimeMillis();
+    String topicName = "topic_name_alter";
+
+    // Create a normal table.
+    CreateTableOptions createOptions = getBasicCreateTableOptions();
+    client.createTable(tableName, basicSchema, createOptions);
+    Set<String> subscribedTables = client.getSubscribedTables();
+    assertEquals(0, subscribedTables.size());
+
+    // Add a duplication for the table.
+    AlterTableOptions addDuplicationOptions = new AlterTableOptions();
+    addDuplicationOptions.addDuplication(topicName, Metadata.DownstreamType.KAFKA, testDefaultUri);
+    client.alterTable(tableName, addDuplicationOptions);
+    subscribedTables = client.getSubscribedTables();
+    assertEquals(1, subscribedTables.size());
+    assertTrue(subscribedTables.contains(tableName));
+
+    // Drop a duplication for the table.
+    AlterTableOptions dropDuplicationOptions = new AlterTableOptions();
+    dropDuplicationOptions.dropDuplication(topicName, Metadata.DownstreamType.KAFKA, testDefaultUri);
+    client.alterTable(tableName, dropDuplicationOptions);
+    subscribedTables = client.getSubscribedTables();
+    assertEquals(0, subscribedTables.size());
   }
 }

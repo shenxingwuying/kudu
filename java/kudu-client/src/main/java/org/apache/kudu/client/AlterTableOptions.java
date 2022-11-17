@@ -37,6 +37,7 @@ import org.apache.kudu.Type;
 import org.apache.kudu.client.ProtobufHelper.SchemaPBConversionFlags;
 import org.apache.kudu.consensus.Metadata;
 import org.apache.kudu.master.Master;
+import org.apache.kudu.tserver.TserverAdmin.AlterSchemaRequestPBOrBuilder;
 
 /**
  * This builder must be used to alter a table. At least one change must be specified.
@@ -467,13 +468,11 @@ public class AlterTableOptions {
     if (uri != null && !uri.isEmpty()) {
       builder.setUri(uri);
     }
-    Master.AlterTableRequestPB.Step step = pb.addAlterSchemaStepsBuilder()
-        .setType(AlterTableRequestPB.StepType.ADD_DUPLICATION)
+    Master.AlterTableRequestPB.Step.Builder stepBuilder = pb.addAlterSchemaStepsBuilder();
+    stepBuilder.setType(AlterTableRequestPB.StepType.ADD_DUPLICATION)
         .setAddDuplication(Master.AlterTableRequestPB.AddDuplication
             .newBuilder()
-            .setDupInfo(builder.build()))
-        .build();
-    pb.addAlterSchemaSteps(step);
+            .setDupInfo(builder));
     return this;
   }
 
@@ -493,13 +492,11 @@ public class AlterTableOptions {
     if (uri != null && !uri.isEmpty()) {
       builder.setUri(uri);
     }
-    Master.AlterTableRequestPB.Step step = pb.addAlterSchemaStepsBuilder()
-        .setType(AlterTableRequestPB.StepType.DROP_DUPLICATION)
+    Master.AlterTableRequestPB.Step.Builder stepBuilder = pb.addAlterSchemaStepsBuilder();
+    stepBuilder.setType(AlterTableRequestPB.StepType.DROP_DUPLICATION)
         .setDropDuplication(Master.AlterTableRequestPB.DropDuplication
             .newBuilder()
-            .setDupInfo(builder.build()))
-        .build();
-    pb.addAlterSchemaSteps(step);
+            .setDupInfo(builder));
     return this;
   }
 

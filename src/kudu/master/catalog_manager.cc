@@ -3029,22 +3029,30 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
   // 9 Alter table duplications
   if (!alter_duplication_steps.empty()) {
     TRACE("Apply alter duplication");
+    if (alter_duplication_steps.size() > 1) {
+      return Status::InvalidArgument("a request not support two or more duplication steps");
+    }
     for (const auto& step : alter_duplication_steps) {
       switch (step.type()) {
         case AlterTableRequestPB::ADD_DUPLICATION: {
           if (!step.has_add_duplication()) {
-            return Status::InvalidArgument("ADD_DUPLICATION missing duplication");
+            return Status::InvalidArgument("add duplication missing duplication info");
           }
           if (l.mutable_data()->pb.dup_infos_size() == 0) {
             l.mutable_data()->pb.add_dup_infos()->CopyFrom(step.add_duplication().dup_info());
           } else {
-            return Status::InvalidArgument("duplication have exist, not support add another");
+            auto& dup_infos = const_cast<::google::protobuf::RepeatedPtrField<DuplicationInfoPB>&>(
+                l.mutable_data()->pb.dup_infos());
+            auto it = dup_infos.begin();
+            return Status::InvalidArgument(
+                Substitute("duplication have exist, name: $0, not support add another duplication",
+                           it->name()));
           }
           break;
         }
         case AlterTableRequestPB::DROP_DUPLICATION: {
           if (!step.has_drop_duplication()) {
-            return Status::InvalidArgument("DROP_DUPLICATION missing duplication");
+            return Status::InvalidArgument("drop duplication missing duplication info");
           }
           if (l.mutable_data()->pb.dup_infos_size() > 0) {
             auto& dup_infos = const_cast<::google::protobuf::RepeatedPtrField<DuplicationInfoPB>&>(
@@ -3071,6 +3079,8 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
               Substitute("not support the duplication type $0",
                          AlterTableRequestPB::StepType_Name(step.type())));
       }
+      // support add duplication or drop duplication once.
+      break;
     }
   }
 
@@ -3332,10 +3342,6 @@ Status CatalogManager::ListDuplications(const ListDuplicationInfoRequestPB* /*re
                                         ListDuplicationInfoResponsePB* resp,
                                         boost::optional<const std::string&> user) {
   leader_lock_.AssertAcquiredForReading();
-
-  auto authz_func = [&](const string& username, const string& table_name, const string& owner) {
-    return;
-  };
 
   shared_lock<LockType> l(lock_);
   for (const TableInfoMap::value_type& entry : normalized_table_names_map_) {

@@ -2438,6 +2438,13 @@ public class AsyncKuduClient implements AutoCloseable {
     alterTable(table.getName(), options);
   }
 
+  Deferred<ListDuplicationsResponse> listDuplications() {
+    checkIsClosed();
+
+    ListDuplicationsRequest rpc = new ListDuplicationsRequest(this.masterTable, timer, defaultAdminOperationTimeoutMs);
+    return sendRpcToTablet(rpc);
+  }
+
   /**
    * Makes discovered tablet locations visible in the client's caches.
    * @param table the table which the locations belong to

@@ -456,6 +456,27 @@ TEST_F(DuplicationITest, AlterTableWithDuplicationAndTestDuplication) {
   ASSERT_OK(AlterTable(alter_options));
 }
 
+TEST_F(DuplicationITest, AlterTableWithDuplicationBeforeKafkaNormal) {
+  string kTableName = "AlterTableWithDuplicationBeforeKafkaNormal";
+  CreateTableOptions options;
+  options.partition_num = 2;
+  options.replication_refactor = 3;
+  options.table_name = kTableName;
+  ASSERT_OK(CreateTable(options));
+
+  kafka_.StopKafka();
+  AlterTableOptions alter_options;
+  alter_options.table_name = kTableName;
+  alter_options.info.name = kTopicName;
+  alter_options.info.type = client::DuplicationDownstream::KAFKA;
+  alter_options.info.uri = kBrokers;
+
+  alter_options.action = Action::kEnableDuplication;
+  ASSERT_OK(AlterTable(alter_options));
+  alter_options.action = Action::kDisableDuplication;
+  ASSERT_OK(AlterTable(alter_options));
+}
+
 TEST_F(DuplicationITest, AlterTableWithDuplicationFixedInvalidBroker) {
   string kTableName = "AlterTableWithDuplicationFixedInvalidBroker";
   CreateTableOptions options;

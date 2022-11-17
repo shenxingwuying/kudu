@@ -113,6 +113,11 @@ DEFINE_uint32(master_default_reserve_trashed_table_seconds, 604800,
               "The default reserve seconds after a table being deleted, it will be used "
               "when client not set this field.");
 
+DEFINE_bool(cluster_support_duplication, true,
+            "Whether the cluster support duplication.");
+TAG_FLAG(cluster_support_duplication, hidden);
+TAG_FLAG(cluster_support_duplication, runtime);
+
 using google::protobuf::Message;
 using kudu::consensus::ReplicaManagementInfoPB;
 using kudu::pb_util::SecureDebugString;
@@ -900,6 +905,8 @@ bool MasterServiceImpl::SupportsFeature(uint32_t feature) const {
       return FLAGS_master_support_change_config;
     case MasterFeatures::IGNORE_OPERATIONS:
       return FLAGS_master_support_ignore_operations;
+    case MasterFeatures::DUPLICATION:
+      return FLAGS_cluster_support_duplication;
     default:
       return false;
   }
