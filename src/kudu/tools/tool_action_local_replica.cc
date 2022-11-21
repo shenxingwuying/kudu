@@ -25,7 +25,6 @@
 #include <mutex>
 #include <set>
 #include <string>
-#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -73,10 +72,10 @@
 #include "kudu/rpc/messenger.h"
 #include "kudu/tablet/diskrowset.h"
 #include "kudu/tablet/metadata.pb.h"
-#include "kudu/tablet/tablet-harness.h"
-#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/rowset.h"
 #include "kudu/tablet/rowset_metadata.h"
+#include "kudu/tablet/tablet-harness.h"
+#include "kudu/tablet/tablet-test-util.h"
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_mem_trackers.h"
 #include "kudu/tablet/tablet_metadata.h"
