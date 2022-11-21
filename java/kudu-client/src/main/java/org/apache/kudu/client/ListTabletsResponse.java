@@ -19,6 +19,7 @@ package org.apache.kudu.client;
 
 import java.util.List;
 
+import org.apache.kudu.tserver.Tserver;
 import org.apache.yetus.audience.InterfaceAudience;
 
 @InterfaceAudience.Private
@@ -26,9 +27,14 @@ public class ListTabletsResponse extends KuduRpcResponse {
 
   private final List<String> tabletsList;
 
-  ListTabletsResponse(long elapsedMillis, String tsUUID, List<String> tabletsList) {
+  private List<Tserver.ListTabletsResponsePB.StatusAndSchemaPB> tabletInfoMap;
+
+  ListTabletsResponse(long elapsedMillis, String tsUUID,
+                      List<String> tabletsList,
+                      List<Tserver.ListTabletsResponsePB.StatusAndSchemaPB> tabletInfoMap) {
     super(elapsedMillis, tsUUID);
     this.tabletsList = tabletsList;
+    this.tabletInfoMap = tabletInfoMap;
   }
 
   /**
@@ -37,5 +43,13 @@ public class ListTabletsResponse extends KuduRpcResponse {
    */
   public List<String> getTabletsList() {
     return tabletsList;
+  }
+
+  /**
+   * Get the list of tablets detail Info in the request.
+   * @return a list of tablet infos
+   */
+  public List<Tserver.ListTabletsResponsePB.StatusAndSchemaPB> getTabletInfoMap() {
+    return tabletInfoMap;
   }
 }

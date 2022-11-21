@@ -58,7 +58,6 @@ def get_dynamic_config_value(key, is_simplified_cluster, random_dirs_count, host
 def start_cdh_server(api):
     api.waiting_service_ready(True)
 
-
 KUDU_COMMON_CONFIG = {
     'max_log_size': '100',
     'superuser_acl': 'sa_cluster,kudu,root',

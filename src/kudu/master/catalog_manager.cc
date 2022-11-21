@@ -3029,22 +3029,29 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
   // 9 Alter table duplications
   if (!alter_duplication_steps.empty()) {
     TRACE("Apply alter duplication");
+    if (alter_duplication_steps.size() > 1) {
+      return Status::InvalidArgument("a request not support two or more duplication steps");
+    }
     for (const auto& step : alter_duplication_steps) {
       switch (step.type()) {
         case AlterTableRequestPB::ADD_DUPLICATION: {
           if (!step.has_add_duplication()) {
-            return Status::InvalidArgument("ADD_DUPLICATION missing duplication");
+            return Status::InvalidArgument("add duplication missing duplication info");
           }
           if (l.mutable_data()->pb.dup_infos_size() == 0) {
             l.mutable_data()->pb.add_dup_infos()->CopyFrom(step.add_duplication().dup_info());
           } else {
-            return Status::InvalidArgument("duplication have exist, not support add another");
+            const auto& dup_infos = l.mutable_data()->pb.dup_infos();
+            auto it = dup_infos.begin();
+            return Status::InvalidArgument(
+                Substitute("duplication have exist, name: $0, not support add another duplication",
+                           it->name()));
           }
           break;
         }
         case AlterTableRequestPB::DROP_DUPLICATION: {
           if (!step.has_drop_duplication()) {
-            return Status::InvalidArgument("DROP_DUPLICATION missing duplication");
+            return Status::InvalidArgument("drop duplication missing duplication info");
           }
           if (l.mutable_data()->pb.dup_infos_size() > 0) {
             auto& dup_infos = const_cast<::google::protobuf::RepeatedPtrField<DuplicationInfoPB>&>(
@@ -3071,6 +3078,8 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB& req,
               Substitute("not support the duplication type $0",
                          AlterTableRequestPB::StepType_Name(step.type())));
       }
+      // support add duplication or drop duplication once.
+      break;
     }
   }
 
@@ -3391,16 +3400,22 @@ Status CatalogManager::ListTables(const ListTablesRequestPB* req,
       const auto& table_name = table_owner_pair.first;
       const auto& table_info = FindOrDie(table_info_by_name, table_name);
       TableMetadataLock ltm(table_info.get(), LockMode::READ);
-      if (!ltm.data().is_running()) continue;
+      const auto& table_data = ltm.data();
+      if (!table_data.is_running()) continue;
 
       // If we have a different table name than expected, there was a table
       // rename and we shouldn't show the table.
-      if (table_name != ltm.data().name()) {
+      if (table_name != table_data.name()) {
         continue;
       }
       ListTablesResponsePB::TableInfo* table = resp->add_tables();
       table->set_id(table_info->id());
       table->set_name(table_name);
+      CHECK_LE(table_data.pb.dup_infos_size(), 1);
+      for (auto& dup_info : table_data.pb.dup_infos()) {
+        auto* dup_info_pb = table->add_dup_info();
+        dup_info_pb->CopyFrom(dup_info);
+      }
     }
   } else {
     // Otherwise, pass all tables through.
@@ -3410,6 +3425,13 @@ Status CatalogManager::ListTables(const ListTablesRequestPB* req,
       ListTablesResponsePB::TableInfo* table = resp->add_tables();
       table->set_id(table_info->id());
       table->set_name(table_name);
+      TableMetadataLock ltm(table_info.get(), LockMode::READ);
+      const auto& table_data = ltm.data();
+      CHECK_LE(table_data.pb.dup_infos_size(), 1);
+      for (auto& dup_info : table_data.pb.dup_infos()) {
+        auto* dup_info_pb = table->add_dup_info();
+        dup_info_pb->CopyFrom(dup_info);
+      }
     }
   }
   return Status::OK();

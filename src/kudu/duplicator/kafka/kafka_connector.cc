@@ -189,7 +189,7 @@ Status KafkaConnector::WriteBatch(
     kafka_flush_histogram_->Increment(elapsed.ToMicroseconds());
     return Status::OK();
   } catch (const cppkafka::Exception& e) {
-    LOG(WARNING) << "failed when flushing: " << e.what();
+    LOG(WARNING) << "failed when flushing: " << e.what() << ", message size: " << messages.size();
   }
 
   return Status::ServiceUnavailable("flush messages failed");

@@ -606,6 +606,7 @@ message ListTablesResponsePB {
   message TableInfo {
     required bytes id = 1;
     required string name = 2;
+    repeated consensus.DuplicationInfoPB dup_info = 9;
   }
 
   repeated TableInfo tables = 2;
@@ -1068,6 +1069,8 @@ enum MasterFeatures {
   // Though this is technically a tserver feature, it's unreasonable to check if every
   // tablet server supports this feature. Instead we use the master as a proxy.
   IGNORE_OPERATIONS = 7;
+  // Whether the cluster supports duplication.
+  DUPLICATION = 99;
 }
 
 service MasterService {
@@ -1150,7 +1153,6 @@ service MasterService {
       (ChangeTServerStateResponsePB) {
     option (kudu.rpc.authz_method) = "AuthorizeSuperUser";
   }
-
   // Add a new master to existing cluster.
   rpc AddMaster(AddMasterRequestPB) returns (AddMasterResponsePB) {
     option (kudu.rpc.authz_method) = "AuthorizeSuperUser";

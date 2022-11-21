@@ -60,7 +60,7 @@ job iwyu:
     - mkdir -p build/debug
     - cd build/debug
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
-    - make iwyu -j$(nproc)
+    - make iwyu -j16
   tags:
     - skv-kudu-docker
   rules:
@@ -83,7 +83,7 @@ job asan:
     - mkdir -p build/asan
     - cd build/asan
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DKUDU_USE_ASAN=1 ../..
-    - make -j$(nproc)
+    - make -j16
     - cd ../..
     - bash check_test.sh
   tags:
@@ -108,7 +108,7 @@ job debug:
     - mkdir -p build/debug
     - cd build/debug
     - CC=${THIRDPARTY_DIR}/clang-toolchain/bin/clang CXX=${THIRDPARTY_DIR}/clang-toolchain/bin/clang++ ${THIRDPARTY_DIR}/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=debug ../..
-    - make -j$(nproc)
+    - make -j16
     - cd ../..
     - bash check_test.sh
   tags:

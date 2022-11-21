@@ -140,16 +140,19 @@ Status LogReplayer::SeekStartPoint() {
 Status LogReplayer::Replay(int64_t task_id) {
   CHECK_LT(task_id_, task_id);
   CHECK(state_ == State::STARTING || state_ == State::FINISHED);
-  task_id_ = task_id;
-  state_ = State::RUNNING;
+  {
+    std::unique_lock<Mutex> l(lock_);
+    task_id_ = task_id;
+    state_ = State::RUNNING;
 
-  // To Protect wals, avoid wal file gced when relaying.
-  VLOG(0) << Substitute(
-      "Replay start, tablet id: $0, peer uuid: $1, replay start point: $2, task_id: $3",
-      tablet_replica_->tablet_id(),
-      tablet_replica_->permanent_uuid(),
-      start_point_.ShortDebugString(),
-      task_id_);
+    // To Protect wals, avoid wal file gced when relaying.
+    VLOG(0) << Substitute(
+        "Replay start, tablet id: $0, peer uuid: $1, replay start point: $2, task_id: $3",
+        tablet_replica_->tablet_id(),
+        tablet_replica_->permanent_uuid(),
+        start_point_.ShortDebugString(),
+        task_id_);
+  }
   log::LogAnchor anchor;
   tablet_replica_->log_anchor_registry()->Register(0, "duplicator", &anchor);
   SCOPED_CLEANUP({ tablet_replica_->log_anchor_registry()->Unregister(&anchor); });
@@ -254,12 +257,16 @@ Status LogReplayer::Replay(int64_t task_id) {
                           ops_count);
   }
 
-  VLOG(0) << Substitute("Replay finish, tablet id: $0, peer uuid: $1, start point: $2, task_id: $3",
-                        tablet_replica_->tablet_id(),
-                        tablet_replica_->permanent_uuid(),
-                        start_point_.ShortDebugString(),
-                        task_id_);
-  state_ = State::FINISHED;
+  {
+    std::unique_lock<Mutex> l(lock_);
+    VLOG(0) << Substitute(
+        "Replay finish, tablet id: $0, peer uuid: $1, start point: $2, task_id: $3",
+        tablet_replica_->tablet_id(),
+        tablet_replica_->permanent_uuid(),
+        start_point_.ShortDebugString(),
+        task_id_);
+    state_ = State::FINISHED;
+  }
   last_segments_.swap(segments);
   return Status::OK();
 }

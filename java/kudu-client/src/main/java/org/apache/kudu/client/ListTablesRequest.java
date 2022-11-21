@@ -20,6 +20,7 @@ package org.apache.kudu.client;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.google.common.collect.ImmutableList;
 import com.google.protobuf.Message;
 import io.netty.util.Timer;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -32,6 +33,7 @@ import org.apache.kudu.util.Pair;
 class ListTablesRequest extends KuduRpc<ListTablesResponse> {
 
   private final String nameFilter;
+  private final boolean supportDuplication;
 
   ListTablesRequest(KuduTable masterTable,
                     String nameFilter,
@@ -39,6 +41,17 @@ class ListTablesRequest extends KuduRpc<ListTablesResponse> {
                     long timeoutMillis) {
     super(masterTable, timer, timeoutMillis);
     this.nameFilter = nameFilter;
+    this.supportDuplication = false;
+  }
+
+  ListTablesRequest(KuduTable masterTable,
+                    String nameFilter,
+                    Timer timer,
+                    long timeoutMillis,
+                    boolean supportDuplication) {
+    super(masterTable, timer, timeoutMillis);
+    this.nameFilter = nameFilter;
+    this.supportDuplication = supportDuplication;
   }
 
   @Override
@@ -70,11 +83,23 @@ class ListTablesRequest extends KuduRpc<ListTablesResponse> {
     int tablesCount = respBuilder.getTablesCount();
     List<TableInfo> tableInfos = new ArrayList<>(tablesCount);
     for (Master.ListTablesResponsePB.TableInfo infoPb : respBuilder.getTablesList()) {
-      tableInfos.add(new TableInfo(infoPb.getId().toStringUtf8(), infoPb.getName()));
+      TableInfo tableInfo = new TableInfo(infoPb.getId().toStringUtf8(), infoPb.getName());
+      if (!infoPb.getDupInfoList().isEmpty()) {
+        tableInfo.addAllDuplicationInfos(infoPb.getDupInfoList());
+      }
+      tableInfos.add(tableInfo);
     }
     ListTablesResponse response = new ListTablesResponse(timeoutTracker.getElapsedMillis(),
                                                          tsUUID, tableInfos);
     return new Pair<ListTablesResponse, Object>(
         response, respBuilder.hasError() ? respBuilder.getError() : null);
+  }
+
+  @Override
+  List<Integer> getRequiredFeatures() {
+    if (supportDuplication) {
+      return ImmutableList.of(Master.MasterFeatures.DUPLICATION_VALUE);
+    }
+    return ImmutableList.of();
   }
 }

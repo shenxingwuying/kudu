@@ -23,6 +23,7 @@
 #include <ctime>
 #include <memory>
 #include <new>
+#include <optional>
 #include <ostream>
 #include <utility>
 #include <vector>
@@ -69,6 +70,12 @@
 #include "kudu/util/rw_semaphore.h"
 #include "kudu/util/slice.h"
 #include "kudu/util/trace.h"
+
+namespace kudu {
+namespace consensus {
+class DuplicationInfoPB;
+}  // namespace consensus
+}  // namespace kudu
 
 DEFINE_int32(tablet_inject_latency_on_apply_write_op_ms, 0,
              "How much latency to inject when a write op is applied. "
@@ -298,8 +305,10 @@ Status WriteOp::Apply(CommitMsg** commit_msg) {
         // This status, return the Apply() status, ignore the duplication op status.
         return Status::OK();
       }
-      const auto& dup_info =
-          *CHECK_NOTNULL(state()->tablet_replica()->consensus()->duplication_info_pb());
+      std::optional<consensus::DuplicationInfoPB> dup_info_opt =
+          *(state()->tablet_replica()->consensus()->duplication_info_pb());
+      CHECK(dup_info_opt.has_value());
+      auto dup_info = *dup_info_opt;
 
       // Step 2. Commit a special log for duplicate Msg.
       TabletReplica* tablet_replica = state()->tablet_replica();
@@ -317,7 +326,7 @@ Status WriteOp::Apply(CommitMsg** commit_msg) {
             unique_ptr<OpCompletionCallback>(new DuplicationOpCompletionCallback(tablet_replica)));
         // Submit the write operation. The RPC will be responded asynchronously.
         tablet_replica->SubmitDuplicationOp(
-            std::move(op_state), std::move(last_confirmed_opid), dup_info);
+            std::move(op_state), std::move(last_confirmed_opid), std::move(dup_info));
       }
     }
   }

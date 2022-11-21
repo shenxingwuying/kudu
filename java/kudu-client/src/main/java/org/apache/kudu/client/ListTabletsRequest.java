@@ -57,13 +57,16 @@ class ListTabletsRequest extends KuduRpc<ListTabletsResponse> {
     readProtobuf(callResponse.getPBMessage(), respBuilder);
     int serversCount = respBuilder.getStatusAndSchemaCount();
     List<String> tablets = new ArrayList<>(serversCount);
+    List<Tserver.ListTabletsResponsePB.StatusAndSchemaPB> tabletInfoMap = new ArrayList<>(serversCount);
     for (Tserver.ListTabletsResponsePB.StatusAndSchemaPB info
         : respBuilder.getStatusAndSchemaList()) {
       tablets.add(info.getTabletStatus().getTabletId());
+      tabletInfoMap.add(info);
     }
     ListTabletsResponse response = new ListTabletsResponse(timeoutTracker.getElapsedMillis(),
                                                            tsUUID,
-                                                           tablets);
+                                                           tablets,
+                                                           tabletInfoMap);
     return new Pair<>(response, respBuilder.hasError() ? respBuilder.getError() : null);
   }
 }

@@ -28,7 +28,7 @@ kafka_package=$kafka_package_name.tgz
 download_url="https://jfrog-internal.sensorsdata.cn/artifactory/dragon-internal/inf/soku/$kafka_package"
 
 topic_name=kudu_profile_record_stream
-kafka_target=itest-kafka-$[1279+port_offset]
+kafka_target=itest-kafka-$[2000+port_offset]
 
 zookeeper_base_port=2181
 kafka_base_port=9092
@@ -56,10 +56,10 @@ function download_kafka() {
     popd
 }
 
-function start_kafka() {
+function prepare_zookeeper() {
     download_kafka
     pushd /tmp/$kafka_target
-    # Start the ZooKeeper service
+    # Prepare the ZooKeeper service configure items
     # Note: Soon, ZooKeeper will no longer be required by Apache Kafka.
     set +e
     if grep "^clientPort=" config/zookeeper.properties &>/dev/null; then
@@ -67,15 +67,24 @@ function start_kafka() {
     else
         echo "clientPort=$zookeeper_port" >> config/zookeeper.properties
     fi
+    # maxSessionTimeout
+    if grep "^maxSessionTimeout=" config/zookeeper.properties &>/dev/null; then
+        sed -i "s/^maxSessionTimeout=.*/maxSessionTimeout=10000/g" config/zookeeper.properties
+    else
+        echo "maxSessionTimeout=10000" >> config/zookeeper.properties
+    fi
     mkdir -p /tmp/$kafka_target/zookeeper_data
     if grep "^dataDir=" config/zookeeper.properties &>/dev/null; then
         sed -i "s#^dataDir=.*#dataDir=/tmp/$kafka_target/zookeeper_data#g" config/zookeeper.properties
     else
         echo "dataDir=/tmp/$kafka_target/zookeeper_data" >> config/zookeeper.properties
     fi
-    bin/zookeeper-server-start.sh config/zookeeper.properties \
-        &> /tmp/$kafka_target/zookeeper.out </dev/null &
+    popd
+}
 
+function prepare_kafka() {
+    pushd /tmp/$kafka_target
+    # Prepare the Kafka service configure items
     if grep "^listeners=PLAINTEXT://:" config/server.properties &>/dev/null; then
         sed -i "s/^listeners=PLAINTEXT://:.*/listeners=PLAINTEXT://:$kafka_port/g" config/server.properties
     else
@@ -93,11 +102,28 @@ function start_kafka() {
         echo "log.dirs=/tmp/$kafka_target/kafka_data" >> config/server.properties
     fi
     set -e
+    popd
+}
+
+function start_zookeeper() {
+    pushd /tmp/$kafka_target
+    set -e
+    # Start the Zookeeper service
+    bin/zookeeper-server-start.sh config/zookeeper.properties \
+        &> /tmp/$kafka_target/zookeeper.out </dev/null &
+    sleep 2
+    popd
+}
+
+function start_kafka() {
+    pushd /tmp/$kafka_target
+    set -e
+
     # Start the Kafka broker service
     bin/kafka-server-start.sh config/server.properties \
         &> /tmp/$kafka_target/kafka-server.out </dev/null &
 
-    sleep 5 
+    sleep 3
     popd
 }
 
@@ -139,15 +165,19 @@ function test_write_and_read() {
     popd
 }
 
-function stop_kafka() {
+function stop_zookeeper() {
     ## TODO(duyuqi) should fix it.
-    # stop server, 
-    ps auxwf | grep $kafka_target | grep kafka.Kafka | grep -v grep \
-        | awk '{print $2}' | xargs -i kill -9 {}
+    # stop server.
     ps auxwf | grep $kafka_target | grep org.apache.zookeeper.server.quorum.QuorumPeerMain \
         | grep -v grep | awk '{print $2}' | xargs -i kill -9 {}
-    
-    rm -rf /tmp/$kafka_target /tmp/kafka-logs
+}
+
+function stop_kafka() {
+    ## TODO(duyuqi) should fix it.
+    # stop server.
+    ps auxwf | grep $kafka_target | grep kafka.Kafka | grep -v grep \
+        | awk '{print $2}' | xargs -i kill -9 {}
+
 }
 
 function uninstall_kafka() {
@@ -165,6 +195,9 @@ case $action in
         exit 0
         ;;
     "start")
+        prepare_zookeeper
+        prepare_kafka
+        start_zookeeper
         start_kafka
         create_topic
         exit 0
@@ -172,6 +205,7 @@ case $action in
     "stop")
         delete_topic
         stop_kafka
+        stop_zookeeper
         clean_env
         exit 0
         ;;

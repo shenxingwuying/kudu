@@ -38,6 +38,7 @@
 #include <gtest/gtest.h>
 
 #include "kudu/client/client.h"
+#include "kudu/client/scan_batch.h"
 #include "kudu/client/schema.h"
 #include "kudu/client/write_op.h"
 #include "kudu/common/partial_row.h"
@@ -140,7 +141,10 @@ class DuplicationITest : public ExternalMiniClusterITestBase {
     consumer_->subscribe({kTopicName});
   }
 
-  void Consume(int expected_size, const string& group_name, const string& strategy) {
+  void Consume(int expected_size,
+               const string& group_name,
+               const string& strategy,
+               int32_t timeout_s = 10) {
     cppkafka::Configuration configuration = {{"metadata.broker.list", kBrokers},
                                              {"group.id", group_name},
                                              {"enable.auto.commit", false},
@@ -148,11 +152,11 @@ class DuplicationITest : public ExternalMiniClusterITestBase {
 
     RenewConsumer(configuration);
 
-    std::chrono::milliseconds timeout(2000);
+    std::chrono::milliseconds timeout(1000);
     int count = 0;
-    int max_batch_size = 16;
+    constexpr const int max_batch_size = 16;
     vector<cppkafka::Message> messages;
-    int empty_count = 0;
+    int noop_wait_s = 0;
     std::set<int32_t> key_set;
     while (true) {
       messages.clear();
@@ -165,13 +169,14 @@ class DuplicationITest : public ExternalMiniClusterITestBase {
         continue;
       }
       if (messages.empty()) {
-        VLOG(0) << "kafka consumer poll messages empty, wait 2s";
-        if (empty_count++ >= 15) {
+        VLOG(0) << Substitute("kafka consumer poll messages is empty, wait $0s", noop_wait_s);
+        if (noop_wait_s++ >= timeout_s || (noop_wait_s > 10 && key_set.size() == expected_size)) {
+          VLOG(0) << "Finish consume kafka, noop_wait_s: " << noop_wait_s;
           break;
         }
         continue;
       }
-      empty_count = 0;
+      noop_wait_s = 0;
       for (const auto& msg : messages) {
         if (!msg) {
           continue;
@@ -198,6 +203,7 @@ class DuplicationITest : public ExternalMiniClusterITestBase {
             }
           }
           ASSERT_EQ(2 * key, value_int);
+          // VLOG(0) << "KeyValueLogging key: " << key << ", value: " << value_int;
           consumer_->commit(msg);
           count++;
         }
@@ -212,6 +218,37 @@ class DuplicationITest : public ExternalMiniClusterITestBase {
                             messages.size());
     ASSERT_GE(count, expected_size);
     ASSERT_EQ(expected_size, key_set.size());
+  }
+
+  static void ScanRows(const client::sp::shared_ptr<client::KuduTable>& table, int* row_count) {
+    client::KuduScanner scanner(table.get());
+    ASSERT_OK(scanner.SetFaultTolerant());
+    ASSERT_OK(scanner.Open());
+    client::KuduScanBatch batch;
+
+    int next_row = 0;
+    ASSERT_TRUE(scanner.HasMoreRows());
+    while (scanner.HasMoreRows()) {
+      ASSERT_OK(scanner.NextBatch(&batch));
+      for (client::KuduScanBatch::const_iterator it = batch.begin(); it != batch.end();
+           ++it, ++next_row) {
+        client::KuduScanBatch::RowPtr row(*it);
+        int32_t key = -1;
+        int32_t int_val = -1;
+        Slice slice_val;
+
+        ASSERT_OK(row.GetInt32("key", &key));
+        ASSERT_OK(row.GetInt32("int_val", &int_val));
+        ASSERT_OK(row.GetString("string_val", &slice_val));
+        int32_t string_val_int;
+        ASSERT_TRUE(SimpleAtoi(slice_val.ToString().c_str(), &string_val_int));
+        ASSERT_EQ(key, next_row);
+        ASSERT_EQ(key, int_val);
+        ASSERT_EQ(string_val_int, 2 * key);
+      }
+    }
+
+    *row_count = next_row;
   }
 
  protected:
@@ -320,7 +357,7 @@ TEST_F(DuplicationITest, CreateTableWithDuplicationAndTestDuplication) {
                           this,
                           expected_size,
                           "CreateTableWithDuplicationAndTestDuplication",
-                          kSmallest));
+                          kSmallest, 20));
   SleepFor(MonoDelta::FromSeconds(1));
   ASSERT_OK(InsertRows(0, insert_count));
   t.join();
@@ -415,11 +452,33 @@ TEST_F(DuplicationITest, AlterTableWithDuplicationAndTestDuplication) {
                           this,
                           expected_size,
                           "AlterTableWithDuplicationAndTestDuplication",
-                          kSmallest));
+                          kSmallest,
+                          20));
   SleepFor(MonoDelta::FromMilliseconds(2000));
   ASSERT_OK(InsertRows(0, insert_count));
   t.join();
   SleepFor(MonoDelta::FromMilliseconds(1000));
+  alter_options.action = Action::kDisableDuplication;
+  ASSERT_OK(AlterTable(alter_options));
+}
+
+TEST_F(DuplicationITest, AlterTableWithDuplicationBeforeKafkaNormal) {
+  string kTableName = "AlterTableWithDuplicationBeforeKafkaNormal";
+  CreateTableOptions options;
+  options.partition_num = 2;
+  options.replication_refactor = 3;
+  options.table_name = kTableName;
+  ASSERT_OK(CreateTable(options));
+
+  kafka_.StopKafka();
+  AlterTableOptions alter_options;
+  alter_options.table_name = kTableName;
+  alter_options.info.name = kTopicName;
+  alter_options.info.type = client::DuplicationDownstream::KAFKA;
+  alter_options.info.uri = kBrokers;
+
+  alter_options.action = Action::kEnableDuplication;
+  ASSERT_OK(AlterTable(alter_options));
   alter_options.action = Action::kDisableDuplication;
   ASSERT_OK(AlterTable(alter_options));
 }
@@ -456,7 +515,8 @@ TEST_F(DuplicationITest, AlterTableWithDuplicationFixedInvalidBroker) {
                           this,
                           expected_size,
                           "AlterTableWithDuplicationFixedInvalidBroker",
-                          kSmallest));
+                          kSmallest,
+                          20));
   ASSERT_OK(InsertRows(0, insert_count));
   t.join();
   SleepFor(MonoDelta::FromMilliseconds(1000));
@@ -477,7 +537,8 @@ TEST_F(DuplicationITest, DuplicatorRecovering) {
   int expected_size = insert_count + second_count;
   ASSERT_OK(InsertRows(0, insert_count));
 
-  std::thread t(&DuplicationITest::Consume, this, expected_size, "DuplicatorRecovering", kSmallest);
+  std::thread t(
+      &DuplicationITest::Consume, this, expected_size, "DuplicatorRecovering", kSmallest, 20);
   SleepFor(MonoDelta::FromMilliseconds(1000));
 
   AlterTableOptions alter_options;
@@ -485,7 +546,6 @@ TEST_F(DuplicationITest, DuplicatorRecovering) {
   alter_options.info.name = kTopicName;
   alter_options.info.type = client::DuplicationDownstream::KAFKA;
   alter_options.info.uri = kBrokers;
-
 
   alter_options.action = Action::kEnableDuplication;
   ASSERT_OK(AlterTable(alter_options));
@@ -514,7 +574,7 @@ TEST_F(DuplicationITest, RestartTserver) {
   int insert_count = 20000;
   int expected_size = insert_count;
   std::thread consume_thread(
-      std::bind(&DuplicationITest::Consume, this, expected_size, "RestartTserver", kSmallest));
+      std::bind(&DuplicationITest::Consume, this, expected_size, "RestartTserver", kSmallest, 20));
   std::thread write_thread(&DuplicationITest::WriteRows, this, 0, insert_count);
   SleepFor(MonoDelta::FromSeconds(2));
   // for (int i = 0; i < cluster_->num_tablet_servers(); i++) {
@@ -534,7 +594,7 @@ TEST_F(DuplicationITest, RestartTserver) {
   consume_thread.join();
 }
 
-TEST_F(DuplicationITest, DuplicatorKafkaDownAndCheck) {
+TEST_F(DuplicationITest, DuplicatorKafkaDownAndCheckKuduWriteOK) {
   FLAGS_kafka_connector_flush_timeout_ms = 1000;
   FLAGS_duplicator_max_queue_size = 64;
 
@@ -546,23 +606,30 @@ TEST_F(DuplicationITest, DuplicatorKafkaDownAndCheck) {
   options.dup_info = dup_info;
   options.partition_num = 1;
   options.replication_refactor = 3;
-  options.table_name = "KafkaDownAndRecover";
+  options.table_name = "DuplicatorKafkaDownAndCheckKuduWriteOK";
   ASSERT_OK(CreateTable(options));
+  // Wait duplicator started.
   SleepFor(MonoDelta::FromSeconds(5));
-  int pre_count = 1000;
-  int insert_count = 1000000;
+  int pre_count = 2000;
+  int insert_count = 20000;
   WriteRows(0, pre_count);
   kafka_.StopKafka();
-  std::thread write_thread(&DuplicationITest::WriteRows, this, pre_count + 1, insert_count);
+  std::thread write_thread(&DuplicationITest::WriteRows, this, pre_count, insert_count);
+  // Check Kudu data is 20000 rows.
+  client::sp::shared_ptr<client::KuduTable> table;
+  ASSERT_OK(client_->OpenTable(options.table_name, &table));
+  ASSERT_EVENTUALLY([&]() {
+    int row_count = -1;
+    ScanRows(table, &row_count);
+    ASSERT_EQ(insert_count, row_count);
+  });
   write_thread.join();
-  VLOG(0) << "Insert finish";
-  SleepFor(MonoDelta::FromSeconds(3600));
-  VLOG(0) << "Test finish";
 }
 
 TEST_F(DuplicationITest, DuplicatorKafkaDownAndRecover) {
   FLAGS_kafka_connector_flush_timeout_ms = 1000;
   FLAGS_duplicator_max_queue_size = 64;
+  constexpr const int session_timeout_s = 60;
 
   CreateTableOptions options;
   client::DuplicationInfo dup_info;
@@ -572,22 +639,43 @@ TEST_F(DuplicationITest, DuplicatorKafkaDownAndRecover) {
   options.dup_info = dup_info;
   options.partition_num = 1;
   options.replication_refactor = 3;
-  options.table_name = "KafkaDownAndRecover";
+  options.table_name = "DuplicatorKafkaDownAndRecover";
   ASSERT_OK(CreateTable(options));
 
-  // Make kafka stop 5s
-  SleepFor(MonoDelta::FromSeconds(2));
-  kafka_.StopKafka();
+  int pre_count = 1000;
   int insert_count = 10000;
   int expected_size = insert_count;
-  std::thread consume_thread(std::bind(
-      &DuplicationITest::Consume, this, expected_size, "DuplicatorKafkaDownAndRecover", kSmallest));
+  WriteRows(0, pre_count);
+  // Check Kudu data is 1000 rows.
+  client::sp::shared_ptr<client::KuduTable> table;
+  ASSERT_OK(client_->OpenTable(options.table_name, &table));
+  ASSERT_EVENTUALLY([&]() {
+    int row_count = -1;
+    ScanRows(table, &row_count);
+    ASSERT_EQ(pre_count, row_count);
+  });
 
-  std::thread write_thread(&DuplicationITest::WriteRows, this, 0, insert_count);
-  SleepFor(MonoDelta::FromSeconds(10));
+  kafka_.StopKafka();
+  std::thread consume_thread(std::bind(&DuplicationITest::Consume,
+                                       this,
+                                       expected_size,
+                                       options.table_name,
+                                       kSmallest,
+                                       session_timeout_s));
+
+  std::thread write_thread(&DuplicationITest::WriteRows, this, pre_count, insert_count);
+  // To make sure kafka start success.
+  SleepFor(MonoDelta::FromSeconds(
+      2 * kudu::duplication::kafka::SingleBrokerKafka::kZookeeperSessionTimeoutS));
   kafka_.StartKafka();
 
   write_thread.join();
+  // Check Kudu data is 20000 rows.
+  ASSERT_EVENTUALLY([&]() {
+    int row_count = -1;
+    ScanRows(table, &row_count);
+    ASSERT_EQ(insert_count, row_count);
+  });
   consume_thread.join();
 }
 

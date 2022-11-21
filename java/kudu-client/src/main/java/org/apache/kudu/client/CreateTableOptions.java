@@ -17,6 +17,7 @@
 
 package org.apache.kudu.client;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -28,6 +29,7 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
 
 import org.apache.kudu.Common;
+import org.apache.kudu.consensus.Metadata;
 import org.apache.kudu.master.Master;
 
 /**
@@ -260,6 +262,27 @@ public class CreateTableOptions {
     return this;
   }
 
+  /**
+   * Add the table's duplication
+   * TODO(duyuqi) support more than one duplication
+   *
+   * @param name destination system data entity name, eg: kafka topic name
+   * @param streamType duplication's destination system, such as Kafka
+   * @param uri destination's discovered service name, optional
+   * @return this instance
+   */
+  public CreateTableOptions addDuplication(String name, Metadata.DownstreamType streamType,
+      String uri) {
+    Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
+    builder.setName(name)
+        .setType(streamType);
+    if (uri != null && !uri.isEmpty()) {
+      builder.setUri(uri);
+    }
+    pb.addDupInfos(builder.build());
+    return this;
+  }
+
   Master.CreateTableRequestPB.Builder getBuilder() {
     if (!splitRows.isEmpty() || !rangePartitions.isEmpty()) {
       pb.setSplitRowsRangeBounds(new Operation.OperationsEncoder()
@@ -269,11 +292,14 @@ public class CreateTableOptions {
   }
 
   List<Integer> getRequiredFeatureFlags() {
-    if (rangePartitions.isEmpty()) {
-      return ImmutableList.of();
-    } else {
-      return ImmutableList.of(Master.MasterFeatures.RANGE_PARTITION_BOUNDS_VALUE);
+    List<Integer> requiredFeatureFlags = new ArrayList<>();
+    if (!rangePartitions.isEmpty()) {
+      requiredFeatureFlags.add(Master.MasterFeatures.RANGE_PARTITION_BOUNDS_VALUE);
     }
+    if (!pb.getDupInfosList().isEmpty()) {
+      requiredFeatureFlags.add(Master.MasterFeatures.DUPLICATION_VALUE);
+    }
+    return requiredFeatureFlags;
   }
 
   boolean shouldWait() {

@@ -21,6 +21,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -325,13 +326,16 @@ Status TabletReplica::StartDuplicator() {
   //   2. Users want to fix it error and drop the duplicator and add an new duplicator.
   // 3. If not changed, re-init is no confluence.
   ShutdownDuplicatorUnlocked();
-
+  std::optional<consensus::DuplicationInfoPB> dup_info_opt = consensus_->duplication_info_pb();
+  if (!dup_info_opt.has_value()) {
+    // Not exist the duplicator.
+    return Status::OK();
+  }
   ThreadPool* duplicate_pool = shared_consensus()->duplication_pool();
   CHECK(duplicate_pool);
   duplicator_.reset(new duplicator::Duplicator(duplicate_pool, this));
 
-  consensus::DuplicationInfoPB& info = *consensus_->duplication_info_pb();
-  duplicator::ConnectorOptions options(info);
+  duplicator::ConnectorOptions options(*dup_info_opt);
   Status status = duplicator_->Init(options);
   if (!status.ok()) {
     LOG_WITH_PREFIX(ERROR) << Substitute(

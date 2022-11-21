@@ -62,7 +62,7 @@ DEFINE_int64(duplicator_max_queue_size, 1024,
             "the duplicator's max queue size, if excess the limit, duplication would downgrade "
             "from realtime mode to wal mode, duplication progress would be slow.");
 DEFINE_int32(queue_drain_timeout_ms, 5000,
-             "if queue no rows, wait queue_drain_timeout_ms ms at most ");
+             "if queue no rows, wait queue_drain_timeout_ms ms at most");
 
 using Tablet = kudu::tablet::Tablet;
 using DuplicationMode = kudu::tablet::Tablet::DuplicationMode;
@@ -162,8 +162,8 @@ Status Duplicator::Duplicate(tablet::WriteOpState* write_op_state,
 }
 
 void Duplicator::Apply() {
-  vector<unique_ptr<DuplicateMsg>> msgs;
-  bool should_merge_msgs = false;
+  vector<unique_ptr<DuplicateMsg>> duplication_msgs;
+  bool should_merge_tmp_realtime = false;
   if (duplication_mode_.load() == DuplicationMode::REALTIME_DUPLICATION) {
     // If current mode is realtime and realtime_tmp_queue_ is not empty.
     // the realtime_tmp_queue should write to destination system, then
@@ -171,32 +171,40 @@ void Duplicator::Apply() {
     std::unique_lock l(realtime_tmp_lock_);
     if (!realtime_tmp_queue_.empty()) {
       Status s = realtime_tmp_queue_.BlockingDrainTo(
-          &msgs, MonoTime::Now() + MonoDelta::FromSeconds(FLAGS_queue_drain_timeout_ms));
+          &duplication_msgs,
+          MonoTime::Now() + MonoDelta::FromMilliseconds(FLAGS_queue_drain_timeout_ms));
       if (PREDICT_FALSE(s.IsAborted() || s.IsTimedOut())) {
         return;
       }
-      should_merge_msgs = true;
+      should_merge_tmp_realtime = true;
     }
   }
 
-  if (should_merge_msgs && !queue_.empty()) {
-    std::vector<std::unique_ptr<DuplicateMsg>> messages;
-    Status s = queue_.BlockingDrainTo(
-        &messages, MonoTime::Now() + MonoDelta::FromSeconds(FLAGS_queue_drain_timeout_ms));
-    if (PREDICT_FALSE(s.IsAborted() || s.IsTimedOut())) {
-      return;
+  if (should_merge_tmp_realtime) {
+    if (!queue_.empty()) {
+      vector<unique_ptr<DuplicateMsg>> append_msgs;
+      Status s = queue_.BlockingDrainTo(
+          &append_msgs,
+          MonoTime::Now() + MonoDelta::FromMilliseconds(FLAGS_queue_drain_timeout_ms));
+      if (PREDICT_FALSE(s.IsAborted())) {
+        // program is shutdown.
+        return;
+      }
+      if (PREDICT_TRUE(s.ok())) {
+        duplication_msgs.reserve(duplication_msgs.size() + append_msgs.size());
+        std::move(append_msgs.begin(), append_msgs.end(), std::back_inserter(duplication_msgs));
+      }
     }
-    msgs.reserve(msgs.size() + messages.size());
-    std::move(messages.begin(), messages.end(), std::back_inserter(msgs));
   } else {
     Status s = queue_.BlockingDrainTo(
-        &msgs, MonoTime::Now() + MonoDelta::FromSeconds(FLAGS_queue_drain_timeout_ms));
+        &duplication_msgs,
+        MonoTime::Now() + MonoDelta::FromMilliseconds(FLAGS_queue_drain_timeout_ms));
     if (PREDICT_FALSE(s.IsAborted() || s.IsTimedOut())) {
       return;
     }
   }
 
-  if (msgs.empty()) {
+  if (duplication_msgs.empty()) {
     return;
   }
 
@@ -204,15 +212,17 @@ void Duplicator::Apply() {
   // TODO(duyuqi)
   // 1. Try to avoid duplicated messages because of partial failed.
   // 2. limit write batch size? produce some data and flush?
-  while (!(s = connector_->WriteBatch(options_.name, msgs)).ok()) {
+  while (!(s = connector_->WriteBatch(options_.name, duplication_msgs)).ok()) {
     KLOG_EVERY_N(WARNING, 100)
         << LogPrefix()
-        << Substitute("WriteBatch destination storage system error, retry it, status $0",
-                      s.ToString());
+        << Substitute(
+               "WriteBatch destination storage system error, retry it, msg size: $0 status $1",
+               duplication_msgs.size(),
+               s.ToString());
     // @TODO(duyuqi). We'd better add some backoff time.
     SleepFor(MonoDelta::FromMilliseconds(20));
   }
-  auto rit = msgs.rbegin();
+  auto rit = duplication_msgs.rbegin();
   {
     std::lock_guard<std::mutex> l(mutex_);
     last_confirmed_opid_ = (*rit)->op_id();
@@ -260,6 +270,9 @@ Status Duplicator::WorkAtWalReplay(unique_ptr<DuplicateMsg> msg,
   realtime_tmp_queue_.Put(std::move(msg));
   if (realtime_tmp_queue_.size() > FLAGS_duplicator_max_queue_size / 2) {
     realtime_tmp_queue_.Clear();
+    LOG_WITH_PREFIX(INFO) << Substitute(
+        "At mode $0, realtime_tmp_queue has too many elements, clear all elements",
+        Tablet::DuplicationMode_Name(DuplicationMode::WAL_DUPLICATION));
     need_replay_again_ = true;
   }
 
@@ -307,8 +320,8 @@ Status Duplicator::WorkAtWalReplayFinished(unique_ptr<DuplicateMsg> msg,
     top_op_id = realtime_tmp_queue_top_op_id_;
     realtime_tmp_queue_.Put(std::move(msg));
   }
-
-  if (top_op_id.index() <= (last_confirmed_opid_.index() + 1)) {
+  consensus::OpId last_confirmed_opid = this->last_confirmed_opid();
+  if (top_op_id.index() <= (last_confirmed_opid.index() + 1)) {
     if (duplication_mode_.compare_exchange_strong(wal_end_mode,
                                                   DuplicationMode::REALTIME_DUPLICATION,
                                                   std::memory_order_seq_cst,
@@ -358,7 +371,6 @@ Status Duplicator::WorkAtRealtime(unique_ptr<DuplicateMsg> msg,
     return Status::OK();
   }
   DuplicationMode realtime_mode = DuplicationMode::REALTIME_DUPLICATION;
-
   switch (queue_.Put(std::move(msg))) {
     case QueueStatus::QUEUE_SUCCESS:
       break;
@@ -386,7 +398,7 @@ Status Duplicator::WorkAtRealtime(unique_ptr<DuplicateMsg> msg,
 
 string Duplicator::LogPrefix() const {
   return Substitute("duplicator info: confirmed opid $0, tablet id $1, peer uuid $2 ",
-                    last_confirmed_opid_.ShortDebugString(),
+                    last_confirmed_opid().ShortDebugString(),
                     tablet_replica_->tablet_id(),
                     tablet_replica_->permanent_uuid());
 }

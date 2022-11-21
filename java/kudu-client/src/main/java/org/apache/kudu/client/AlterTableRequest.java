@@ -52,9 +52,7 @@ class AlterTableRequest extends KuduRpc<AlterTableResponse> {
     super(masterTable, timer, timeoutMillis);
     this.name = name;
     this.builder = ato.getProtobuf();
-    this.requiredFeatures = ato.hasAddDropRangePartitions() ?
-        ImmutableList.of(MasterFeatures.RANGE_PARTITION_BOUNDS_VALUE) :
-        ImmutableList.of();
+    this.requiredFeatures = ato.getRequiredFeatureFlags();
   }
 
   @Override

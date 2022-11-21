@@ -20,10 +20,15 @@ package org.apache.kudu.client;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.Executor;
 
 import com.google.common.base.Preconditions;
 import com.stumbleupon.async.Deferred;
+
+import org.apache.kudu.tablet.Metadata;
+import org.apache.kudu.tserver.Tserver;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
 import org.slf4j.Logger;
@@ -260,18 +265,37 @@ public class KuduClient implements AutoCloseable {
   /**
    * Call of kudu-cli.
    * `echo tablets | xargs -i kudu tablet change_config add_replica {} BEEF NON_VOTER`
-   * 
+   *
    * Use this for adding ksycner as cluster LEARNER.
-   * 
+   *
    *   Return OK: Added beef as LEARNER successful.
    *   Return Aborted: Something wrong with Defer, re-try is needed.
    *   Return NotFound: Ksyncer process is dead. No need to re-try.
    *   Return others like RemoteError, re-try is needed.
-   * 
-   * This is not eventually status to be returned to user, for this rpc call 
+   *
+   * This is not eventually status to be returned to user, for this rpc call
    * have no warranty that the peer relationship would be created.
    */
   public Status createKsyncerLearnerForTable(KuduTable kuduTable) {
+    // Check kudu-master version whether kudu cluster support duplication.
+    boolean supportDuplication = false;
+    try {
+      supportDuplication = joinAndHandleException(asyncClient.supportsDuplication());
+    } catch (KuduException e) {
+      LOG.error("Problem occurred when check duplication feature. ", e);
+      return Status.Aborted("Something error happened, make sure duplication feature failed.");
+    }
+    if (supportDuplication) {
+      try {
+        asyncClient.addDuplicator(kuduTable, AsyncKuduClient.DEFAULT_TOPIC_NAME);
+      } catch (Exception e) {
+        // This is throw by defered.join().
+        LOG.error("Problem occurred when add a duplicator for table. ", e);
+        return Status.Aborted("Something error happened, check status of kudu cluster.");
+      }
+      return Status.OK();
+    }
+
     Map<String, HostPortPB> serverMap;
     try {
       serverMap = listTabletServersWithUUID().getTabletServersMap();
@@ -279,6 +303,7 @@ public class KuduClient implements AutoCloseable {
       LOG.error("Problem occurred when fetching all tservers info. ", e);
       return e.getStatus();
     }
+    // Check kudu cluster whether ksyncer exists.
     if (serverMap.containsKey(AsyncKuduClient.BEEF_ID)) {
       HostPortPB beefPB = serverMap.get(AsyncKuduClient.BEEF_ID);
       try {
@@ -287,13 +312,92 @@ public class KuduClient implements AutoCloseable {
       } catch (Exception e) {
         // This is throw by defered.join().
         LOG.error("Problem occurred when fetching all tservers info. ", e);
-        return Status.Aborted("Something error happened, " +
-                              "go check status of kudu cluster holistically.");
+        return Status.Aborted("Something error happened, check status of kudu cluster.");
       }
     } else {
       LOG.error("Ksyncer instance may be dead, go check the status.");
       return Status.NotFound("Ksyncer instance may be dead, go check the status.");
     }
+  }
+
+  /**
+   *  Get the table names of duplications, used by infinity, compatible for ksyncer.
+   *  @return set of tables' name who has duplication.
+   */
+  public Set<String> getSubscribedTables() throws KuduException, RuntimeException {
+    Set<String> subscribedTables = new TreeSet<>();
+    // Check kudu-master version whether kudu cluster support duplication.
+    boolean supportDuplication = false;
+    try {
+      supportDuplication = joinAndHandleException(asyncClient.supportsDuplication());
+    } catch (KuduException e) {
+      throw e;
+    }
+    if (supportDuplication) {
+      Deferred<ListTablesResponse> d = asyncClient.listDuplications();
+      ListTablesResponse response = null;
+      try {
+        response = joinAndHandleException(d);
+      } catch (KuduException e) {
+        throw e;
+      }
+      for (ListTablesResponse.TableInfo tableInfo : response.getTableInfosList()) {
+        if (!tableInfo.duplicationInfos().isEmpty()) {
+          subscribedTables.add(tableInfo.getTableName());
+        }
+      }
+      return subscribedTables;
+    }
+    // For ksyncer.
+    return getTablesAtServer(AsyncKuduClient.BEEF_ID);
+  }
+
+  // Get a set about a tserver's table names, just like kudu CLI:
+  //     kudu remote_replica list tserver:port | grep "Table name"
+  // This method is used in 'getSubscribedTables()' for ksyncer, and a test case
+  // 'TestAsyncKuduClient.testCreateTableWithDuplication' use it to to mock ksyncer.
+  Set<String> getTablesAtServer(String serverUuid) throws KuduException, RuntimeException {
+    Set<String> subscribedTables = new TreeSet<>();
+  
+    // The code below adapt to ksyncer.
+    // Map: <server uuid, server info>
+    Map<String, ServerInfo> serverInfoByUuid = null;
+    try {
+      serverInfoByUuid = listTabletServersWithUUID().getServerInfoMap();
+    } catch (KuduException e) {
+      LOG.error("Problem occurred when fetching all tservers info. ", e);
+      throw e;
+    }
+    if (serverInfoByUuid.containsKey(serverUuid)) {
+      ServerInfo serverInfo = serverInfoByUuid.get(serverUuid);
+      RpcProxy proxy = asyncClient.newRpcProxy(serverInfo);
+      int maxRetry = 3;
+      ListTabletsRequest req = new ListTabletsRequest(asyncClient.getTimer(), 10000);
+      for (int i = 1; i <= maxRetry; i++) {
+        subscribedTables.clear();
+        Deferred<ListTabletsResponse> d = req.getDeferred();
+        // TODO(duyuqi)
+        // We should provide a better way to retry, such as async execute task and
+        // an exponential backoff time.
+        proxy.sendRpc(req);
+        try {
+          ListTabletsResponse resp = d.join();
+          for (Tserver.ListTabletsResponsePB.StatusAndSchemaPB tabletInfo :
+              resp.getTabletInfoMap()) {
+            if (tabletInfo.getTabletStatus().getState() == Metadata.TabletStatePB.RUNNING) {
+              subscribedTables.add(tabletInfo.getTabletStatus().getTableName());
+            }
+          }
+          break;
+        } catch (Exception e) {
+          // The 'Exception e' include InterruptedException
+          if (i == maxRetry) {
+            throw new RuntimeException(e);
+          }
+        }
+      }
+    }
+    return subscribedTables;
   }
 
   /**

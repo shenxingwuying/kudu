@@ -18,6 +18,7 @@
 
 #include <cstddef>
 #include <limits>
+#include <memory>
 #include <ostream>
 #include <utility>
 
@@ -424,11 +425,9 @@ Status ConsensusMetadata::UpdateOnDiskSize() {
 
 Status ConsensusMetadata::UpdateDuplicators(const RaftConfigPB& config) {
   std::lock_guard<Mutex> l_lock(mutex_);
-  duplication_info_pb_.reset();
+  duplication_info_pb_ = std::nullopt;
   for (const RaftPeerPB& peer : config.peers()) {
     if (IsDuplicator(peer)) {
-      unique_ptr<consensus::DuplicationInfoPB> duplication_info_pb_ptr(
-          new consensus::DuplicationInfoPB);
       // support only 1 duplicator.
       CHECK(peer.has_dup_info());
       consensus::DownstreamType type = peer.dup_info().type();
@@ -439,8 +438,7 @@ Status ConsensusMetadata::UpdateDuplicators(const RaftConfigPB& config) {
         return Status::NotSupported(msg);
       }
       CHECK(peer.dup_info().has_uri());
-      duplication_info_pb_ptr->CopyFrom(peer.dup_info());
-      duplication_info_pb_ = std::move(duplication_info_pb_ptr);
+      duplication_info_pb_ = peer.dup_info();
       break;
     }
   }

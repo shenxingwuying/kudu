@@ -18,8 +18,8 @@
 
 #include <atomic>
 #include <cstdint>
-#include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -170,9 +170,9 @@ class ConsensusMetadata : public RefCountedThreadSafe<ConsensusMetadata> {
   // Return cached peer role and term, lock-free.
   RoleAndTerm GetRoleAndTerm() const;
 
-  consensus::DuplicationInfoPB* duplication_info_pb() const {
+  std::optional<consensus::DuplicationInfoPB> duplication_info_pb() const {
     std::lock_guard<Mutex> l_lock(mutex_);
-    return duplication_info_pb_.get();
+    return duplication_info_pb_;
   }
 
  private:
@@ -277,7 +277,7 @@ class ConsensusMetadata : public RefCountedThreadSafe<ConsensusMetadata> {
   mutable Mutex mutex_;
 
   // The duplicator infomation.
-  std::unique_ptr<consensus::DuplicationInfoPB> duplication_info_pb_;
+  std::optional<consensus::DuplicationInfoPB> duplication_info_pb_;
 
   DISALLOW_COPY_AND_ASSIGN(ConsensusMetadata);
 };

@@ -22,6 +22,7 @@
 #include <iosfwd>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -179,7 +180,7 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
 
   // Returns true if cmeta has duplicator.
   bool HasDuplicator() const {
-    return duplication_info_pb() != nullptr;
+    return duplication_info_pb().has_value();
   }
 
   // Returns true if role is Leader and cmeta has duplicator.
@@ -187,7 +188,7 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
     return role() == RaftPeerPB::LEADER && HasDuplicator();
   }
 
-  consensus::DuplicationInfoPB* duplication_info_pb() const {
+  std::optional<consensus::DuplicationInfoPB> duplication_info_pb() const {
     return cmeta_->duplication_info_pb();
   }
 

@@ -19,9 +19,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 
 #include "kudu/consensus/log_util.h"
 #include "kudu/consensus/opid.pb.h"
+#include "kudu/util/mutex.h"
 #include "kudu/util/status.h"
 #include "kudu/util/threadpool.h"
 
@@ -66,8 +68,9 @@ class LogReplayer {
 
   bool is_finished(int64_t task_id) const {
     // TODO(duyuqi)
-    // If task_id < task_id_, task_id has finished. But
-    // The function return false. Maybe we should rethink the function name.
+    // If task_id < task_id_, task_id has finished. But the function
+    // return false. Maybe we should rethink the function name.
+    std::unique_lock<Mutex> l(lock_);
     return (task_id_ == task_id && state_ == State::FINISHED);
   }
 
@@ -95,6 +98,7 @@ class LogReplayer {
 
   log::SegmentSequence last_segments_;
 
+  mutable Mutex lock_;
   int64_t task_id_;
 
   State state_;

@@ -36,6 +36,8 @@ constexpr int kKafkaBasePort = 9092;
 
 class SingleBrokerKafka {
  public:
+  static const int kZookeeperSessionTimeoutS = 10;
+
   explicit SingleBrokerKafka(int offset_port) : command_(), offset_port_(offset_port) {
     string exe_file;
     CHECK_OK(Env::Default()->GetExecutablePath(&exe_file));

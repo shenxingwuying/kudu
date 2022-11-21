@@ -30,6 +30,9 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.kudu.client.ExternalConsistencyMode.CLIENT_PROPAGATED;
 import static org.apache.kudu.rpc.RpcHeader.ErrorStatusPB.RpcErrorCodePB.ERROR_INVALID_REQUEST;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
@@ -78,6 +81,7 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.kudu.Common;
 import org.apache.kudu.Schema;
+import org.apache.kudu.consensus.Metadata;
 import org.apache.kudu.master.Master;
 import org.apache.kudu.master.Master.GetTableLocationsResponsePB;
 import org.apache.kudu.master.Master.TSInfoPB;
@@ -305,6 +309,7 @@ public class AsyncKuduClient implements AutoCloseable {
   public static final long NO_TIMESTAMP = -1;
   public static final long INVALID_TXN_ID = -1;
   public static final String BEEF_ID = "beefbeefbeefbeefbeefbeefbeefbeef";
+  public static final String DEFAULT_TOPIC_NAME = "kudu_profile_record_stream";
   public static final long DEFAULT_OPERATION_TIMEOUT_MS = 30000;
   public static final long DEFAULT_KEEP_ALIVE_PERIOD_MS = 15000; // 25% of the default scanner ttl.
   private static final long MAX_RPC_ATTEMPTS = 100;
@@ -2374,10 +2379,12 @@ public class AsyncKuduClient implements AutoCloseable {
   }
 
   /**
-   * Create non-voter peers "beef" for each tablet of given table.
+   * For old ksyncer api compatible.
    *
+   * Create non-voter peers "beef" for each tablet of given table.
    * This is not under test when range schema is introduced in.
    */
+  @Deprecated
   void createNonVotersForBeefByTable(KuduTable table,
                                      Common.HostPortPB beefPB)
       throws Exception {
@@ -2414,6 +2421,28 @@ public class AsyncKuduClient implements AutoCloseable {
         }
       }
     }
+  }
+
+  void addDuplicator(KuduTable table,
+                     String duplicationName) throws Exception {
+    checkIsClosed();
+    AlterTableOptions options = new AlterTableOptions();
+    options.addDuplication(duplicationName, Metadata.DownstreamType.KAFKA, null);
+    alterTable(table.getName(), options);
+  }
+
+  void dropDuplicator(KuduTable table, String duplicationName) throws Exception {
+    checkIsClosed();
+    AlterTableOptions options = new AlterTableOptions();
+    options.dropDuplication(duplicationName, Metadata.DownstreamType.KAFKA, null);
+    alterTable(table.getName(), options);
+  }
+
+  Deferred<ListTablesResponse> listDuplications() {
+    checkIsClosed();
+    ListTablesRequest rpc = new ListTablesRequest(this.masterTable,
+        null, timer, defaultAdminOperationTimeoutMs, true);
+    return sendRpcToTablet(rpc);
   }
 
   /**
@@ -2774,12 +2803,33 @@ public class AsyncKuduClient implements AutoCloseable {
   public Deferred<Boolean> supportsIgnoreOperations() {
     PingRequest ping = PingRequest.makeMasterPingRequest(
         this.masterTable, timer, defaultAdminOperationTimeoutMs);
-    ping.addRequiredFeature(Master.MasterFeatures.IGNORE_OPERATIONS_VALUE);
+    int feature = Master.MasterFeatures.IGNORE_OPERATIONS_VALUE;
+    ping.addRequiredFeature(feature);
     Deferred<PingResponse> response = sendRpcToTablet(ping);
-    return AsyncUtil.addBoth(response, new PingSupportsFeatureCallback());
+    return AsyncUtil.addBoth(response, new PingSupportsFeatureCallback(feature));
+  }
+
+  /**
+   * Sends a request to the master to check if the cluster supports duplication operations.
+   * @return true if the cluster supports ignore operations
+   */
+  @InterfaceAudience.Private
+  public Deferred<Boolean> supportsDuplication() {
+    PingRequest ping = PingRequest.makeMasterPingRequest(
+        this.masterTable, timer, defaultAdminOperationTimeoutMs);
+    int feature = Master.MasterFeatures.DUPLICATION_VALUE;
+    ping.addRequiredFeature(feature);
+    Deferred<PingResponse> response = sendRpcToTablet(ping);
+    return AsyncUtil.addBoth(response, new PingSupportsFeatureCallback(feature));
   }
 
   private static final class PingSupportsFeatureCallback implements Callback<Boolean, Object> {
+    int feature;
+
+    public PingSupportsFeatureCallback(int feature) {
+      this.feature = feature;
+    }
+
     @Override
     public Boolean call(final Object resp) {
       if (resp instanceof Exception) {
@@ -2798,7 +2848,7 @@ public class AsyncKuduClient implements AutoCloseable {
 
     @Override
     public String toString() {
-      return "ping supports ignore operations";
+      return "ping supports " + Master.MasterFeatures.forNumber(feature);
     }
   }
 

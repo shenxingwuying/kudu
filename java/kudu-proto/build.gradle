@@ -33,7 +33,7 @@ sourceSets {
     proto {
       srcDir "${project.rootDir}/../src"
       // Excluded any test proto files
-      exclude "**/*test*.proto"
+      exclude "**/*test*.proto", "**/kafka.proto"
     }
   }
 }
