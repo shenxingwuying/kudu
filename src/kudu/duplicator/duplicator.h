@@ -20,8 +20,6 @@
 
 #pragma once
 
-#include <cstdint>
-
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -128,7 +126,6 @@ class Duplicator {
   bool need_replay_again_;
 
   std::unique_ptr<duplicator::LogReplayer> log_replayer_;
-  int64_t replay_task_id_;
 
   // connector_manager_ manages Connectors, now it includes only one connector, which is
   // KafkaConnector.

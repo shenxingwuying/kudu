@@ -17,6 +17,7 @@
 
 #include "kudu/duplicator/duplication_replay.h"
 
+#include <cstdint>
 #include <functional>
 #include <ostream>
 #include <string>
@@ -65,8 +66,7 @@ namespace kudu {
 namespace duplicator {
 
 LogReplayer::LogReplayer(tablet::TabletReplica* tablet_replica)
-    : tablet_replica_(tablet_replica),
-      task_id_(-1), state_(State::STARTING) {
+    : tablet_replica_(tablet_replica) {
 }
 
 shared_ptr<log::LogReader> LogReplayer::GetLogReader() {
@@ -100,8 +100,8 @@ void LogReplayer::Shutdown() {
   }
 }
 
-Status LogReplayer::TriggerReplayTask(int64_t task_id) {
-  return log_replay_token_->Submit([this, task_id]() { this->Replay(task_id); });
+Status LogReplayer::TriggerReplayTask() {
+  return log_replay_token_->Submit([this]() { this->Replay(); });
 }
 
 Status LogReplayer::SeekStartPoint() {
@@ -137,22 +137,13 @@ Status LogReplayer::SeekStartPoint() {
                  tablet_replica_->permanent_uuid()));
 }
 
-Status LogReplayer::Replay(int64_t task_id) {
-  CHECK_LT(task_id_, task_id);
-  CHECK(state_ == State::STARTING || state_ == State::FINISHED);
-  {
-    std::unique_lock<Mutex> l(lock_);
-    task_id_ = task_id;
-    state_ = State::RUNNING;
+Status LogReplayer::Replay() {
+  // To Protect wals, avoid wal file gced when relaying.
+  VLOG(0) << Substitute("Replay start, tablet id: $0, peer uuid: $1, replay start point: $2",
+                        tablet_replica_->tablet_id(),
+                        tablet_replica_->permanent_uuid(),
+                        start_point_.ShortDebugString());
 
-    // To Protect wals, avoid wal file gced when relaying.
-    VLOG(0) << Substitute(
-        "Replay start, tablet id: $0, peer uuid: $1, replay start point: $2, task_id: $3",
-        tablet_replica_->tablet_id(),
-        tablet_replica_->permanent_uuid(),
-        start_point_.ShortDebugString(),
-        task_id_);
-  }
   log::LogAnchor anchor;
   tablet_replica_->log_anchor_registry()->Register(0, "duplicator", &anchor);
   SCOPED_CLEANUP({ tablet_replica_->log_anchor_registry()->Unregister(&anchor); });
@@ -256,17 +247,17 @@ Status LogReplayer::Replay(int64_t task_id) {
                           dup_write_count,
                           ops_count);
   }
+  // TODO(duyuqi)
+  // Maybe we can change another way to achieve the aim.
+  // Use 'write_op_state = nullptr && expect_mode = WAL_DUPLICATION_FINISH' to
+  // represent current wal replayer task has finished.
+  tablet_replica_->duplicator()->Duplicate(nullptr,
+                                           tablet::Tablet::DuplicationMode::WAL_DUPLICATION_FINISH);
 
-  {
-    std::unique_lock<Mutex> l(lock_);
-    VLOG(0) << Substitute(
-        "Replay finish, tablet id: $0, peer uuid: $1, start point: $2, task_id: $3",
-        tablet_replica_->tablet_id(),
-        tablet_replica_->permanent_uuid(),
-        start_point_.ShortDebugString(),
-        task_id_);
-    state_ = State::FINISHED;
-  }
+  VLOG(0) << Substitute("Replay finish, tablet id: $0, peer uuid: $1, next start point: $2",
+                        tablet_replica_->tablet_id(),
+                        tablet_replica_->permanent_uuid(),
+                        start_point_.ShortDebugString());
   last_segments_.swap(segments);
   return Status::OK();
 }

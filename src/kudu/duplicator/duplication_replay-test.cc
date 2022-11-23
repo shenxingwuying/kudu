@@ -47,10 +47,14 @@
 #include "kudu/tablet/tablet_replica-test-base.h"
 #include "kudu/tablet/tablet_replica.h"
 #include "kudu/tserver/tserver.pb.h"
+#include "kudu/util/metrics.h"
 #include "kudu/util/monotime.h"
 #include "kudu/util/status.h"
 #include "kudu/util/test_macros.h"
+#include "kudu/util/test_util.h"
 #include "kudu/util/threadpool.h"
+
+METRIC_DECLARE_gauge_uint64(ops_duplicator_lag);
 
 namespace kudu {
 namespace duplicator {
@@ -87,7 +91,6 @@ class DuplicationReplayWalTest : public tablet::TabletReplicaTestBase {
     tablet_replica_->TEST_set_connector_manager(connector_manager_.get());
     consensus::ConsensusBootstrapInfo info;
     StartReplicaAndWaitUntilLeader(info);
-    VLOG(0) << "Setup finish";
   }
 
   void TearDown() override {
@@ -319,6 +322,57 @@ TEST_F(DuplicationReplayWalTest, PrepareAndReplay) {
 
   Consumer(batch_count + another_batch_count, "group2", &key_count);
   ASSERT_EQ(batch_count + another_batch_count, key_count);
+}
+
+TEST_F(DuplicationReplayWalTest, LagMetricTest) {
+  // We don't care what the function is, since the metric is already instantiated.
+  auto ops_duplicator_lag = METRIC_ops_duplicator_lag.InstantiateFunctionGauge(
+      tablet_replica_->tablet()->GetMetricEntity(), []() { return 0; });
+  ASSERT_EQ(0, ops_duplicator_lag->value());
+  int batch_count = 100;
+  for (int i = 0; i < batch_count; i++) {
+    ASSERT_OK(Insert());
+  }
+  AddDuplicator();
+  ASSERT_TRUE(tablet_replica_->consensus()->ShouldDuplication());
+  tablet_replica_->StartDuplicator();
+  for (int i = 0; i < batch_count; i++) {
+    ASSERT_OK(Insert());
+  }
+  ASSERT_EQ(2 * batch_count, Scan());
+  SleepFor(MonoDelta::FromSeconds(1));
+  ASSERT_EVENTUALLY_WITH_TIMEOUT([&]() { ASSERT_EQ(0, ops_duplicator_lag->value()); },
+                                 MonoDelta::FromSeconds(60));
+  kafka_.StopKafka();
+  int another_batch_count = 10000;
+  for (int i = 0; i < another_batch_count; i++) {
+    ASSERT_OK(Insert());
+  }
+  ASSERT_EQ(2 * batch_count + another_batch_count, Scan());
+  ASSERT_EVENTUALLY_WITH_TIMEOUT(
+      [&]() {
+        ASSERT_LE(another_batch_count, ops_duplicator_lag->value());
+        // TODO(duyuqi) Fix the gap.
+        // DUPLICATE_OP, ALTER_SCHEMA_OP, NOOP... can cause little error.
+        ASSERT_GE(another_batch_count + 2, ops_duplicator_lag->value());
+      },
+      MonoDelta::FromSeconds(60));
+  // TODO(duyuqi)
+  // We should study the log below and make the case runs more quickly.
+  // The SleepFor's reason.
+  // [2022-11-22 17:12:55,150] ERROR Error while creating ephemeral at /brokers/ids/0, node already
+  // exists and owner '72657486139949056' does not match current session '72657486139949057'
+  // (kafka.zk.KafkaZkClient$CheckedEphemeral) [2022-11-22 17:12:55,153] ERROR [KafkaServer id=0]
+  // Fatal error during KafkaServer startup. Prepare to shutdown (kafka.server.KafkaServer)
+  // org.apache.zookeeper.KeeperException$NodeExistsException: KeeperErrorCode = NodeExists
+  SleepFor(MonoDelta::FromSeconds(
+      2 * kudu::duplication::kafka::SingleBrokerKafka::kZookeeperSessionTimeoutS));
+  kafka_.StartKafka();
+  int key_count = -1;
+  ASSERT_OK(Insert());
+  Consumer(1 + batch_count * 2 + another_batch_count, "group3", &key_count);
+  ASSERT_EVENTUALLY_WITH_TIMEOUT([&]() { ASSERT_EQ(0, ops_duplicator_lag->value()); },
+                                 MonoDelta::FromSeconds(60));
 }
 
 }  // namespace duplicator

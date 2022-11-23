@@ -1,4 +1,4 @@
-image: jcr-large-files.sensorsdata.cn/docker-inf/kudu/bite_ksyncer_el7:1.14.0.4
+image: jcr-large-files.sensorsdata.cn/docker-impala/com.sensorsdata.dragon/bite_kudu:1.14.5.1
 
 variables:
   THIRDPARTY_DIR: "/opt/code/kudu/thirdparty"

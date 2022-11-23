@@ -113,6 +113,10 @@ METRIC_DEFINE_gauge_uint64(tablet, live_row_count, "Tablet Live Row Count",
                            "Number of live rows in this tablet, excludes deleted rows.",
                            kudu::MetricLevel::kInfo);
 
+METRIC_DEFINE_gauge_uint64(tablet, ops_duplicator_lag, "Tablet duplicator's ops number",
+                           kudu::MetricUnit::kRows, "Number of ops duplicator behind leader",
+                           kudu::MetricLevel::kWarn);
+
 using kudu::consensus::ALTER_SCHEMA_OP;
 using kudu::consensus::ConsensusBootstrapInfo;
 using kudu::consensus::ConsensusOptions;
@@ -274,6 +278,18 @@ Status TabletReplica::Start(const ConsensusBootstrapInfo& bootstrap_info,
         } else {
           METRIC_live_row_count.InstantiateInvalid(tablet_->GetMetricEntity(), 0);
         }
+        METRIC_ops_duplicator_lag
+            .InstantiateFunctionGauge(tablet_->GetMetricEntity(), [this]() -> int64_t {
+            if (consensus()->ShouldDuplication()) {
+              log::RetentionIndexes indexes = consensus()->GetRetentionIndexes();
+              int64_t opid_index = last_confirmed_opid().index();
+              if (opid_index <= 0) {
+                return 0;
+              }
+              return (indexes.for_durability - opid_index);
+            }
+            return 0; })
+            ->AutoDetach(&metric_detacher_);
       }
       op_tracker_.StartMemoryTracking(tablet_->mem_tracker());
 

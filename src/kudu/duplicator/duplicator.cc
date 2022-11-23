@@ -79,8 +79,7 @@ Duplicator::Duplicator(ThreadPool* duplicate_pool,
       queue_(FLAGS_duplicator_max_queue_size),
       realtime_tmp_queue_(FLAGS_duplicator_max_queue_size),
       need_replay_again_(false),
-      log_replayer_(new duplicator::LogReplayer(tablet_replica_)),
-      replay_task_id_(-1) {
+      log_replayer_(new duplicator::LogReplayer(tablet_replica_)) {
   connector_manager_ = tablet_replica->connector_manager();
   duplication_mode_.store(DuplicationMode::INIT);
 }
@@ -104,7 +103,7 @@ Status Duplicator::Init(const ConnectorOptions& options) {
     LOG_WITH_PREFIX(WARNING) << Substitute("not find start point, replay all wals, status: $0",
                                            status.ToString());
   }
-  log_replayer_->TriggerReplayTask(++replay_task_id_);
+  log_replayer_->TriggerReplayTask();
   stopped_ = false;
   return Status::OK();
 }
@@ -125,10 +124,14 @@ Status Duplicator::Duplicate(tablet::WriteOpState* write_op_state,
   if (stopped_) {
     return Status::IllegalState("duplicator is stopped");
   }
-  std::unique_ptr<DuplicateMsg> msg = std::make_unique<DuplicateMsg>(
-      write_op_state, tablet_replica_->tablet_metadata()->table_name());
-
-  RETURN_NOT_OK_LOG(msg->ParseKafkaRecord(), ERROR, "parse kafka record failed");
+  std::unique_ptr<DuplicateMsg> msg;
+  // Use 'write_op_state = nullptr && expect_mode = WAL_DUPLICATION_FINISH' to
+  // represent current wal replayer task has finished.
+  if (write_op_state) {
+     msg = std::make_unique<DuplicateMsg>(
+        write_op_state, tablet_replica_->tablet_metadata()->table_name());
+    RETURN_NOT_OK_LOG(msg->ParseKafkaRecord(), ERROR, "parse kafka record failed");
+  }
 
   // TODO(duyuqi)
   // adding metrics for the 'duplication_mode_'.
@@ -176,6 +179,7 @@ void Duplicator::Apply() {
       if (PREDICT_FALSE(s.IsAborted() || s.IsTimedOut())) {
         return;
       }
+      realtime_tmp_queue_top_op_id_.Clear();
       should_merge_tmp_realtime = true;
     }
   }
@@ -220,7 +224,7 @@ void Duplicator::Apply() {
                duplication_msgs.size(),
                s.ToString());
     // @TODO(duyuqi). We'd better add some backoff time.
-    SleepFor(MonoDelta::FromMilliseconds(20));
+    SleepFor(MonoDelta::FromMilliseconds(50));
   }
   auto rit = duplication_msgs.rbegin();
   {
@@ -232,20 +236,24 @@ void Duplicator::Apply() {
 Status Duplicator::WorkAtWalReplay(unique_ptr<DuplicateMsg> msg,
                                    tablet::Tablet::DuplicationMode expect_mode) {
   CHECK(expect_mode == DuplicationMode::WAL_DUPLICATION ||
+        expect_mode == DuplicationMode::WAL_DUPLICATION_FINISH ||
         expect_mode == DuplicationMode::REALTIME_DUPLICATION);
   DuplicationMode wal_mode = DuplicationMode::WAL_DUPLICATION;
-  if (log_replayer_->is_finished(replay_task_id_) &&
-      PREDICT_TRUE(
-          duplication_mode_.compare_exchange_strong(wal_mode,
-                                                    DuplicationMode::WAL_DUPLICATION_FINISH,
-                                                    std::memory_order_seq_cst,
-                                                    std::memory_order_seq_cst))) {
-    LOG_WITH_PREFIX(INFO) << Substitute(
-        "switch mode from $0 to $1",
-        Tablet::DuplicationMode_Name(wal_mode),
-        Tablet::DuplicationMode_Name(DuplicationMode::WAL_DUPLICATION_FINISH));
-    return WorkAtWalReplayFinished(std::move(msg), expect_mode);
+  if (expect_mode == DuplicationMode::WAL_DUPLICATION_FINISH) {
+    CHECK(!msg);
+    if (PREDICT_TRUE(
+            duplication_mode_.compare_exchange_strong(wal_mode,
+                                                      DuplicationMode::WAL_DUPLICATION_FINISH,
+                                                      std::memory_order_seq_cst,
+                                                      std::memory_order_seq_cst))) {
+      LOG_WITH_PREFIX(INFO) << Substitute(
+          "switch mode from $0 to $1",
+          Tablet::DuplicationMode_Name(wal_mode),
+          Tablet::DuplicationMode_Name(DuplicationMode::WAL_DUPLICATION_FINISH));
+      return WorkAtWalReplayFinished(std::move(msg), expect_mode);
+    }
   }
+
   if (expect_mode == DuplicationMode::WAL_DUPLICATION) {
     // Avoid using BlockingPut, because it will cause apply pool stuck indrection.
     switch (queue_.Put(std::move(msg))) {
@@ -283,21 +291,14 @@ void Duplicator::ReplayWals() {
   queue_.Clear();
   consensus::OpId restart_opid = last_confirmed_opid();
   log_replayer_->SetStartPoint(restart_opid);
-  log_replayer_->TriggerReplayTask(++replay_task_id_);
+  log_replayer_->TriggerReplayTask();
   need_replay_again_ = false;
 }
 
 Status Duplicator::WorkAtWalReplayFinished(unique_ptr<DuplicateMsg> msg,
                                            tablet::Tablet::DuplicationMode expect_mode) {
-  CHECK(expect_mode == DuplicationMode::WAL_DUPLICATION ||
+  CHECK(expect_mode == DuplicationMode::WAL_DUPLICATION_FINISH ||
         expect_mode == DuplicationMode::REALTIME_DUPLICATION);
-  if (expect_mode == DuplicationMode::WAL_DUPLICATION) {
-    LOG_WITH_PREFIX(INFO) << Substitute(
-        "Ignore the msg which expected $0, now in $1",
-        Tablet::DuplicationMode_Name(expect_mode),
-        Tablet::DuplicationMode_Name(DuplicationMode::WAL_DUPLICATION_FINISH));
-    return Status::OK();
-  }
 
   DuplicationMode wal_end_mode = DuplicationMode::WAL_DUPLICATION_FINISH;
   if (need_replay_again_) {
@@ -311,17 +312,24 @@ Status Duplicator::WorkAtWalReplayFinished(unique_ptr<DuplicateMsg> msg,
     return Status::OK();
   }
 
-  consensus::OpId top_op_id = msg->op_id();
-  {
+  consensus::OpId top_op_id;
+  if (expect_mode == DuplicationMode::WAL_DUPLICATION_FINISH) {
+    CHECK(!msg);
     std::unique_lock l(realtime_tmp_lock_);
-    if (realtime_tmp_queue_.empty()) {
-      realtime_tmp_queue_top_op_id_ = msg->op_id();
+    if (!realtime_tmp_queue_.empty()) {
+      top_op_id = realtime_tmp_queue_top_op_id_;
     }
-    top_op_id = realtime_tmp_queue_top_op_id_;
+  } else {
+    std::unique_lock l(realtime_tmp_lock_);
+    if (!realtime_tmp_queue_.empty()) {
+      top_op_id = realtime_tmp_queue_top_op_id_;
+    } else {
+      top_op_id = msg->op_id();
+    }
     realtime_tmp_queue_.Put(std::move(msg));
   }
   consensus::OpId last_confirmed_opid = this->last_confirmed_opid();
-  if (top_op_id.index() <= (last_confirmed_opid.index() + 1)) {
+  if (!top_op_id.IsInitialized() || top_op_id.index() <= (last_confirmed_opid.index() + 1)) {
     if (duplication_mode_.compare_exchange_strong(wal_end_mode,
                                                   DuplicationMode::REALTIME_DUPLICATION,
                                                   std::memory_order_seq_cst,

@@ -381,7 +381,11 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
 
   // OpId of remote destination storage has received.
   consensus::OpId last_confirmed_opid() const {
-    return duplicator_->last_confirmed_opid();
+    std::lock_guard<Mutex> l_lock(duplicator_mutex_);
+    if (duplicator_) {
+      return duplicator_->last_confirmed_opid();
+    }
+    return consensus::MinimumOpId();
   }
 
   // OpId what less or equal, should replicate to remote destination.
@@ -481,7 +485,7 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   // duplicate write ops to thirdparty destination storage system.
   std::unique_ptr<duplicator::Duplicator> duplicator_;
   // To protect duplicator init.
-  Mutex duplicator_mutex_;
+  mutable Mutex duplicator_mutex_;
   // Record last committed_opid for duplication.
   consensus::OpId duplicator_last_committed_opid_;
 
