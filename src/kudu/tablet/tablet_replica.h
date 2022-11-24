@@ -484,6 +484,8 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
 
   // duplicate write ops to thirdparty destination storage system.
   std::unique_ptr<duplicator::Duplicator> duplicator_;
+  // TODO(duyuqi)
+  // The lock is a little heavy, it should be removed by some way.
   // To protect duplicator init.
   mutable Mutex duplicator_mutex_;
   // Record last committed_opid for duplication.

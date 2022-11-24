@@ -89,6 +89,9 @@ Duplicator::~Duplicator() {}
 Status Duplicator::Init(const ConnectorOptions& options) {
   options_ = options;
   connector_ = connector_manager_->GetOrNewConnector(options);
+  if (!connector_) {
+    return Status::Incomplete(Substitute("get connector fail, options $0", options.ToString()));
+  }
   // TODO(duyuqi) metric_entity for duplicate_pool_
   duplicate_pool_token_ = duplicate_pool_->NewToken(ThreadPool::ExecutionMode::SERIAL);
 

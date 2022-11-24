@@ -1798,15 +1798,23 @@ void TSTabletManager::DoDuplicationWhenSwitchToLeader() {
       if (replica->consensus()->role() == consensus::RaftPeerPB::LEADER) {
         Status status = replica->StartDuplicator();
         if (!status.ok()) {
+          // TODO(duyuqi)
+          // Provide a method to check the duplicator's health status.
+          //
           // If duplicator start failed, retry it again until is succeed or replica is gone.
+          // eg: The uri/topic doesn't not exist.
           LOG(ERROR) << Substitute(
               "start duplicator failed status: $0, would retry, tablet id: $1, peer uuid: $2",
               status.ToString(),
               replica->tablet_id(),
               replica->permanent_uuid());
-          cmeta_manager_->AppendNewLeaders(tablet_id);
+          if (replica->consensus()->HasDuplicator()) {
+            cmeta_manager_->AppendNewLeaders(tablet_id);
+          }
         }
       } else if (replica->consensus()->role() == consensus::RaftPeerPB::FOLLOWER) {
+        // TODO(duyuqi)
+        // Considering the scenarios leader switch to follower?
         replica->ShutdownDuplicator();
       }
     }

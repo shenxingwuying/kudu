@@ -62,6 +62,7 @@
 
 DECLARE_int64(duplicator_max_queue_size);
 DECLARE_int32(kafka_connector_flush_timeout_ms);
+DECLARE_uint32(switch_to_leader_checker_internal_ms);
 
 using std::string;
 using std::vector;
@@ -500,14 +501,17 @@ TEST_F(DuplicationITest, AlterTableWithDuplicationFixedInvalidBroker) {
   alter_options.info.uri = "localhost:8888";
   alter_options.action = Action::kEnableDuplication;
   ASSERT_OK(AlterTable(alter_options));
-  SleepFor(MonoDelta::FromSeconds(1));
+  SleepFor(MonoDelta::FromMilliseconds(2 * FLAGS_switch_to_leader_checker_internal_ms));
+  int insert_count = 10;
+  ASSERT_OK(InsertRows(0, insert_count));
+
   alter_options.action = Action::kDisableDuplication;
   ASSERT_OK(AlterTable(alter_options));
   SleepFor(MonoDelta::FromSeconds(1));
 
   alter_options.info.uri = kBrokers;
-  int insert_count = 128;
-  int expected_size = insert_count;
+  int accumulate_insert_count = 128;
+  int expected_size = accumulate_insert_count;
   alter_options.action = Action::kEnableDuplication;
   ASSERT_OK(AlterTable(alter_options));
 
@@ -517,7 +521,7 @@ TEST_F(DuplicationITest, AlterTableWithDuplicationFixedInvalidBroker) {
                           "AlterTableWithDuplicationFixedInvalidBroker",
                           kSmallest,
                           20));
-  ASSERT_OK(InsertRows(0, insert_count));
+  ASSERT_OK(InsertRows(insert_count, accumulate_insert_count));
   t.join();
   SleepFor(MonoDelta::FromMilliseconds(1000));
   alter_options.action = Action::kDisableDuplication;

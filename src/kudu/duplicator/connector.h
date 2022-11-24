@@ -35,6 +35,7 @@
 #include "kudu/consensus/opid.pb.h"
 #include "kudu/duplicator/kafka/kafka.pb.h"
 #include "kudu/gutil/macros.h"
+#include "kudu/gutil/strings/substitute.h"
 #include "kudu/tablet/ops/write_op.h"
 #include "kudu/tablet/row_op.h"
 #include "kudu/util/status.h"
@@ -133,22 +134,28 @@ class DuplicateMsg {
   DISALLOW_COPY_AND_ASSIGN(DuplicateMsg);
 };
 
-// parameters:
-//   type: Duplication's destination storage system, eg: kafka, pulsar.
-//   name: the entity of destination storage system, eg: kafka's topic name.
-//   uri: destination storage system uri, eg: kafka brokers list.
-//   options: optional infomations, eg: security options.
 struct ConnectorOptions {
+  // Duplication's destination storage system, eg: kafka, pulsar.
   consensus::DownstreamType type;
+  // The entity of destination storage system, eg: kafka's topic name.
   string name;
+  // Destination storage system uri, eg: kafka brokers list.
   string uri;
+  // Optional infomations, eg: security options.
   string options;
+
   ConnectorOptions() {}
+
   explicit ConnectorOptions(const consensus::DuplicationInfoPB& duplication_info_pb)
       : type(duplication_info_pb.type()),
         name(duplication_info_pb.name()),
         uri(duplication_info_pb.uri()),
         options(duplication_info_pb.has_options() ? duplication_info_pb.options() : "") {}
+
+  string ToString() const {
+    return strings::Substitute("type: $0, name: $1, uri: $2, options: $3",
+                               consensus::DownstreamType_Name(type), name, uri, options);
+  }
 };
 
 class Connector {
