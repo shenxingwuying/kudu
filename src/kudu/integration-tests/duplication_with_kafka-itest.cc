@@ -40,6 +40,7 @@
 #include "kudu/client/client.h"
 #include "kudu/client/scan_batch.h"
 #include "kudu/client/schema.h"
+#include "kudu/client/value.h"
 #include "kudu/client/write_op.h"
 #include "kudu/common/partial_row.h"
 #include "kudu/common/wire_protocol-test-util.h"
@@ -126,6 +127,32 @@ class DuplicationITest : public ExternalMiniClusterITestBase {
   }
 
   void WriteRows(int from, int to) { ASSERT_OK(InsertRows(from, to)); }
+
+  Status TryAlterSchema(const string& table_name, bool* success) {
+    *success = false;
+    string kColumnName("TestAddColumeAlter");
+    string kColumnName2("TestAddColumeAlter2");
+    {
+      std::unique_ptr<client::KuduTableAlterer> alterer(client_->NewTableAlterer(table_name));
+      client::KuduValue* value = client::KuduValue::FromInt(0);
+      alterer->AddColumn(kColumnName)->Type(client::KuduColumnSchema::INT32)->Default(value);
+      RETURN_NOT_OK(alterer->Alter());
+    }
+    SleepFor(MonoDelta::FromSeconds(1));
+    {
+      std::unique_ptr<client::KuduTableAlterer> alterer(client_->NewTableAlterer(table_name));
+      alterer->AlterColumn(kColumnName)->RenameTo(kColumnName2);
+      RETURN_NOT_OK(alterer->Alter());
+    }
+    SleepFor(MonoDelta::FromSeconds(1));
+    {
+      std::unique_ptr<client::KuduTableAlterer> alterer(client_->NewTableAlterer(table_name));
+      alterer->DropColumn(kColumnName2);
+      RETURN_NOT_OK(alterer->Alter());
+    }
+    *success = true;
+    return Status::OK();
+  }
 
   void RenewConsumer(const cppkafka::Configuration& configuration) {
     consumer_.reset();
@@ -598,7 +625,7 @@ TEST_F(DuplicationITest, RestartTserver) {
   consume_thread.join();
 }
 
-TEST_F(DuplicationITest, DuplicatorKafkaDownAndCheckKuduWriteOK) {
+TEST_F(DuplicationITest, DuplicatorKafkaDownAndCheckKuduWriteOKAndAlterSchemaOk) {
   FLAGS_kafka_connector_flush_timeout_ms = 1000;
   FLAGS_duplicator_max_queue_size = 64;
 
@@ -619,6 +646,8 @@ TEST_F(DuplicationITest, DuplicatorKafkaDownAndCheckKuduWriteOK) {
   WriteRows(0, pre_count);
   kafka_.StopKafka();
   std::thread write_thread(&DuplicationITest::WriteRows, this, pre_count, insert_count);
+  bool success = false;
+  std::thread alter_thread(&DuplicationITest::TryAlterSchema, this, options.table_name, &success);
   // Check Kudu data is 20000 rows.
   client::sp::shared_ptr<client::KuduTable> table;
   ASSERT_OK(client_->OpenTable(options.table_name, &table));
@@ -628,6 +657,8 @@ TEST_F(DuplicationITest, DuplicatorKafkaDownAndCheckKuduWriteOK) {
     ASSERT_EQ(insert_count, row_count);
   });
   write_thread.join();
+  alter_thread.join();
+  ASSERT_EQ(true, success);
 }
 
 TEST_F(DuplicationITest, DuplicatorKafkaDownAndRecover) {

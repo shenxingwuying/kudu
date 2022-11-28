@@ -191,23 +191,24 @@ Status LogReplayer::Replay() {
         case consensus::OperationType::WRITE_OP: {
           tablet::Tablet* tablet = tablet_replica_->tablet();
           tserver::WriteRequestPB* write = replicate_msg.mutable_write_request();
-          auto op_state_ptr =
-              std::make_unique<tablet::WriteOpState>(tablet_replica_, write, nullptr);
-          op_state_ptr->mutable_op_id()->CopyFrom(replicate_msg.id());
-          op_state_ptr->set_timestamp(Timestamp(replicate_msg.timestamp()));
-
-          Schema inserts_schema;
-          RETURN_NOT_OK_PREPEND(SchemaFromPB(op_state_ptr->request()->schema(), &inserts_schema),
-                                "Couldn't decode client schema");
-
-          RETURN_NOT_OK_PREPEND(
-              tablet->DecodeWriteOperations(&inserts_schema, op_state_ptr.get()),
-              Substitute("Could not decode row operations: $0",
-                         SecureDebugString(op_state_ptr->request()->row_operations())));
           while (true) {
+            auto op_state_ptr =
+                std::make_unique<tablet::WriteOpState>(tablet_replica_, write, nullptr);
+            op_state_ptr->mutable_op_id()->CopyFrom(replicate_msg.id());
+            op_state_ptr->set_timestamp(Timestamp(replicate_msg.timestamp()));
+
+            Schema inserts_schema;
+            RETURN_NOT_OK_PREPEND(SchemaFromPB(op_state_ptr->request()->schema(), &inserts_schema),
+                                  "Couldn't decode client schema");
+
+            RETURN_NOT_OK_PREPEND(
+                tablet->DecodeWriteOperations(&inserts_schema, op_state_ptr.get()),
+                Substitute("Could not decode row operations: $0",
+                           SecureDebugString(op_state_ptr->request()->row_operations())));
             Status status = tablet_replica_->Duplicate(
                 op_state_ptr.get(), tablet::Tablet::DuplicationMode::WAL_DUPLICATION);
             if (status.ok()) {
+              ops_count += op_state_ptr->row_ops().size();
               break;
             }
             if (status.IsIncomplete()) {
@@ -219,7 +220,6 @@ Status LogReplayer::Replay() {
             return status;
           }
           dup_write_count++;
-          ops_count += op_state_ptr->row_ops().size();
           break;
         }
         case consensus::OperationType::DUPLICATE_OP: {
