@@ -138,16 +138,6 @@ spec:
             tag: ''
             desc: 'A Unix command whose output returns the password to decrypt the private key of the webserver certificate pointed to by the --webserver_private_key_file flag.'
             type: str
-          log_segment_size_mb:
-            default_value: '8'
-            tag: ''
-            desc: 'The default size for log segments, in MB'
-            type: int
-          log_max_segments_to_retain:
-            default_value: '80'
-            tag: ''
-            desc: 'The maximum number of past log segments to keep at all times for the purposes of catching up other peers.'
-            type: int
           kafka_broker_list:
             default_value: "localhost:9092"
             tag: ''
@@ -264,6 +254,16 @@ spec:
             tag: ''
             desc: 'A Unix command whose output returns the password to decrypt the private key of the webserver certificate pointed to by the --webserver_private_key_file flag.'
             type: str
+          log_segment_size_mb:
+            default_value: '8'
+            tag: ''
+            desc: 'The default size for log segments, in MB'
+            type: int
+          log_max_segments_to_retain:
+            default_value: '80'
+            tag: ''
+            desc: 'The maximum number of past log segments to keep at all times for the purposes of catching up other peers.'
+            type: int
         kudu_collector:
           allow_unsafe_replication_factor:
             default_value: 'true'
