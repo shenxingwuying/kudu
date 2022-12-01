@@ -43,6 +43,7 @@ import org.junit.Test;
 
 import org.apache.kudu.ColumnSchema;
 import org.apache.kudu.Common;
+import org.apache.kudu.DuplicationDownstreamType;
 import org.apache.kudu.Schema;
 import org.apache.kudu.Type;
 import org.apache.kudu.consensus.Metadata;
@@ -331,7 +332,7 @@ public class TestAsyncKuduClient {
     String tableName = "testCreateTableWithDuplication" + System.currentTimeMillis();
     CreateTableOptions options = getBasicCreateTableOptions();
     // Uri is not exist.
-    options.addDuplication("topic_name", Metadata.DownstreamType.KAFKA, testDefaultUri);
+    options.addDuplication("topic_name", DuplicationDownstreamType.KAFKA, testDefaultUri);
     client.createTable(tableName, basicSchema, options);
 
     Set<String> subscribedTables = client.getSubscribedTables();
@@ -352,7 +353,7 @@ public class TestAsyncKuduClient {
 
     // Add a duplication for the table.
     AlterTableOptions addDuplicationOptions = new AlterTableOptions();
-    addDuplicationOptions.addDuplication(topicName, Metadata.DownstreamType.KAFKA, testDefaultUri);
+    addDuplicationOptions.addDuplication(topicName, DuplicationDownstreamType.KAFKA, testDefaultUri);
     client.alterTable(tableName, addDuplicationOptions);
     subscribedTables = client.getSubscribedTables();
     assertEquals(1, subscribedTables.size());
@@ -360,7 +361,7 @@ public class TestAsyncKuduClient {
 
     // Drop a duplication for the table.
     AlterTableOptions dropDuplicationOptions = new AlterTableOptions();
-    dropDuplicationOptions.dropDuplication(topicName, Metadata.DownstreamType.KAFKA, testDefaultUri);
+    dropDuplicationOptions.dropDuplication(topicName, DuplicationDownstreamType.KAFKA, testDefaultUri);
     client.alterTable(tableName, dropDuplicationOptions);
     subscribedTables = client.getSubscribedTables();
     assertEquals(0, subscribedTables.size());

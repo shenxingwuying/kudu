@@ -33,11 +33,11 @@ import org.apache.yetus.audience.InterfaceStability;
 
 import org.apache.kudu.ColumnSchema;
 import org.apache.kudu.Common;
+import org.apache.kudu.DuplicationDownstreamType;
 import org.apache.kudu.Type;
 import org.apache.kudu.client.ProtobufHelper.SchemaPBConversionFlags;
 import org.apache.kudu.consensus.Metadata;
 import org.apache.kudu.master.Master;
-import org.apache.kudu.tserver.TserverAdmin.AlterSchemaRequestPBOrBuilder;
 
 /**
  * This builder must be used to alter a table. At least one change must be specified.
@@ -461,10 +461,10 @@ public class AlterTableOptions {
    * @param uri        optional
    * @return this instance
    */
-  public AlterTableOptions addDuplication(String name, Metadata.DownstreamType streamType,
+  public AlterTableOptions addDuplication(String name, DuplicationDownstreamType streamType,
       String uri) {
     Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
-    builder.setName(name).setType(streamType);
+    builder.setName(name).setType(streamType.getDownstreamType());
     if (uri != null && !uri.isEmpty()) {
       builder.setUri(uri);
     }
@@ -485,10 +485,10 @@ public class AlterTableOptions {
    * @param uri        optional
    * @return this instance
    */
-  public AlterTableOptions dropDuplication(String name, Metadata.DownstreamType streamType,
+  public AlterTableOptions dropDuplication(String name, DuplicationDownstreamType streamType,
       String uri) {
     Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
-    builder.setName(name).setType(streamType);
+    builder.setName(name).setType(streamType.getDownstreamType());
     if (uri != null && !uri.isEmpty()) {
       builder.setUri(uri);
     }

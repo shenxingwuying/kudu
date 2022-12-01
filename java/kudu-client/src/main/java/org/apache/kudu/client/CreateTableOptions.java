@@ -22,13 +22,12 @@ import java.util.List;
 import java.util.Map;
 
 import com.google.common.base.Preconditions;
-import com.google.common.base.Strings;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
 
 import org.apache.kudu.Common;
+import org.apache.kudu.DuplicationDownstreamType;
 import org.apache.kudu.consensus.Metadata;
 import org.apache.kudu.master.Master;
 
@@ -271,11 +270,11 @@ public class CreateTableOptions {
    * @param uri destination's discovered service name, optional
    * @return this instance
    */
-  public CreateTableOptions addDuplication(String name, Metadata.DownstreamType streamType,
+  public CreateTableOptions addDuplication(String name, DuplicationDownstreamType streamType,
       String uri) {
     Metadata.DuplicationInfoPB.Builder builder = Metadata.DuplicationInfoPB.newBuilder();
     builder.setName(name)
-        .setType(streamType);
+        .setType(streamType.getDownstreamType());
     if (uri != null && !uri.isEmpty()) {
       builder.setUri(uri);
     }

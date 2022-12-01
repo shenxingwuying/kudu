@@ -80,6 +80,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.kudu.Common;
+import org.apache.kudu.DuplicationDownstreamType;
 import org.apache.kudu.Schema;
 import org.apache.kudu.consensus.Metadata;
 import org.apache.kudu.master.Master;
@@ -2427,14 +2428,14 @@ public class AsyncKuduClient implements AutoCloseable {
                      String duplicationName) throws Exception {
     checkIsClosed();
     AlterTableOptions options = new AlterTableOptions();
-    options.addDuplication(duplicationName, Metadata.DownstreamType.KAFKA, null);
+    options.addDuplication(duplicationName, DuplicationDownstreamType.KAFKA, null);
     alterTable(table.getName(), options);
   }
 
   void dropDuplicator(KuduTable table, String duplicationName) throws Exception {
     checkIsClosed();
     AlterTableOptions options = new AlterTableOptions();
-    options.dropDuplication(duplicationName, Metadata.DownstreamType.KAFKA, null);
+    options.dropDuplication(duplicationName, DuplicationDownstreamType.KAFKA, null);
     alterTable(table.getName(), options);
   }
 
