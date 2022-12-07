@@ -717,6 +717,7 @@ log::RetentionIndexes TabletReplica::GetRetentionIndexes() const {
   log::LogAnchor anchor;
   if (consensus_->HasDuplicator()) {
     CHECK_GE(duplicator_last_committed_opid_.index(), 0);
+    VLOG_WITH_PREFIX(4) << "duplicator_last_committed_opid_: " << duplicator_last_committed_opid_.ShortDebugString();
     log_anchor_registry_->Register(duplicator_last_committed_opid_.index(), "duplicator", &anchor);
   }
   SCOPED_CLEANUP({

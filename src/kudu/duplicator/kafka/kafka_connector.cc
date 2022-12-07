@@ -107,6 +107,7 @@ KafkaConnector::~KafkaConnector() {
 
 Status KafkaConnector::Init(const duplicator::ConnectorOptions& options) {
   cppkafka::Configuration configuration = {{"metadata.broker.list", brokers_}};
+  // configuration.set("request.required.acks", -1); default is -1.
 
   if (!FLAGS_kafka_connector_keytab_full_path.empty()) {
     configuration.set("security.protocol", FLAGS_kafka_connector_security_protocol);
@@ -168,12 +169,13 @@ Status KafkaConnector::WriteBatch(
   for (const auto& duplicate_message : messages) {
     for (const auto& kafka_message : duplicate_message->result()) {
       string json_data;
-      string& hash_key_str = kafka_message->primary_key;
+      string& primary_key_str = kafka_message->primary_key;
+      VLOG(0) << "kafka producer duplication: " << primary_key_str;
       kudu::kafka::RawKuduRecord& record = kafka_message->record;
       record.SerializeToString(&json_data);
       try {
         producer_->produce(
-            cppkafka::MessageBuilder(topic_name).key(hash_key_str).payload(json_data));
+            cppkafka::MessageBuilder(topic_name).key(primary_key_str).payload(json_data));
       } catch (const cppkafka::Exception& e) {
         LOG(WARNING) << "produce message failed, try to re new producer, " << e.what();
         return Status::ServiceUnavailable("kafka client produce failed");
