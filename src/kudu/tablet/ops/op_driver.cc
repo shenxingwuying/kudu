@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <ostream>
+#include <type_traits>
 #include <utility>
 
 #include <glog/logging.h>
@@ -39,10 +40,10 @@
 #include "kudu/rpc/result_tracker.h"
 #include "kudu/rpc/rpc_header.pb.h"
 #include "kudu/tablet/mvcc.h"
-#include "kudu/tablet/tablet.h"
-#include "kudu/tablet/tablet_replica.h"
 #include "kudu/tablet/op_order_verifier.h"
 #include "kudu/tablet/ops/op_tracker.h"
+#include "kudu/tablet/tablet.h"
+#include "kudu/tablet/tablet_replica.h"
 #include "kudu/util/debug/trace_event.h"
 #include "kudu/util/logging.h"
 #include "kudu/util/pb_util.h"
@@ -105,13 +106,13 @@ OpDriver::OpDriver(OpTracker *op_tracker,
                    RaftConsensus* consensus,
                    Log* log,
                    ThreadPoolToken* prepare_pool_token,
-                   ThreadPool* apply_pool,
+                   ThreadPoolToken* apply_pool_token,
                    OpOrderVerifier* order_verifier)
     : op_tracker_(op_tracker),
       consensus_(consensus),
       log_(log),
       prepare_pool_token_(prepare_pool_token),
-      apply_pool_(apply_pool),
+      apply_pool_token_(apply_pool_token),
       order_verifier_(order_verifier),
       trace_(new Trace()),
       start_time_(MonoTime::Now()),
@@ -484,7 +485,7 @@ Status OpDriver::ApplyAsync() {
   }
 
   TRACE_EVENT_FLOW_BEGIN0("op", "ApplyTask", this);
-  return apply_pool_->Submit([this]() { this->ApplyTask(); });
+  return apply_pool_token_->Submit([this]() { this->ApplyTask(); });
 }
 
 void OpDriver::ApplyTask() {

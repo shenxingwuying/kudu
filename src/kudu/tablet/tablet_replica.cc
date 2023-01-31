@@ -107,6 +107,31 @@ METRIC_DEFINE_histogram(tablet, op_prepare_run_time, "Operation Prepare Run Time
                         kudu::MetricLevel::kInfo,
                         10000000, 2);
 
+METRIC_DEFINE_histogram(tablet, op_apply_queue_length, "Operation Apply Queue Length",
+                        kudu::MetricUnit::kTasks,
+                        "Number of operations waiting to be applied within this tablet. "
+                        "High queue lengths indicate that the server is unable to process "
+                        "operations as fast as they are being written to the kudu "
+                        "storage engine.",
+                        kudu::MetricLevel::kInfo,
+                        10000, 2);
+
+METRIC_DEFINE_histogram(tablet, op_apply_queue_time, "Operation Apply Queue Time",
+                        kudu::MetricUnit::kMicroseconds,
+                        "Time that operations spent waiting in the apply queue before being "
+                        "processed. High queue times indicate that the server is unable to "
+                        "process operations as fast as they are being written to the kudu "
+                        "storage engine.",
+                        kudu::MetricLevel::kInfo,
+                        10000000, 2);
+
+METRIC_DEFINE_histogram(tablet, op_apply_run_time, "Operation Apply Run Time",
+                        kudu::MetricUnit::kMicroseconds,
+                        "Time that operations spent being applied in the tablet. "
+                        "High values may indicate that the server is under-provisioned",
+                        kudu::MetricLevel::kInfo,
+                        10000000, 2);
+
 METRIC_DEFINE_gauge_size(tablet, on_disk_size, "Tablet Size On Disk",
                          kudu::MetricUnit::kBytes,
                          "Space used by this tablet on disk, including metadata.",
@@ -255,6 +280,14 @@ Status TabletReplica::Start(
               METRIC_op_prepare_run_time.Instantiate(metric_entity)
           });
 
+      apply_pool_token_ = apply_pool_->NewTokenWithMetrics(
+          ThreadPool::ExecutionMode::SERIAL,
+          {
+                METRIC_op_apply_queue_length.Instantiate(metric_entity),
+                METRIC_op_apply_queue_time.Instantiate(metric_entity),
+                METRIC_op_apply_run_time.Instantiate(metric_entity)
+          });
+
       if (tablet_->metrics() != nullptr) {
         TRACE("Starting instrumentation");
         op_tracker_.StartInstrumentation(tablet_->GetMetricEntity());
@@ -351,6 +384,10 @@ void TabletReplica::Stop() {
 
   if (prepare_pool_token_) {
     prepare_pool_token_->Shutdown();
+  }
+
+  if (apply_pool_token_) {
+    apply_pool_token_->Shutdown();
   }
 
   if (log_) {
@@ -903,7 +940,7 @@ Status TabletReplica::NewLeaderOpDriver(unique_ptr<Op> op,
     consensus_.get(),
     log_.get(),
     prepare_pool_token_.get(),
-    apply_pool_,
+    apply_pool_token_.get(),
     &op_order_verifier_);
   RETURN_NOT_OK(op_driver->Init(std::move(op), consensus::LEADER));
   *driver = std::move(op_driver);
@@ -918,7 +955,7 @@ Status TabletReplica::NewReplicaOpDriver(unique_ptr<Op> op,
     consensus_.get(),
     log_.get(),
     prepare_pool_token_.get(),
-    apply_pool_,
+    apply_pool_token_.get(),
     &op_order_verifier_);
   RETURN_NOT_OK(op_driver->Init(std::move(op), consensus::FOLLOWER));
   *driver = std::move(op_driver);

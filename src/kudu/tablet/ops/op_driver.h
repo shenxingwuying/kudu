@@ -33,7 +33,6 @@
 #include "kudu/util/trace.h"
 
 namespace kudu {
-class ThreadPool;
 class ThreadPoolToken;
 class Timestamp;
 
@@ -228,7 +227,7 @@ class OpDriver : public RefCountedThreadSafe<OpDriver> {
            consensus::RaftConsensus* consensus,
            log::Log* log,
            ThreadPoolToken* prepare_pool_token,
-           ThreadPool* apply_pool,
+           ThreadPoolToken* apply_pool_token,
            OpOrderVerifier* order_verifier);
 
   // Perform any non-constructor initialization. Sets the op that will be
@@ -352,7 +351,7 @@ class OpDriver : public RefCountedThreadSafe<OpDriver> {
   consensus::RaftConsensus* const consensus_;
   log::Log* const log_;
   ThreadPoolToken* const prepare_pool_token_;
-  ThreadPool* const apply_pool_;
+  ThreadPoolToken* const apply_pool_token_;
   OpOrderVerifier* const order_verifier_;
 
   Status op_status_;

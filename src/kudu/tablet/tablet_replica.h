@@ -601,6 +601,9 @@ class TabletReplica : public RefCountedThreadSafe<TabletReplica>,
   // Token for serial task submission to the server-wide op prepare pool.
   std::unique_ptr<ThreadPoolToken> prepare_pool_token_;
 
+  // Token for serial task submission to the server-wide op apply pool.
+  std::unique_ptr<ThreadPoolToken> apply_pool_token_;
+
   clock::Clock* clock_;
 
   // Maintenance operations for the tablet that need information that only
