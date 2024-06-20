@@ -165,6 +165,7 @@ if ("$ENV{NO_REBUILD_THIRDPARTY}" STREQUAL "")
   endif()
 endif()
 
+
 ############################################################
 # Compiler flags
 ############################################################
@@ -1493,6 +1494,7 @@ add_subdirectory(src/kudu/master)
 add_subdirectory(src/kudu/mini-cluster)
 add_subdirectory(src/kudu/postgres)
 add_subdirectory(src/kudu/ranger)
+add_subdirectory(src/kudu/ranger-kms)
 add_subdirectory(src/kudu/rebalance)
 add_subdirectory(src/kudu/rpc)
 add_subdirectory(src/kudu/security)

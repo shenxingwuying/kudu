@@ -24,15 +24,16 @@
 #include <iosfwd>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <glog/logging.h>
 #include <gtest/gtest_prod.h>
 
+#include "kudu/common/partition.h"
 #include "kudu/common/schema.h"
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/gutil/macros.h"
@@ -89,9 +90,10 @@ class KsckTabletReplica {
 // Representation of a tablet belonging to a table. The tablet is composed of replicas.
 class KsckTablet {
  public:
-  KsckTablet(KsckTable* table, std::string id)
-      : id_(std::move(id)),
-        table_(table) {
+  KsckTablet(KsckTable* table, std::string id, Partition partition)
+      : table_(table),
+        id_(std::move(id)),
+        partition_(std::move(partition)) {
   }
 
   const std::string& id() const {
@@ -100,6 +102,10 @@ class KsckTablet {
 
   const std::vector<std::shared_ptr<KsckTabletReplica>>& replicas() const {
     return replicas_;
+  }
+
+  const Partition& partition() const {
+    return partition_;
   }
 
   void set_replicas(std::vector<std::shared_ptr<KsckTabletReplica>> replicas) {
@@ -111,9 +117,10 @@ class KsckTablet {
   }
 
  private:
-  const std::string id_;
-  std::vector<std::shared_ptr<KsckTabletReplica>> replicas_;
   KsckTable* table_;
+  const std::string id_;
+  const Partition partition_;
+  std::vector<std::shared_ptr<KsckTabletReplica>> replicas_;
   DISALLOW_COPY_AND_ASSIGN(KsckTablet);
 };
 
@@ -188,11 +195,11 @@ enum FlagsCategory {
 };
 
 // Information on flags fetched using GetFlags() RPC. Consists of the status of
-// the GetFlags() operation and the result flags wrapped into boost::optional,
-// where the latter is boost::none unless the RPC was successful.
+// the GetFlags() operation and the result flags wrapped into std::optional,
+// where the latter is std::nullopt unless the RPC was successful.
 struct FetchedFlags {
   KsckFetchState state = KsckFetchState::UNINITIALIZED;
-  boost::optional<server::GetFlagsResponsePB> flags;
+  std::optional<server::GetFlagsResponsePB> flags;
 };
 
 // Flags retrieved using GetFlags(), indexed by FlagsCategory.
@@ -259,17 +266,17 @@ class KsckMaster {
     return address_;
   }
 
-  virtual const boost::optional<std::string>& version() const {
+  virtual const std::optional<std::string>& version() const {
     CHECK_NE(KsckFetchState::UNINITIALIZED, state_);
     return version_;
   }
 
-  virtual const boost::optional<consensus::ConsensusStatePB> cstate() const {
+  virtual const std::optional<consensus::ConsensusStatePB>& cstate() const {
     CHECK_NE(KsckFetchState::UNINITIALIZED, state_);
     return cstate_;
   }
 
-  virtual const boost::optional<server::GetFlagsResponsePB>& flags(
+  virtual const std::optional<server::GetFlagsResponsePB>& flags(
       FlagsCategory category) const {
     CHECK_GE(category, FlagsCategory::MIN);
     CHECK_LE(category, FlagsCategory::MAX);
@@ -288,7 +295,7 @@ class KsckMaster {
 
   // Masters that haven't been fetched from or that were unavailable have a
   // dummy uuid.
-  static constexpr const char* kDummyUuid = "<unknown>";
+  static constexpr const char* const kDummyUuid = "<unknown>";
 
  protected:
   friend class KsckTest;
@@ -301,13 +308,13 @@ class KsckMaster {
   KsckFetchState state_ = KsckFetchState::UNINITIALIZED;
 
   // May be none if fetching info from the master fails.
-  boost::optional<std::string> version_;
+  std::optional<std::string> version_;
 
   // Fetched flags indexed by category.
   FetchedFlagsByCategory flags_by_category_;
 
   // May be none if consensus state fetch fails.
-  boost::optional<consensus::ConsensusStatePB> cstate_;
+  std::optional<consensus::ConsensusStatePB> cstate_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(KsckMaster);
@@ -397,12 +404,12 @@ class KsckTabletServer {
 
   tablet::TabletStatePB ReplicaState(const std::string& tablet_id) const;
 
-  virtual const boost::optional<std::string>& version() const {
+  virtual const std::optional<std::string>& version() const {
     CHECK_NE(KsckFetchState::UNINITIALIZED, state_);
     return version_;
   }
 
-  virtual const boost::optional<server::GetFlagsResponsePB>& flags(
+  virtual const std::optional<server::GetFlagsResponsePB>& flags(
       FlagsCategory category) const {
     DCHECK_GE(category, FlagsCategory::MIN);
     DCHECK_LE(category, FlagsCategory::MAX);
@@ -410,7 +417,7 @@ class KsckTabletServer {
     return flags_by_category_[category].flags;
   }
 
-  virtual const boost::optional<cluster_summary::QuiescingInfo>& quiescing_info() const {
+  virtual const std::optional<cluster_summary::QuiescingInfo>& quiescing_info() const {
     CHECK_NE(KsckFetchState::UNINITIALIZED, state_);
     return quiescing_info_;
   }
@@ -434,7 +441,7 @@ class KsckTabletServer {
   KsckFetchState state_ = KsckFetchState::UNINITIALIZED;
 
   // May be none if fetching info from the tablet server fails.
-  boost::optional<std::string> version_;
+  std::optional<std::string> version_;
 
   // Fetched flags indexed by category.
   FetchedFlagsByCategory flags_by_category_;
@@ -443,7 +450,7 @@ class KsckTabletServer {
   TabletConsensusStateMap tablet_consensus_state_map_;
 
   // May be none if the quiescing request fails.
-  boost::optional<cluster_summary::QuiescingInfo> quiescing_info_;
+  std::optional<cluster_summary::QuiescingInfo> quiescing_info_;
 
   const std::string uuid_;
   std::string location_;

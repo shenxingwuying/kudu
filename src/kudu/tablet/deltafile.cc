@@ -23,7 +23,6 @@
 #include <string>
 #include <utility>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 
 #include "kudu/cfile/binary_plain_block.h"
@@ -298,7 +297,7 @@ Status DeltaFileReader::ReadDeltaStats() {
 }
 
 bool DeltaFileReader::IsRelevantForSnapshots(
-    const boost::optional<MvccSnapshot>& snap_to_exclude,
+    const std::optional<MvccSnapshot>& snap_to_exclude,
     const MvccSnapshot& snap_to_include) const {
   if (!init_once_.init_succeeded()) {
     // If we're not initted, it means we have no delta stats and must
@@ -734,7 +733,7 @@ Status DeltaFileIterator<Type>::CollectMutations(vector<Mutation*>* dst, Arena* 
 }
 
 template<DeltaType Type>
-bool DeltaFileIterator<Type>::HasNext() {
+bool DeltaFileIterator<Type>::HasNext() const {
   return !exhausted_ || !delta_blocks_.empty();
 }
 

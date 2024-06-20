@@ -21,13 +21,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <glog/stl_logging.h>
@@ -54,13 +55,10 @@
 #include "kudu/tablet/delta_key.h"
 #include "kudu/tablet/delta_store.h"
 #include "kudu/tablet/delta_tracker.h"
-#include "kudu/tablet/deltamemstore.h"
 #include "kudu/tablet/diskrowset-test-base.h"
 #include "kudu/tablet/mvcc.h"
 #include "kudu/tablet/rowset.h"
-#include "kudu/tablet/rowset_metadata.h"
 #include "kudu/tablet/tablet-test-util.h"
-#include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_mem_trackers.h"
 #include "kudu/util/bloom_filter.h"
@@ -72,6 +70,12 @@
 #include "kudu/util/stopwatch.h"
 #include "kudu/util/test_macros.h"
 #include "kudu/util/test_util.h"
+
+namespace kudu {
+namespace tablet {
+class RowSetMetadata;
+}  // namespace tablet
+}  // namespace kudu
 
 DEFINE_double(update_fraction, 0.1f, "fraction of rows to update");
 DECLARE_bool(cfile_lazy_open);
@@ -787,7 +791,7 @@ TEST_P(DiffScanRowSetTest, TestFuzz) {
     if (add_vc_is_deleted) {
       bool read_default = false;
       col_schemas.emplace_back("is_deleted", IS_DELETED, /*is_nullable=*/ false,
-                               &read_default);
+                               /*is_immutable=*/ false, &read_default);
       col_ids.emplace_back(schema_.max_col_id() + 1);
     }
     Schema projection(col_schemas, col_ids, 1);
@@ -837,14 +841,14 @@ TEST_P(DiffScanRowSetTest, TestFuzz) {
   // 'col_idx'. If 'val' is unset, deletes the row.
   auto mutate_row = [&](rowid_t row_idx,
                         size_t col_idx,
-                        boost::optional<uint32_t> val) {
+                        std::optional<uint32_t> val) {
     // Build the mutation.
     faststring buf;
     RowChangeListEncoder enc(&buf);
     if (val) {
       enc.AddColumnUpdate(schema_.column(col_idx),
                           schema_.column_id(col_idx),
-                          val.get_ptr());
+                          &(*val));
     } else {
       enc.SetToDelete();
     }
@@ -893,7 +897,7 @@ TEST_P(DiffScanRowSetTest, TestFuzz) {
   NO_FATALS(maybe_flush_compact());
   NO_FATALS(mutate_row(3, 1, 400)); // ts 4
   NO_FATALS(maybe_flush_compact());
-  NO_FATALS(mutate_row(3, 1, boost::none)); // ts 5
+  NO_FATALS(mutate_row(3, 1, std::nullopt)); // ts 5
   NO_FATALS(maybe_flush_compact());
 
   // Run the diff scan test on every permutation of time bounds.

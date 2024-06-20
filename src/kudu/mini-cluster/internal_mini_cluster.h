@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <glog/logging.h>
+#include <gtest/gtest_prod.h>
 
 #include "kudu/client/shared_ptr.h" // IWYU pragma: keep
 #include "kudu/gutil/macros.h"
@@ -48,6 +49,10 @@ class TSDescriptor;
 namespace rpc {
 class Messenger;
 } // namespace rpc
+
+namespace tools {
+class ToolTest_TestRebuildTserverByLocalReplicaCopy_Test;
+} // namespace tools
 
 namespace tserver {
 class MiniTabletServer;
@@ -159,6 +164,20 @@ class InternalMiniCluster : public MiniCluster {
     return env_;
   }
 
+  // Returns the default environment. As the servers in an internal mini-cluster
+  // share the same Env, each tablet server uses the same server key, so the
+  // default Env can be used here.
+  Env* ts_env(int ts_idx) const override {
+    return env_;
+  }
+
+  // Returns the default environment. As the servers in an internal mini-cluster
+  // share the same Env, each master uses the same server key, so the default
+  // Env can be used here.
+  Env* master_env(int master_idx) const override {
+    return env_;
+  }
+
   BindMode bind_mode() const override {
     return opts_.bind_mode;
   }
@@ -215,6 +234,7 @@ class InternalMiniCluster : public MiniCluster {
       int idx) const override;
 
  private:
+  FRIEND_TEST(kudu::tools::ToolTest, TestRebuildTserverByLocalReplicaCopy);
 
   // Creates and starts the cluster masters.
   Status StartMasters();

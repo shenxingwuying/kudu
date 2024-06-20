@@ -21,14 +21,15 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <boost/container/flat_map.hpp>
 #include <boost/container/vector.hpp>
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
@@ -69,6 +70,7 @@
 #include "kudu/util/compression/compression.pb.h"
 #include "kudu/util/env.h"
 #include "kudu/util/faststring.h"
+#include "kudu/util/flag_validators.h"
 #include "kudu/util/memory/arena.h"
 #include "kudu/util/pb_util.h"
 #include "kudu/util/slice.h"
@@ -84,6 +86,25 @@ DEFINE_bool(print_rows, true,
 DEFINE_string(uuid, "",
               "The uuid to use in the filesystem. "
               "If not provided, one is generated");
+DEFINE_string(server_key, "",
+              "The encrypted server key to use in the filesystem.");
+DEFINE_string(server_key_iv, "",
+              "The server key IV to use in the filesystem.");
+DEFINE_string(server_key_version, "",
+              "The server key version to use in the filesystem.");
+
+bool ServerKeySetTogether() {
+  if (FLAGS_server_key.empty() != FLAGS_server_key_iv.empty()
+      || FLAGS_server_key.empty() != FLAGS_server_key_version.empty()) {
+    LOG(ERROR) << "'server_key', 'server_key_iv', and 'server_key_version' must "
+                  "either all be set, or none of them must be set.";
+    return false;
+  }
+  return true;
+}
+
+GROUP_FLAG_VALIDATOR(server_key_set_together, ServerKeySetTogether);
+
 DEFINE_bool(repair, false,
             "Repair any inconsistencies in the filesystem.");
 
@@ -101,27 +122,29 @@ DEFINE_uint64(block_id, 0,
 DEFINE_bool(h, true,
             "Pretty-print values in human-readable units");
 
-namespace kudu {
-namespace tools {
-
-using cfile::CFileIterator;
-using cfile::CFileReader;
-using cfile::ReaderOptions;
-using fs::BlockDeletionTransaction;
-using fs::UpdateInstanceBehavior;
-using fs::FsReport;
-using fs::ReadableBlock;
+using kudu::cfile::CFileIterator;
+using kudu::cfile::CFileReader;
+using kudu::cfile::ReaderOptions;
+using kudu::fs::BlockDeletionTransaction;
+using kudu::fs::UpdateInstanceBehavior;
+using kudu::fs::FsReport;
+using kudu::fs::ReadableBlock;
+using kudu::tablet::RowSetMetadata;
+using kudu::tablet::TabletDataState;
+using kudu::tablet::TabletMetadata;
 using std::cout;
 using std::endl;
+using std::nullopt;
+using std::optional;
 using std::shared_ptr;
 using std::string;
 using std::unique_ptr;
 using std::unordered_map;
 using std::vector;
 using strings::Substitute;
-using tablet::RowSetMetadata;
-using tablet::TabletDataState;
-using tablet::TabletMetadata;
+
+namespace kudu {
+namespace tools {
 
 namespace {
 
@@ -223,11 +246,22 @@ Status Check(const RunnerContext& /*context*/) {
 
 Status Format(const RunnerContext& /*context*/) {
   FsManager fs_manager(Env::Default(), FsManagerOpts());
-  boost::optional<string> uuid;
+  optional<string> uuid;
+  optional<string> server_key;
+  optional<string> server_key_iv;
+  optional<string> server_key_version;
   if (!FLAGS_uuid.empty()) {
     uuid = FLAGS_uuid;
   }
-  return fs_manager.CreateInitialFileSystemLayout(uuid);
+  if (!FLAGS_server_key.empty()
+      && !FLAGS_server_key_iv.empty()
+      && !FLAGS_server_key_version.empty()) {
+    server_key = FLAGS_server_key;
+    server_key_iv = FLAGS_server_key_iv;
+    server_key_version = FLAGS_server_key_version;
+  }
+  return fs_manager.CreateInitialFileSystemLayout(uuid, server_key,
+                                                  server_key_iv, server_key_version);
 }
 
 Status DumpUuid(const RunnerContext& /*context*/) {
@@ -567,7 +601,7 @@ string BlockInfo(Field field,
                  const TabletMetadata& tablet,
                  const RowSetMetadata& rowset,
                  const char* block_kind,
-                 boost::optional<ColumnId> column_id,
+                 optional<ColumnId> column_id,
                  const BlockId& block) {
   CHECK(!block.IsNull());
   switch (field) {
@@ -579,7 +613,7 @@ string BlockInfo(Field field,
     } else { return ""; }
 
     case Field::kColumnId: if (column_id) {
-      return std::to_string(column_id.get());
+      return std::to_string(*column_id);
     } else { return ""; }
 
     default: return RowsetInfo(field, tablet, rowset);
@@ -622,7 +656,7 @@ string CFileInfo(Field field,
                  const TabletMetadata& tablet,
                  const RowSetMetadata& rowset,
                  const char* block_kind,
-                 const boost::optional<ColumnId>& column_id,
+                 const optional<ColumnId>& column_id,
                  const BlockId& block,
                  const CFileReader& cfile) {
   switch (field) {
@@ -684,7 +718,7 @@ Status AddBlockInfoRow(DataTable* table,
                        const TabletMetadata& tablet,
                        const RowSetMetadata& rowset,
                        const char* block_kind,
-                       const boost::optional<ColumnId>& column_id,
+                       const optional<ColumnId>& column_id,
                        const BlockId& block) {
   if (block.IsNull() || (FLAGS_block_id > 0 && FLAGS_block_id != block.id())) {
     return Status::OK();
@@ -789,16 +823,16 @@ Status List(const RunnerContext& /*context*/) {
         }
         for (const auto& block : rowset.redo_delta_blocks()) {
           RETURN_NOT_OK(AddBlockInfoRow(&table, group, fields, &fs_manager, tablet,
-                                        rowset, "redo", boost::none, block));
+                                        rowset, "redo", nullopt, block));
         }
         for (const auto& block : rowset.undo_delta_blocks()) {
           RETURN_NOT_OK(AddBlockInfoRow(&table, group, fields, &fs_manager, tablet,
-                                        rowset, "undo", boost::none, block));
+                                        rowset, "undo", nullopt, block));
         }
         RETURN_NOT_OK(AddBlockInfoRow(&table, group, fields, &fs_manager, tablet,
-                                      rowset, "bloom", boost::none, rowset.bloom_block()));
+                                      rowset, "bloom", nullopt, rowset.bloom_block()));
         RETURN_NOT_OK(AddBlockInfoRow(&table, group, fields, &fs_manager, tablet,
-                                      rowset, "adhoc-index", boost::none,
+                                      rowset, "adhoc-index", nullopt,
                                       rowset.adhoc_index_block()));
 
       }
@@ -886,7 +920,7 @@ unique_ptr<Mode> BuildFsMode() {
           "Starting with Kudu 1.12.0, it is not required to run this tool "
           "to add or remove directories. This tool is preserved for backwards "
           "compatibility")
-      .AddOptionalParameter("force", boost::none, string("If true, permits "
+      .AddOptionalParameter("force", nullopt, string("If true, permits "
           "the removal of a data directory that is configured for use by "
           "existing tablets. Those tablets will fail the next time the server "
           "is started"))

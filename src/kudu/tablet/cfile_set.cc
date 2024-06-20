@@ -25,7 +25,6 @@
 
 #include <boost/container/flat_map.hpp>
 #include <boost/container/vector.hpp>
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
@@ -62,25 +61,26 @@ TAG_FLAG(consult_bloom_filters, hidden);
 
 DECLARE_bool(rowset_metadata_store_keys);
 
-namespace kudu {
-
-class MemTracker;
-
-namespace tablet {
-
-using cfile::BloomFileReader;
-using cfile::CFileIterator;
-using cfile::CFileReader;
-using cfile::ColumnIterator;
-using cfile::ReaderOptions;
-using cfile::DefaultColumnValueIterator;
-using fs::IOContext;
-using fs::ReadableBlock;
+using kudu::cfile::BloomFileReader;
+using kudu::cfile::CFileIterator;
+using kudu::cfile::CFileReader;
+using kudu::cfile::ColumnIterator;
+using kudu::cfile::ReaderOptions;
+using kudu::cfile::DefaultColumnValueIterator;
+using kudu::fs::IOContext;
+using kudu::fs::ReadableBlock;
+using std::optional;
 using std::shared_ptr;
 using std::string;
 using std::unique_ptr;
 using std::vector;
 using strings::Substitute;
+
+namespace kudu {
+
+class MemTracker;
+
+namespace tablet {
 
 ////////////////////////////////////////////////////////////
 // Utilities
@@ -276,7 +276,7 @@ uint64_t CFileSet::OnDiskColumnDataSize(const ColumnId& col_id) const {
 
 Status CFileSet::FindRow(const RowSetKeyProbe &probe,
                          const IOContext* io_context,
-                         boost::optional<rowid_t>* idx,
+                         optional<rowid_t>* idx,
                          ProbeStats* stats) const {
   if (FLAGS_consult_bloom_filters) {
     // Fully open the BloomFileReader if it was lazily opened earlier.
@@ -288,7 +288,7 @@ Status CFileSet::FindRow(const RowSetKeyProbe &probe,
     bool present;
     Status s = bloom_reader_->CheckKeyPresent(probe.bloom_probe(), io_context, &present);
     if (s.ok() && !present) {
-      *idx = boost::none;
+      idx->reset();
       return Status::OK();
     }
     if (!s.ok()) {
@@ -310,7 +310,7 @@ Status CFileSet::FindRow(const RowSetKeyProbe &probe,
   bool exact;
   Status s = key_iter->SeekAtOrAfter(probe.encoded_key(), &exact);
   if (s.IsNotFound() || (s.ok() && !exact)) {
-    *idx = boost::none;
+    idx->reset();
     return Status::OK();
   }
   RETURN_NOT_OK(s);
@@ -321,9 +321,9 @@ Status CFileSet::FindRow(const RowSetKeyProbe &probe,
 
 Status CFileSet::CheckRowPresent(const RowSetKeyProbe& probe, const IOContext* io_context,
                                  bool* present, rowid_t* rowid, ProbeStats* stats) const {
-  boost::optional<rowid_t> opt_rowid;
+  optional<rowid_t> opt_rowid;
   RETURN_NOT_OK(FindRow(probe, io_context, &opt_rowid, stats));
-  *present = opt_rowid != boost::none;
+  *present = opt_rowid.has_value();
   if (*present) {
   // Suppress false positive about 'opt_rowid' used when uninitialized.
 #pragma GCC diagnostic push
@@ -390,6 +390,7 @@ Status CFileSet::Iterator::Init(ScanSpec *spec) {
   CHECK(!initted_);
 
   RETURN_NOT_OK(base_data_->CountRows(io_context_, &row_count_));
+  CHECK_GT(row_count_, 0);
 
   // Setup key iterator.
   RETURN_NOT_OK(base_data_->NewKeyIterator(io_context_, &key_iter_));
@@ -397,9 +398,17 @@ Status CFileSet::Iterator::Init(ScanSpec *spec) {
   // Setup column iterators.
   RETURN_NOT_OK(CreateColumnIterators(spec));
 
-  // If there is a range predicate on the key column, push that down into an
-  // ordinal range.
-  RETURN_NOT_OK(PushdownRangeScanPredicate(spec));
+  lower_bound_idx_ = 0;
+  upper_bound_idx_ = row_count_;
+  RETURN_NOT_OK(OptimizePKPredicates(spec));
+  if (spec != nullptr && spec->CanShortCircuit()) {
+    lower_bound_idx_ = row_count_;
+    spec->RemovePredicates();
+  } else {
+    // If there is a range predicate on the key column, push that down into an
+    // ordinal range.
+    RETURN_NOT_OK(PushdownRangeScanPredicate(spec));
+  }
 
   initted_ = true;
 
@@ -410,12 +419,46 @@ Status CFileSet::Iterator::Init(ScanSpec *spec) {
   return Status::OK();
 }
 
-Status CFileSet::Iterator::PushdownRangeScanPredicate(ScanSpec *spec) {
-  CHECK_GT(row_count_, 0);
+Status CFileSet::Iterator::OptimizePKPredicates(ScanSpec* spec) {
+  if (spec == nullptr) {
+    // No predicate.
+    return Status::OK();
+  }
 
-  lower_bound_idx_ = 0;
-  upper_bound_idx_ = row_count_;
+  const EncodedKey* lb_key = spec->lower_bound_key();
+  const EncodedKey* ub_key = spec->exclusive_upper_bound_key();
+  EncodedKey* implicit_lb_key = nullptr;
+  EncodedKey* implicit_ub_key = nullptr;
+  bool modify_lower_bound_key = false;
+  bool modify_upper_bound_key = false;
+  const Schema& tablet_schema = *base_data_->tablet_schema();
 
+  if (!lb_key || lb_key->encoded_key() < base_data_->min_encoded_key_) {
+    RETURN_NOT_OK(EncodedKey::DecodeEncodedString(
+        tablet_schema, &arena_, base_data_->min_encoded_key_, &implicit_lb_key));
+    spec->SetLowerBoundKey(implicit_lb_key);
+    modify_lower_bound_key = true;
+  }
+
+  RETURN_NOT_OK(EncodedKey::DecodeEncodedString(
+      tablet_schema, &arena_, base_data_->max_encoded_key_, &implicit_ub_key));
+  Status s = EncodedKey::IncrementEncodedKey(tablet_schema, &implicit_ub_key, &arena_);
+  // Reset the exclusive_upper_bound_key only when we can get a valid and smaller upper bound key.
+  // In the case IncrementEncodedKey return ERROR status due to allocation fails or no
+  // lexicographically greater key exists, we fall back to scan the rowset without optimizing the
+  // upper bound PK, we may scan more rows but we will still get the right result.
+  if (s.ok() && (!ub_key || ub_key->encoded_key() > implicit_ub_key->encoded_key())) {
+    spec->SetExclusiveUpperBoundKey(implicit_ub_key);
+    modify_upper_bound_key = true;
+  }
+
+  if (modify_lower_bound_key || modify_upper_bound_key) {
+    spec->UnifyPrimaryKeyBoundsAndColumnPredicates(tablet_schema, &arena_, true);
+  }
+  return Status::OK();
+}
+
+Status CFileSet::Iterator::PushdownRangeScanPredicate(ScanSpec* spec) {
   if (spec == nullptr) {
     // No predicate.
     return Status::OK();

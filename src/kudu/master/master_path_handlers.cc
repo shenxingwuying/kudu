@@ -24,6 +24,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -31,7 +32,6 @@
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <glog/logging.h>
 
 #include "kudu/common/common.pb.h"
@@ -181,7 +181,7 @@ void MasterPathHandlers::HandleTabletServers(const Webserver::WebRequest& /*req*
     ts_json["start_time"] = StartTimeToString(reg);
     reg.clear_start_time();  // Clear 'start_time' before dumping to string.
     ts_json["registration"] = pb_util::SecureShortDebugString(reg);
-    ts_json["location"] = desc->location().get_value_or("<none>");
+    ts_json["location"] = desc->location().value_or("<none>");
     version_counts[reg.software_version()][presumed_dead ? 1 : 0]++;
     has_no_live_ts &= presumed_dead;
     has_no_dead_ts &= !presumed_dead;
@@ -472,9 +472,9 @@ void MasterPathHandlers::HandleTablePage(const Webserver::WebRequest& req,
                     partition.hash_buckets().end(),
                     [] (const int32_t& bucket) { return bucket == 0; })) {
       range_partitions.emplace_back(
-          partition_schema.RangePartitionDebugString(partition.begin().range_key(),
-                                                     partition.end().range_key(),
-                                                     schema));
+          partition_schema.RangeWithCustomHashPartitionDebugString(partition.begin().range_key(),
+                                                                   partition.end().range_key(),
+                                                                   schema));
     }
 
     // Combine the tablet details and partition info for each tablet.

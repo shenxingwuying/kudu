@@ -21,26 +21,29 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <initializer_list>
 #include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>  // IWYU pragma: keep
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags_declare.h>
 #include <glog/logging.h>
 #include <glog/stl_logging.h>
 #include <gmock/gmock-matchers.h>
 #include <gtest/gtest.h>
+#include <rapidjson/document.h>
 
 #include "kudu/cfile/cfile-test-base.h"
 #include "kudu/cfile/cfile_util.h"
@@ -64,7 +67,6 @@
 #include "kudu/consensus/log_util.h"
 #include "kudu/consensus/opid.pb.h"
 #include "kudu/consensus/opid_util.h"
-#include "kudu/consensus/raft_consensus.h"
 #include "kudu/consensus/ref_counted_replicate.h"
 #include "kudu/fs/block_id.h"
 #include "kudu/fs/block_manager.h"
@@ -138,6 +140,7 @@
 #include "kudu/util/test_util.h"
 #include "kudu/util/url-coding.h"
 
+DECLARE_bool(encrypt_data_at_rest);
 DECLARE_bool(fs_data_dirs_consider_available_space);
 DECLARE_bool(hive_metastore_sasl_enabled);
 DECLARE_bool(show_values);
@@ -152,7 +155,6 @@ DECLARE_string(hive_metastore_uris);
 METRIC_DECLARE_counter(bloom_lookups);
 METRIC_DECLARE_entity(tablet);
 
-using boost::optional;
 using kudu::cfile::CFileWriter;
 using kudu::cfile::StringDataGenerator;
 using kudu::cfile::WriterOptions;
@@ -210,9 +212,12 @@ using kudu::tserver::TabletServerErrorPB;
 using kudu::tserver::WriteRequestPB;
 using std::back_inserter;
 using std::copy;
+using std::find;
 using std::make_pair;
 using std::map;
 using std::max;
+using std::nullopt;
+using std::optional;
 using std::ostringstream;
 using std::pair;
 using std::set;
@@ -291,7 +296,7 @@ class ToolTest : public KuduTest {
     Status s = RunTool(arg_str, stdout, &stderr, nullptr, nullptr);
     SCOPED_TRACE(*stdout);
     SCOPED_TRACE(stderr);
-    ASSERT_OK(s);
+    ASSERT_TRUE(s.ok()) << arg_str;
   }
 
   void RunActionStdinStdoutString(const string& arg_str, const string& stdin,
@@ -516,6 +521,8 @@ class ToolTest : public KuduTest {
     int64_t max_value;
     string columns;
     TableCopyMode mode;
+    int32_t create_table_replication_factor;
+    string create_table_hash_bucket_nums;
   };
 
   void RunCopyTableCheck(const RunCopyTableCheckArgs& args) {
@@ -563,17 +570,48 @@ class ToolTest : public KuduTest {
 
     // Execute copy command.
     string stdout;
-    NO_FATALS(RunActionStdoutString(
+    string stderr;
+    Status s = RunActionStdoutStderrString(
                 Substitute("table copy $0 $1 $2 -dst_table=$3 -predicates=$4 -write_type=$5 "
-                           "-create_table=$6",
+                           "-create_table=$6 -create_table_replication_factor=$7 "
+                           "-create_table_hash_bucket_nums=$8",
                            cluster_->master()->bound_rpc_addr().ToString(),
                            args.src_table_name,
                            cluster_->master()->bound_rpc_addr().ToString(),
                            kDstTableName,
                            args.predicates_json,
                            write_type,
-                           create_table),
-                &stdout));
+                           create_table,
+                           args.create_table_replication_factor,
+                           args.create_table_hash_bucket_nums),
+                &stdout, &stderr);
+    if (args.create_table_hash_bucket_nums == "10,aa") {
+      ASSERT_STR_CONTAINS(stderr, "cannot parse the number of hash buckets.");
+      return;
+    }
+    if (args.create_table_hash_bucket_nums == "10,20,30") {
+      ASSERT_STR_CONTAINS(stderr, "The count of hash bucket numbers must be equal to the "
+                                  "number of hash schema dimensions.");
+      return;
+    }
+    if (args.create_table_hash_bucket_nums == "10") {
+      ASSERT_STR_CONTAINS(stderr, "The count of hash bucket numbers must be equal to the "
+                                  "number of hash schema dimensions.");
+      return;
+    }
+    if (args.create_table_hash_bucket_nums == "10,1") {
+      ASSERT_STR_CONTAINS(stderr, "The number of hash buckets must not be less than 2.");
+      return;
+    }
+    if (args.create_table_hash_bucket_nums == "10,1") {
+      ASSERT_STR_CONTAINS(stderr, "The number of hash buckets must not be less than 2.");
+      return;
+    }
+    if (args.create_table_hash_bucket_nums == "10,50") {
+      ASSERT_STR_CONTAINS(stderr, "There are no hash partitions defined in this table.");
+      return;
+    }
+    ASSERT_TRUE(s.ok());
 
     // Check total count.
     int64_t total = max<int64_t>(args.max_value - args.min_value + 1, 0);
@@ -598,10 +636,41 @@ class ToolTest : public KuduTest {
                    cluster_->master()->bound_rpc_addr().ToString(),
                    kDstTableName), &dst_schema));
 
-      // Remove the first lines, which are the different table names.
-      src_schema.erase(src_schema.begin());
-      dst_schema.erase(dst_schema.begin());
-      ASSERT_EQ(src_schema, dst_schema);
+      ASSERT_EQ(src_schema.size(), dst_schema.size());
+      for (int i = 0; i < src_schema.size(); ++i) {
+        // Table name is different.
+        if (HasPrefixString(src_schema[i], "TABLE ")) continue;
+        // Replication factor is different when explicitly set it to 3 (default 1).
+        if (args.create_table_replication_factor == 3 &&
+            HasPrefixString(src_schema[i], "REPLICAS ")) continue;
+        vector<string> hash_bucket_nums = Split(args.create_table_hash_bucket_nums,
+                                            ",", strings::SkipEmpty());
+        if (args.create_table_hash_bucket_nums == "10,20" &&
+            HasPrefixString(src_schema[i], "HASH (key_hash0)")) {
+          ASSERT_STR_CONTAINS(dst_schema[i], Substitute("PARTITIONS $0",
+                                                        hash_bucket_nums[0]));
+          continue;
+        }
+        if (args.create_table_hash_bucket_nums == "10,20" &&
+            HasPrefixString(src_schema[i], "HASH (key_hash1, key_hash2)")) {
+          ASSERT_STR_CONTAINS(dst_schema[i], Substitute("PARTITIONS $0",
+                                                        hash_bucket_nums[1]));
+          continue;
+        }
+        if (args.create_table_hash_bucket_nums == "10,2" &&
+            HasPrefixString(src_schema[i], "HASH (key_hash0)")) {
+          ASSERT_STR_CONTAINS(dst_schema[i], Substitute("PARTITIONS $0",
+                                                        hash_bucket_nums[0]));
+          continue;
+        }
+        if (args.create_table_hash_bucket_nums == "10,2" &&
+            HasPrefixString(src_schema[i], "HASH (key_hash1, key_hash2)")) {
+          ASSERT_STR_CONTAINS(dst_schema[i], Substitute("PARTITIONS $0",
+                                                        hash_bucket_nums[1]));
+          continue;
+        }
+        ASSERT_EQ(src_schema[i], dst_schema[i]);
+      }
     }
 
     // Check all values.
@@ -663,6 +732,14 @@ class ToolTest : public KuduTest {
     ASSERT_STR_CONTAINS(stderr, expect_err);
   }
 
+  string GetMasterAddrsStr() {
+    vector<string> master_addrs;
+    for (const auto& hp : mini_cluster_->master_rpc_addrs()) {
+      master_addrs.emplace_back(hp.ToString());
+    }
+    return JoinStrings(master_addrs, ",");
+  }
+
  protected:
   // Note: Each test case must have a single invocation of RunLoadgen() otherwise it leads to
   //       memory leaks.
@@ -673,6 +750,7 @@ class ToolTest : public KuduTest {
                   string* tool_stderr = nullptr);
   void StartExternalMiniCluster(ExternalMiniClusterOptions opts = {});
   void StartMiniCluster(InternalMiniClusterOptions opts = {});
+  void StopMiniCluster();
   unique_ptr<ExternalMiniCluster> cluster_;
   unique_ptr<MiniClusterFsInspector> inspect_;
   unordered_map<string, TServerDetails*> ts_map_;
@@ -699,7 +777,8 @@ enum RunCopyTableCheckArgsType {
   kTestCopyTableSchemaOnly,
   kTestCopyTableComplexSchema,
   kTestCopyUnpartitionedTable,
-  kTestCopyTablePredicates
+  kTestCopyTablePredicates,
+  kTestCopyTableWithStringBounds
 };
 // Subclass of ToolTest that allows running individual test cases with different parameters to run
 // 'kudu table copy' CLI tool.
@@ -709,7 +788,13 @@ class ToolTestCopyTableParameterized :
  public:
   void SetUp() override {
     test_case_ = GetParam();
-    NO_FATALS(StartExternalMiniCluster());
+    ExternalMiniClusterOptions opts;
+    if (test_case_ == kTestCopyTableSchemaOnly) {
+      // In kTestCopyTableSchemaOnly case, we may create table with RF=3,
+      // means 3 tservers needed at least.
+      opts.num_tablet_servers = 3;
+    }
+    NO_FATALS(StartExternalMiniCluster(opts));
 
     // Create the src table and write some data to it.
     TestWorkload ww(cluster_.get());
@@ -726,6 +811,13 @@ class ToolTestCopyTableParameterized :
       KuduSchema schema;
       ASSERT_OK(CreateUnpartitionedTable(&schema));
       ww.set_schema(schema);
+    } else if (test_case_ == kTestCopyTableWithStringBounds) {
+      // Regression for KUDU-3306, verify copying a table with string columns in its range key.
+      KuduSchema schema;
+      ASSERT_OK(CreateTableWithStringBounds(&schema));
+      ww.set_schema(schema);
+      ww.Setup();
+      return;
     }
     ww.Setup();
     ww.Start();
@@ -747,7 +839,8 @@ class ToolTestCopyTableParameterized :
                                    1,
                                    total_rows_,
                                    kSimpleSchemaColumns,
-                                   TableCopyMode::INSERT_TO_EXIST_TABLE };
+                                   TableCopyMode::INSERT_TO_EXIST_TABLE,
+                                   -1 };
     switch (test_case_) {
       case kTestCopyTableDstTableExist:
         return { args };
@@ -757,16 +850,76 @@ class ToolTestCopyTableParameterized :
       case kTestCopyTableUpsert:
         args.mode = TableCopyMode::UPSERT_TO_EXIST_TABLE;
         return { args };
-      case kTestCopyTableSchemaOnly:
+      case kTestCopyTableSchemaOnly: {
         args.mode = TableCopyMode::COPY_SCHEMA_ONLY;
-        return { args };
-      case kTestCopyTableComplexSchema:
+        vector<RunCopyTableCheckArgs> multi_args;
+        {
+          auto args_temp = args;
+          multi_args.emplace_back(std::move(args_temp));
+        }
+        {
+          auto args_temp = args;
+          args_temp.create_table_replication_factor = 1;
+          multi_args.emplace_back(std::move(args_temp));
+        }
+        {
+          auto args_temp = args;
+          args_temp.create_table_replication_factor = 3;
+          multi_args.emplace_back(std::move(args_temp));
+        }
+        return multi_args;
+      }
+      case kTestCopyTableComplexSchema: {
         args.columns = kComplexSchemaColumns;
         args.mode = TableCopyMode::INSERT_TO_NOT_EXIST_TABLE;
-        return { args };
-      case kTestCopyUnpartitionedTable:
+        vector<RunCopyTableCheckArgs> multi_args;
+        {
+          auto args_temp = args;
+          args.create_table_hash_bucket_nums = "10,20";
+          multi_args.emplace_back(std::move(args_temp));
+        }
+        {
+          auto args_temp = args;
+          args_temp.create_table_hash_bucket_nums = "10,aa";
+          multi_args.emplace_back(std::move(args_temp));
+        }
+        {
+          auto args_temp = args;
+          args_temp.create_table_hash_bucket_nums = "10,20,30";
+          multi_args.emplace_back(std::move(args_temp));
+        }
+        {
+          auto args_temp = args;
+          args_temp.create_table_hash_bucket_nums = "10";
+          multi_args.emplace_back(std::move(args_temp));
+        }
+        {
+          auto args_temp = args;
+          args_temp.create_table_hash_bucket_nums = "10,1";
+          multi_args.emplace_back(std::move(args_temp));
+        }
+        {
+          auto args_temp = args;
+          args_temp.create_table_hash_bucket_nums = "10,2";
+          multi_args.emplace_back(std::move(args_temp));
+        }
+        {
+          auto args_temp = args;
+          args_temp.create_table_hash_bucket_nums = "";
+          multi_args.emplace_back(std::move(args_temp));
+        }
+        return multi_args;
+      }
+      case kTestCopyUnpartitionedTable: {
         args.mode = TableCopyMode::INSERT_TO_NOT_EXIST_TABLE;
-        return {args};
+        vector<RunCopyTableCheckArgs> multi_args;
+        {
+          auto args_temp = args;
+          args.create_table_hash_bucket_nums = "10,50";
+          multi_args.emplace_back(std::move(args_temp));
+        }
+        return multi_args;
+      }
       case kTestCopyTablePredicates: {
         auto mid = total_rows_ / 2;
         vector<RunCopyTableCheckArgs> multi_args;
@@ -832,6 +985,10 @@ class ToolTestCopyTableParameterized :
         }
         return multi_args;
       }
+      case kTestCopyTableWithStringBounds:
+        args.mode = TableCopyMode::COPY_SCHEMA_ONLY;
+        args.columns = "";
+        return {args};
       default:
         LOG(FATAL) << "Unknown type " << test_case_;
     }
@@ -919,6 +1076,35 @@ class ToolTestCopyTableParameterized :
     return Status::OK();
   }
 
+  Status CreateTableWithStringBounds(KuduSchema* schema) {
+    shared_ptr<KuduClient> client;
+    RETURN_NOT_OK(cluster_->CreateClient(nullptr, &client));
+    unique_ptr<KuduTableCreator> table_creator(client->NewTableCreator());
+    *schema = KuduSchema::FromSchema(
+        Schema({ColumnSchema("int_key", INT32), ColumnSchema("string_key", STRING)}, 2));
+
+    unique_ptr<KuduPartialRow> first_lower_bound(schema->NewRow());
+    unique_ptr<KuduPartialRow> first_upper_bound(schema->NewRow());
+    RETURN_NOT_OK(first_lower_bound->SetStringNoCopy("string_key", "2020-01-01"));
+    RETURN_NOT_OK(first_upper_bound->SetStringNoCopy("string_key", "2020-01-01"));
+
+    unique_ptr<KuduPartialRow> second_lower_bound(schema->NewRow());
+    unique_ptr<KuduPartialRow> second_upper_bound(schema->NewRow());
+    RETURN_NOT_OK(second_lower_bound->SetStringNoCopy("string_key", "2021-01-01"));
+    RETURN_NOT_OK(second_upper_bound->SetStringNoCopy("string_key", "2021-01-01"));
+    KuduTableCreator::RangePartitionBound bound_type = KuduTableCreator::INCLUSIVE_BOUND;
+
+    return table_creator->table_name(kTableName)
+        .schema(schema)
+        .set_range_partition_columns({"string_key"})
+        .add_range_partition(
+            first_lower_bound.release(), first_upper_bound.release(), bound_type, bound_type)
+        .add_range_partition(
+            second_lower_bound.release(), second_upper_bound.release(), bound_type, bound_type)
+        .num_replicas(1)
+        .Create();
+  }
+
   void InsertOneRowWithNullCell() {
     shared_ptr<KuduClient> client;
     ASSERT_OK(cluster_->CreateClient(nullptr, &client));
@@ -954,7 +1140,8 @@ INSTANTIATE_TEST_SUITE_P(CopyTableParameterized,
                                            kTestCopyTableSchemaOnly,
                                            kTestCopyTableComplexSchema,
                                            kTestCopyUnpartitionedTable,
-                                           kTestCopyTablePredicates));
+                                           kTestCopyTablePredicates,
+                                           kTestCopyTableWithStringBounds));
 
 void ToolTest::StartExternalMiniCluster(ExternalMiniClusterOptions opts) {
   cluster_.reset(new ExternalMiniCluster(std::move(opts)));
@@ -968,6 +1155,10 @@ void ToolTest::StartExternalMiniCluster(ExternalMiniClusterOptions opts) {
 void ToolTest::StartMiniCluster(InternalMiniClusterOptions opts) {
   mini_cluster_.reset(new InternalMiniCluster(env_, std::move(opts)));
   ASSERT_OK(mini_cluster_->Start());
+}
+
+void ToolTest::StopMiniCluster() {
+  mini_cluster_->Shutdown();
 }
 
 TEST_F(ToolTest, TestHelpXML) {
@@ -1088,7 +1279,8 @@ TEST_F(ToolTest, TestModeHelp) {
         "cmeta.*Operate on a local tablet replica's consensus",
         "data_size.*Summarize the data size",
         "dump.*Dump a Kudu filesystem",
-        "copy_from_remote.*Copy a tablet replica",
+        "copy_from_remote.*Copy tablet replicas from a remote server",
+        "copy_from_local.*Copy tablet replicas from local filesystem",
         "delete.*Delete tablet replicas from the local filesystem",
         "list.*Show list of tablet replicas",
     };
@@ -1116,12 +1308,22 @@ TEST_F(ToolTest, TestModeHelp) {
   }
   {
     const vector<string> kLocalReplicaCopyFromRemoteRegexes = {
-        "Copy a tablet replica from a remote server",
+        "Copy tablet replicas from a remote server",
     };
     NO_FATALS(RunTestHelp("local_replica copy_from_remote --help",
                           kLocalReplicaCopyFromRemoteRegexes));
     // Try with hyphens instead of underscores.
     NO_FATALS(RunTestHelp("local-replica copy-from-remote --help",
+                          kLocalReplicaCopyFromRemoteRegexes));
+  }
+  {
+    const vector<string> kLocalReplicaCopyFromRemoteRegexes = {
+        "Copy tablet replicas from local filesystem",
+    };
+    NO_FATALS(RunTestHelp("local_replica copy_from_local --help",
+                          kLocalReplicaCopyFromRemoteRegexes));
+    // Try with hyphens instead of underscores.
+    NO_FATALS(RunTestHelp("local-replica copy-from-local --help",
                           kLocalReplicaCopyFromRemoteRegexes));
   }
   {
@@ -1132,17 +1334,19 @@ TEST_F(ToolTest, TestModeHelp) {
         "get_flags.*Get the gflags",
         "run.*Run a Kudu Master",
         "set_flag.*Change a gflag value",
+        "set_flag_for_all.*Change a gflag value",
         "status.*Get the status",
         "timestamp.*Get the current timestamp",
         "list.*List masters in a Kudu cluster",
         "add.*Add a master to the Kudu cluster",
-        "remove.*Remove a master from the Kudu cluster"
+        "remove.*Remove a master from the Kudu cluster",
     };
     NO_FATALS(RunTestHelp(kCmd, kMasterModeRegexes));
     NO_FATALS(RunTestHelpRpcFlags(kCmd,
         { "dump_memtrackers",
           "get_flags",
           "set_flag",
+          "set_flag_for_all",
           "status",
           "timestamp",
           "list",
@@ -1221,6 +1425,7 @@ TEST_F(ToolTest, TestModeHelp) {
         "get_extra_configs.*Get the extra configuration properties for a table",
         "list.*List tables",
         "locate_row.*Locate which tablet a row belongs to",
+        "recall.*Recall a deleted but still reserved table",
         "rename_column.*Rename a column",
         "rename_table.*Rename a table",
         "scan.*Scan rows from a table",
@@ -1306,6 +1511,7 @@ TEST_F(ToolTest, TestModeHelp) {
         "dump_memtrackers.*Dump the memtrackers",
         "get_flags.*Get the gflags",
         "set_flag.*Change a gflag value",
+        "set_flag_for_all.*Change a gflag value",
         "run.*Run a Kudu Tablet Server",
         "state.*Operate on the state",
         "status.*Get the status",
@@ -1318,6 +1524,7 @@ TEST_F(ToolTest, TestModeHelp) {
         { "dump_memtrackers",
           "get_flags",
           "set_flag",
+          "set_flag_for_all",
           "status",
           "timestamp",
           "list",
@@ -1469,10 +1676,12 @@ TEST_F(ToolTest, TestFsCheck) {
 }
 
 TEST_F(ToolTest, TestFsCheckLiveServer) {
+  string encryption_args = env_->IsEncryptionEnabled() ? GetEncryptionArgs() : "";
   NO_FATALS(StartExternalMiniCluster());
-  string args = Substitute("fs check --fs_wal_dir $0 --fs_data_dirs $1",
+  string args = Substitute("fs check --fs_wal_dir $0 --fs_data_dirs $1 $2",
                            cluster_->GetWalPath("master-0"),
-                           JoinStrings(cluster_->GetDataPaths("master-0"), ","));
+                           JoinStrings(cluster_->GetDataPaths("master-0"), ","),
+                           encryption_args);
   NO_FATALS(RunFsCheck(args, 0, "", {}, 0));
   args += " --repair";
   string stdout;
@@ -1512,6 +1721,29 @@ TEST_F(ToolTest, TestFsFormatWithUuid) {
   ASSERT_EQ(fs.uuid(), original_uuid);
 }
 
+TEST_F(ToolTest, TestFsFormatWithServerKey) {
+  const string kTestDir = GetTestPath("test");
+  ObjectIdGenerator generator;
+  string original_uuid = generator.Next();
+  string server_key = "00010203040506070809101112131442";
+  string server_key_iv = "42141312111009080706050403020100";
+  string server_key_version = "kuduclusterkey@0";
+  NO_FATALS(RunActionStdoutNone(Substitute(
+      "fs format --fs_wal_dir=$0 --uuid=$1 --server_key=$2 "
+      "--server_key_iv=$3 --server_key_version=$4",
+      kTestDir, original_uuid, server_key, server_key_iv, server_key_version)));
+  FsManager fs(env_, FsManagerOpts(kTestDir));
+  ASSERT_OK(fs.Open());
+
+  string canonicalized_uuid;
+  ASSERT_OK(generator.Canonicalize(fs.uuid(), &canonicalized_uuid));
+  ASSERT_EQ(canonicalized_uuid, fs.uuid());
+  ASSERT_EQ(original_uuid, fs.uuid());
+  ASSERT_EQ(server_key, fs.server_key());
+  ASSERT_EQ(server_key_iv, fs.server_key_iv());
+  ASSERT_EQ(server_key_version, fs.server_key_version());
+}
+
 TEST_F(ToolTest, TestFsDumpUuid) {
   const string kTestDir = GetTestPath("test");
   string uuid;
@@ -1529,6 +1761,14 @@ TEST_F(ToolTest, TestFsDumpUuid) {
 }
 
 TEST_F(ToolTest, TestPbcTools) {
+  // It's pointless to run these tests in an encrypted environment, as it uses
+  // instance files to test pbc tools, which are not encrypted anyway. The tests
+  // also make assumptions about the contents of the instance files, which are
+  // different on encrypted servers, as they contain an extra server_key field,
+  // which would make these tests break.
+  if (FLAGS_encrypt_data_at_rest) {
+    GTEST_SKIP();
+  }
   const string kTestDir = GetTestPath("test");
   string uuid;
   string instance_path;
@@ -1722,6 +1962,7 @@ TEST_F(ToolTest, TestPbcToolsOnMultipleBlocks) {
 
   // Generate a block container metadata file.
   string metadata_path;
+  string encryption_args;
   {
     // Open FsManager to write file later.
     FsManager fs(env_, FsManagerOpts(kTestDir));
@@ -1754,9 +1995,12 @@ TEST_F(ToolTest, TestPbcToolsOnMultipleBlocks) {
     }
     ASSERT_EQ(1, metadata_files.size());
     metadata_path = metadata_files[0];
-  }
 
-  string encryption_args = env_->IsEncryptionEnabled() ? GetEncryptionArgs() : "";
+    if (env_->IsEncryptionEnabled()) {
+      encryption_args = GetEncryptionArgs() + " --instance_file=" +
+          fs.GetInstanceMetadataPath(kTestDir);
+      }
+  }
 
   // Test default dump
   {
@@ -2073,7 +2317,11 @@ TEST_F(ToolTest, TestWalDump) {
   }
 
   string wal_path = fs.GetWalSegmentFileName(kTestTablet, 1);
-  string encryption_args = env_->IsEncryptionEnabled() ? GetEncryptionArgs() : "";
+  string encryption_args;
+  if (env_->IsEncryptionEnabled()) {
+    encryption_args = GetEncryptionArgs() + " --instance_file=" +
+        fs.GetInstanceMetadataPath(kTestDir);
+  }
   string stdout;
   for (const auto& args : { Substitute("wal dump $0 $1", wal_path, encryption_args),
                             Substitute("local_replica dump wals --fs_wal_dir=$0 $1 $2",
@@ -2254,9 +2502,14 @@ TEST_F(ToolTest, TestWalDumpWithAlterSchema) {
 
   string wal_path = fs.GetWalSegmentFileName(kTestTablet, 1);
   string stdout;
-  for (const auto& args : { Substitute("wal dump $0", wal_path),
-                            Substitute("local_replica dump wals --fs_wal_dir=$0 $1",
-                                       kTestDir, kTestTablet)
+  string encryption_args;
+  if (env_->IsEncryptionEnabled()) {
+    encryption_args = GetEncryptionArgs() + " --instance_file=" +
+        fs.GetInstanceMetadataPath(kTestDir);
+  }
+  for (const auto& args : { Substitute("wal dump $0 $1", encryption_args, wal_path),
+                            Substitute("local_replica dump wals --fs_wal_dir=$0 $1 $2",
+                                       kTestDir, encryption_args, kTestTablet)
                            }) {
     SCOPED_TRACE(args);
     for (const auto& print_entries : { "true", "1", "yes", "decoded" }) {
@@ -2393,11 +2646,11 @@ TEST_F(ToolTest, TestLocalReplicaDumpDataDirs) {
       &fs, kTestTablet, kTestTableName, kTestTableId,
       kSchemaWithIds, partition.first, partition.second,
       tablet::TABLET_DATA_READY,
-      /*tombstone_last_logged_opid=*/ boost::none,
+      /*tombstone_last_logged_opid=*/ nullopt,
       /*supports_live_row_count=*/ true,
-      /*extra_config=*/ boost::none,
-      /*dimension_label=*/ boost::none,
-      /*table_type=*/ boost::none,
+      /*extra_config=*/ nullopt,
+      /*dimension_label=*/ nullopt,
+      /*table_type=*/ nullopt,
       &meta));
   string stdout;
   NO_FATALS(RunActionStdoutString(Substitute("local_replica dump data_dirs $0 "
@@ -2434,11 +2687,11 @@ TEST_F(ToolTest, TestLocalReplicaDumpMeta) {
   TabletMetadata::CreateNew(&fs, kTestTablet, kTestTableName, kTestTableId,
                   kSchemaWithIds, partition.first, partition.second,
                   tablet::TABLET_DATA_READY,
-                  /*tombstone_last_logged_opid=*/ boost::none,
+                  /*tombstone_last_logged_opid=*/ nullopt,
                   /*supports_live_row_count=*/ true,
-                  /*extra_config=*/ boost::none,
-                  /*dimension_label=*/ boost::none,
-                  /*table_type=*/ boost::none,
+                  /*extra_config=*/ nullopt,
+                  /*dimension_label=*/ nullopt,
+                  /*table_type=*/ nullopt,
                   &meta);
   string stdout;
   NO_FATALS(RunActionStdoutString(Substitute("local_replica dump meta $0 "
@@ -2811,14 +3064,14 @@ void ToolTest::RunLoadgen(int num_tservers,
         ColumnSchema("int64_val", INT64),
         ColumnSchema("float_val", FLOAT),
         ColumnSchema("double_val", DOUBLE),
-        ColumnSchema("decimal32_val", DECIMAL32, false,
-                     NULL, NULL, ColumnStorageAttributes(),
+        ColumnSchema("decimal32_val", DECIMAL32, false, false,
+                     nullptr, nullptr, ColumnStorageAttributes(),
                      ColumnTypeAttributes(9, 9)),
-        ColumnSchema("decimal64_val", DECIMAL64, false,
-                     NULL, NULL, ColumnStorageAttributes(),
+        ColumnSchema("decimal64_val", DECIMAL64, false, false,
+                     nullptr, nullptr, ColumnStorageAttributes(),
                      ColumnTypeAttributes(18, 2)),
-        ColumnSchema("decimal128_val", DECIMAL128, false,
-                     NULL, NULL, ColumnStorageAttributes(),
+        ColumnSchema("decimal128_val", DECIMAL128, false, false,
+                     nullptr, nullptr, ColumnStorageAttributes(),
                      ColumnTypeAttributes(38, 0)),
         ColumnSchema("unixtime_micros_val", UNIXTIME_MICROS),
         ColumnSchema("string_val", STRING),
@@ -3960,8 +4213,8 @@ TEST_F(ToolTest, TestLocalReplicaTombstoneDelete) {
               tablet_replicas[0]->tablet_metadata()->tablet_data_state());
     optional<OpId> tombstoned_opid =
         tablet_replicas[0]->tablet_metadata()->tombstone_last_logged_opid();
-    ASSERT_NE(boost::none, tombstoned_opid);
-    ASSERT_NE(boost::none, last_logged_opid);
+    ASSERT_NE(nullopt, tombstoned_opid);
+    ASSERT_NE(nullopt, last_logged_opid);
     ASSERT_EQ(last_logged_opid->term(), tombstoned_opid->term());
     ASSERT_EQ(last_logged_opid->index(), tombstoned_opid->index());
   }
@@ -3986,7 +4239,13 @@ TEST_F(ToolTest, TestLocalReplicaCMetaOps) {
   for (int i = 0; i < kNumTabletServers; ++i) {
     ts_uuids.emplace_back(mini_cluster_->mini_tablet_server(i)->uuid());
   }
-  string encryption_args = env_->IsEncryptionEnabled() ? GetEncryptionArgs() : "";
+  string encryption_args;
+
+  if (env_->IsEncryptionEnabled()) {
+    encryption_args = GetEncryptionArgs() + " --instance_file=" +
+        JoinPathSegments(mini_cluster_->mini_tablet_server(0)->options()->fs_opts.wal_root,
+                         "instance");
+  }
   const string& flags =
       Substitute("-fs-wal-dir $0 $1",
                  mini_cluster_->mini_tablet_server(0)->options()->fs_opts.wal_root,
@@ -4288,8 +4547,9 @@ TEST_F(ToolTest, TestDeleteTable) {
   ASSERT_EQ(exist, true);
 
   // Delete the table.
-  NO_FATALS(RunActionStdoutNone(Substitute("table delete $0 $1 --nomodify_external_catalogs",
-                                           master_addr, kTableName)));
+  NO_FATALS(RunActionStdoutNone(Substitute(
+      "table delete $0 $1 --nomodify_external_catalogs -reserve_seconds=0",
+      master_addr, kTableName)));
 
   // Check that the table does not exist.
   ASSERT_OK(client->TableExists(kTableName, &exist));
@@ -4322,6 +4582,57 @@ TEST_F(ToolTest, TestRenameTable) {
         Substitute("table rename_table $0 $1 $2 --nomodify_external_catalogs",
           master_addr, kNewTableName, kTableName)));
   ASSERT_OK(client->OpenTable(kTableName, &table));
+}
+
+TEST_F(ToolTest, TestRecallTable) {
+  NO_FATALS(StartExternalMiniCluster());
+  shared_ptr<KuduClient> client;
+  ASSERT_OK(cluster_->CreateClient(nullptr, &client));
+  string master_addr = cluster_->master()->bound_rpc_addr().ToString();
+
+  constexpr const char* const kTableName = "kudu.table";
+
+  // Create the table.
+  TestWorkload workload(cluster_.get());
+  workload.set_table_name(kTableName);
+  workload.set_num_replicas(1);
+  workload.Setup();
+
+  shared_ptr<KuduTable> table;
+  ASSERT_OK(client->OpenTable(kTableName, &table));
+  string table_id = table->id();
+
+  // Delete the table.
+  string out;
+  NO_FATALS(RunActionStdoutNone(Substitute("table delete $0 $1",
+                                           master_addr, kTableName)));
+
+  // List soft_deleted table.
+  vector<string> kudu_tables;
+  ASSERT_OK(client->ListSoftDeletedTables(&kudu_tables));
+  ASSERT_EQ(1, kudu_tables.size());
+  kudu_tables.clear();
+  ASSERT_OK(client->ListTables(&kudu_tables));
+  ASSERT_EQ(0, kudu_tables.size());
+
+  // Can't create a table with the same name whose state is in soft_deleted.
+  workload.set_table_name(kTableName);
+  workload.set_num_replicas(1);
+  NO_FATALS(workload.Setup());
+  ASSERT_OK(client->ListTables(&kudu_tables));
+  ASSERT_EQ(0, kudu_tables.size());
+
+  const string kNewTableName = "kudu.table.new";
+  // Try to recall the soft_deleted table with new name.
+  NO_FATALS(RunActionStdoutNone(Substitute("table recall $0 $1 --new_table_name=$2",
+                                           master_addr, table_id, kNewTableName)));
+
+  ASSERT_OK(client->ListTables(&kudu_tables));
+  ASSERT_EQ(1, kudu_tables.size());
+  ASSERT_TRUE(kNewTableName == kudu_tables[0]);
+  kudu_tables.clear();
+  ASSERT_OK(client->ListSoftDeletedTables(&kudu_tables));
+  ASSERT_EQ(0, kudu_tables.size());
 }
 
 TEST_F(ToolTest, TestRenameColumn) {
@@ -5334,7 +5645,7 @@ Status CreateLegacyHmsTable(HmsClient* client,
                             const string& kudu_table_name,
                             const string& kudu_master_addrs,
                             const string& table_type,
-                            const optional<const string&>& owner) {
+                            const optional<string>& owner) {
   hive::Table table;
   table.dbName = hms_database_name;
   table.tableName = hms_table_name;
@@ -5659,7 +5970,7 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("impala::default.legacy_no_owner", &legacy_no_owner));
   ASSERT_OK(CreateLegacyHmsTable(&hms_client, "default", "legacy_no_owner",
         "impala::default.legacy_no_owner", master_addrs_str, HmsClient::kManagedTable,
-        boost::none));
+        nullopt));
 
   // Test case: legacy managed table with a Hive-incompatible name (no database).
   shared_ptr<KuduTable> legacy_hive_incompatible_name;
@@ -5682,7 +5993,7 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   ASSERT_OK(kudu_client->OpenTable("default.no_owner_in_hms", &no_owner_in_hms));
   ASSERT_OK(hms_catalog.CreateTable(
       no_owner_in_hms->id(), no_owner_in_hms->name(), kudu_client->cluster_id(),
-      boost::none, KuduSchema::ToSchema(no_owner_in_hms->schema()), no_owner_in_hms->comment()));
+      nullopt, KuduSchema::ToSchema(no_owner_in_hms->schema()), no_owner_in_hms->comment()));
 
   // Test case: no owner in Kudu
   shared_ptr<KuduTable> no_owner_in_kudu;
@@ -5857,7 +6168,7 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndAutomaticFixHmsMetadata) {
   NO_FATALS(ValidateHmsEntries(&hms_client, kudu_client, "my_db", "table", master_addrs_str));
 
   vector<string> kudu_tables;
-  kudu_client->ListTables(&kudu_tables);
+  ASSERT_OK(kudu_client->ListTables(&kudu_tables));
   std::sort(kudu_tables.begin(), kudu_tables.end());
   ASSERT_EQ(vector<string>({
     "default.bad_id",
@@ -6019,7 +6330,7 @@ TEST_P(ToolTestKerberosParameterized, TestCheckAndManualFixHmsMetadata) {
 
   // Ensure the tables are available.
   vector<string> kudu_tables;
-  kudu_client->ListTables(&kudu_tables);
+  ASSERT_OK(kudu_client->ListTables(&kudu_tables));
   std::sort(kudu_tables.begin(), kudu_tables.end());
   ASSERT_EQ(vector<string>({
     "default.conflicting_legacy_table",
@@ -6219,7 +6530,7 @@ TEST_F(ToolTest, TestHmsList) {
       KuduSchema::ToSchema(simple_table->schema()),
       "comment 1", hms::HmsClient::kManagedTable));
   ASSERT_OK(hms_catalog.CreateTable(
-      "2", "default.table2", "cluster-id", boost::none,
+      "2", "default.table2", "cluster-id", nullopt,
       KuduSchema::ToSchema(simple_table->schema()),
       "", hms::HmsClient::kExternalTable));
 
@@ -6845,7 +7156,9 @@ TEST_P(ControlShellToolTest, TestControlShell) {
 }
 
 static void CreateTableWithFlushedData(const string& table_name,
-                                       InternalMiniCluster* cluster) {
+                                       InternalMiniCluster* cluster,
+                                       int num_tablets = 1,
+                                       int num_replicas = 1) {
   // Use a schema with a high number of columns to encourage the creation of
   // many data blocks.
   KuduSchemaBuilder schema_builder;
@@ -6861,15 +7174,22 @@ static void CreateTableWithFlushedData(const string& table_name,
   KuduSchema schema;
   ASSERT_OK(schema_builder.Build(&schema));
 
+
+#if defined(THREAD_SANITIZER)
+  constexpr auto kNumRows = 1000;
+#else
+  constexpr auto kNumRows = 10000;
+#endif
   // Create a table and write some data to it.
   TestWorkload workload(cluster);
   workload.set_schema(schema);
   workload.set_table_name(table_name);
-  workload.set_num_replicas(1);
+  workload.set_num_tablets(num_tablets);
+  workload.set_num_replicas(num_replicas);
   workload.Setup();
   workload.Start();
-  ASSERT_EVENTUALLY([&](){
-    ASSERT_GE(workload.rows_inserted(), 10000);
+  ASSERT_EVENTUALLY([&]() {
+    ASSERT_GE(workload.rows_inserted(), kNumRows);
   });
   workload.StopAndJoin();
 
@@ -6996,7 +7316,7 @@ TEST_F(ToolTest, TestFsRemoveDataDirWithTombstone) {
   ASSERT_EQ(1, tablet_ids.size());
   TabletServerErrorPB::Code error;
   ASSERT_OK(mts->server()->tablet_manager()->DeleteTablet(
-      tablet_ids[0], TabletDataState::TABLET_DATA_TOMBSTONED, boost::none, &error));
+      tablet_ids[0], TabletDataState::TABLET_DATA_TOMBSTONED, nullopt, &error));
 
   // Set things up so we can restart with one fewer directory.
   string data_root = mts->options()->fs_opts.data_roots[0];
@@ -7544,7 +7864,7 @@ TEST_P(Is343ReplicaUtilTest, Is343Cluster) {
 
   {
     bool is_343 = false;
-    const auto s = Is343SchemeCluster({ master_addr }, boost::none, &is_343);
+    const auto s = Is343SchemeCluster({ master_addr }, nullopt, &is_343);
     ASSERT_TRUE(s.IsIncomplete()) << s.ToString();
     ASSERT_STR_CONTAINS(s.ToString(), "not a single table found");
   }
@@ -7557,7 +7877,7 @@ TEST_P(Is343ReplicaUtilTest, Is343Cluster) {
 
   {
     bool is_343 = false;
-    const auto s = Is343SchemeCluster({ master_addr }, boost::none, &is_343);
+    const auto s = Is343SchemeCluster({ master_addr }, nullopt, &is_343);
     ASSERT_TRUE(s.ok()) << s.ToString();
     ASSERT_EQ(is_343_scheme, is_343);
   }
@@ -7687,8 +8007,11 @@ TEST_F(ToolTest, ConnectionNegotiationTimeoutOption) {
     auto s = RunActionStderrString(Substitute(kPattern, rpc_addr, 10, 11), &msg);
     ASSERT_TRUE(s.IsRuntimeError());
     ASSERT_STR_CONTAINS(msg, Substitute(
-        "Timed out: Client connection negotiation failed: client connection to "
-        "$0: received 0 of 4 requested bytes", rpc_addr));
+        "Timed out: Client connection negotiation failed: "
+        "client connection to $0", rpc_addr));
+    ASSERT_STR_MATCHES(msg,
+        "(Timeout exceeded waiting to connect)|"
+        "(received|sent) 0 of .* requested bytes");
   }
 
   {
@@ -7728,6 +8051,7 @@ TEST_F(ToolTest, TestNonDefaultPrincipal) {
                          "--sasl_protocol_name=oryx",
                          HostPort::ToCommaSeparatedString(cluster_->master_rpc_addrs())}));
 }
+
 class UnregisterTServerTest : public ToolTest, public ::testing::WithParamInterface<bool> {
  public:
   void StartCluster() {
@@ -7735,14 +8059,6 @@ class UnregisterTServerTest : public ToolTest, public ::testing::WithParamInterf
     InternalMiniClusterOptions opts;
     opts.num_masters = 3;
     StartMiniCluster(std::move(opts));
-  }
-
-  string GetMasterAddrsStr() {
-    vector<string> master_addrs;
-    for (const auto& hp : mini_cluster_->master_rpc_addrs()) {
-      master_addrs.emplace_back(hp.ToString());
-    }
-    return JoinStrings(master_addrs, ",");
   }
 };
 
@@ -7862,6 +8178,299 @@ TEST_F(UnregisterTServerTest, TestUnregisterTServerNotPresumedDead) {
     NO_FATALS(RunActionStdoutString(Substitute("cluster ksck $0", master_addrs_str), &out));
     ASSERT_STR_NOT_CONTAINS(out, ts_uuid);
   }
+}
+
+TEST_F(ToolTest, TestLocalReplicaCopyLocal) {
+  // TODO(abukor): Rewrite the test to make sure it works with encryption
+  // enabled.
+  //
+  // Right now, this test would fail with encryption enabled, as the local
+  // replica copy shares an Env between the source and the destination and they
+  // use different instance files. This shouldn't be a problem in real life, as
+  // its meant to copy tablets between disks on the same server, which would
+  // share UUIDs and server keys.
+  if (FLAGS_encrypt_data_at_rest) {
+    GTEST_SKIP();
+  }
+  // Create replicas and fill some data.
+  InternalMiniClusterOptions opts;
+  opts.num_data_dirs = 3;
+  NO_FATALS(StartMiniCluster(std::move(opts)));
+  NO_FATALS(CreateTableWithFlushedData("tablename", mini_cluster_.get()));
+
+  string tablet_id;
+  string src_fs_paths_with_prefix;
+  string src_fs_paths;
+  {
+    tablet_id = mini_cluster_->mini_tablet_server(0)->ListTablets()[0];
+
+    // Obtain source filesystem options.
+    auto fs_manager = mini_cluster_->mini_tablet_server(0)->server()->fs_manager();
+    string src_fs_wal_dir = fs_manager->GetWalsRootDir();
+    src_fs_wal_dir = src_fs_wal_dir.substr(0, src_fs_wal_dir.length() - strlen("/wals"));
+    string src_fs_data_dirs = JoinMapped(fs_manager->GetDataRootDirs(),
+        [] (const string& data_dir) {
+          return data_dir.substr(0, data_dir.length() - strlen("/data"));
+        }, ",");
+    src_fs_paths_with_prefix = "--src_fs_wal_dir=" + src_fs_wal_dir + " "
+                               "--src_fs_data_dirs=" + src_fs_data_dirs;
+    src_fs_paths = "--fs_wal_dir=" + src_fs_wal_dir + " "
+                   "--fs_data_dirs=" + src_fs_data_dirs;
+  }
+
+  string dst_fs_paths_with_prefix;
+  string dst_fs_paths;
+  {
+    // Build destination filesystem layout, and obtain filesystem options.
+    const string kTestDstDir = GetTestPath("dst_test");
+    unique_ptr<FsManager> dst_fs_manager =
+        std::make_unique<FsManager>(Env::Default(), FsManagerOpts(kTestDstDir));
+    ASSERT_OK(dst_fs_manager->CreateInitialFileSystemLayout());
+    ASSERT_OK(dst_fs_manager->Open());
+    dst_fs_paths_with_prefix = "--dst_fs_wal_dir=" + kTestDstDir + " "
+                               "--dst_fs_data_dirs=" + kTestDstDir;
+    dst_fs_paths = "--fs_wal_dir=" + kTestDstDir + " "
+                   "--fs_data_dirs=" + kTestDstDir;
+  }
+
+  string encryption_args = env_->IsEncryptionEnabled() ? GetEncryptionArgs() : "";
+
+  // Copy replica from local filesystem failed, because the tserver on source filesystem
+  // is still running.
+  string stdout;
+  string stderr;
+  Status s = RunActionStdoutStderrString(
+      Substitute("local_replica copy_from_local $0 $1 $2 $3",
+                 tablet_id, src_fs_paths_with_prefix, dst_fs_paths_with_prefix, encryption_args),
+      &stdout, &stderr);
+  SCOPED_TRACE(stdout);
+  SCOPED_TRACE(stderr);
+  ASSERT_FALSE(s.ok());
+  ASSERT_STR_MATCHES(stderr,
+                     "failed to load instance files: Could not lock instance file. "
+                     "Make sure that Kudu is not already running");
+
+  // Shutdown mini cluster and copy replica from local filesystem successfully.
+  mini_cluster_->Shutdown();
+  NO_FATALS(RunActionStdoutString(
+      Substitute("local_replica copy_from_local $0 $1 $2 $3",
+                 tablet_id, src_fs_paths_with_prefix, dst_fs_paths_with_prefix, encryption_args),
+      &stdout));
+  SCOPED_TRACE(stdout);
+
+  // Check the source and destination data is matched.
+  string src_stdout;
+  NO_FATALS(RunActionStdoutString(
+      Substitute("local_replica data_size $0 $1 $2",
+                 tablet_id, src_fs_paths, encryption_args), &src_stdout));
+  SCOPED_TRACE(src_stdout);
+
+  string dst_stdout;
+  NO_FATALS(RunActionStdoutString(
+      Substitute("local_replica data_size $0 $1 $2",
+                 tablet_id, dst_fs_paths, encryption_args), &dst_stdout));
+  SCOPED_TRACE(dst_stdout);
+
+  ASSERT_EQ(src_stdout, dst_stdout);
+}
+
+TEST_F(ToolTest, TestLocalReplicaCopyRemote) {
+  InternalMiniClusterOptions opts;
+  opts.num_tablet_servers = 2;
+  NO_FATALS(StartMiniCluster(std::move(opts)));
+  NO_FATALS(CreateTableWithFlushedData("table1", mini_cluster_.get(), 3, 1));
+  NO_FATALS(CreateTableWithFlushedData("table2", mini_cluster_.get(), 3, 1));
+  int source_tserver_tablet_count = mini_cluster_->mini_tablet_server(0)->ListTablets().size();
+  int target_tserver_tablet_count_before = mini_cluster_->mini_tablet_server(1)
+                                                        ->ListTablets().size();
+  string tablet_ids_str = JoinStrings(mini_cluster_->mini_tablet_server(0)->ListTablets(), ",");
+  string source_tserver_rpc_addr = mini_cluster_->mini_tablet_server(0)
+                                                ->bound_rpc_addr().ToString();
+  string wal_dir = mini_cluster_->mini_tablet_server(1)->options()->fs_opts.wal_root;
+  string data_dirs = JoinStrings(mini_cluster_->mini_tablet_server(1)
+                                              ->options()->fs_opts.data_roots, ",");
+  NO_FATALS(mini_cluster_->mini_tablet_server(1)->Shutdown());
+  // Copy tablet replicas from tserver0 to tserver1.
+  NO_FATALS(RunActionStdoutNone(
+      Substitute("local_replica copy_from_remote $0 $1 "
+                 "-fs_data_dirs=$2 -fs_wal_dir=$3 -num_threads=3",
+                 tablet_ids_str,
+                 source_tserver_rpc_addr,
+                 data_dirs,
+                 wal_dir)));
+  NO_FATALS(mini_cluster_->mini_tablet_server(1)->Start());
+  const vector<string>& target_tablet_ids = mini_cluster_->mini_tablet_server(1)->ListTablets();
+  ASSERT_EQ(source_tserver_tablet_count + target_tserver_tablet_count_before,
+            target_tablet_ids.size());
+  for (string tablet_id : mini_cluster_->mini_tablet_server(0)->ListTablets()) {
+    ASSERT_TRUE(find(target_tablet_ids.begin(), target_tablet_ids.end(), tablet_id)
+                != target_tablet_ids.end());
+  }
+}
+
+TEST_F(ToolTest, TestRebuildTserverByLocalReplicaCopy) {
+  // Local copies are not supported on encrypted severs at this time.
+  if (FLAGS_encrypt_data_at_rest) {
+    GTEST_SKIP();
+  }
+  // Create replicas and fill some data.
+  const int kNumTserver = 3;
+  InternalMiniClusterOptions opts;
+  opts.num_tablet_servers = kNumTserver;
+  // The source filesystem has only 1 data directory.
+  opts.num_data_dirs = 1;
+  NO_FATALS(StartMiniCluster(std::move(opts)));
+  NO_FATALS(CreateTableWithFlushedData("tablename", mini_cluster_.get(), 8, 3));
+
+  // Obtain source cluster options.
+  const int kCopyTserverIndex = 2;
+  vector<string> tablet_ids = mini_cluster_->mini_tablet_server(kCopyTserverIndex)->ListTablets();
+  vector<HostPort> hps;
+  hps.reserve(mini_cluster_->num_tablet_servers());
+  for (int i = 0; i < mini_cluster_->num_tablet_servers(); ++i) {
+    hps.emplace_back(HostPort(mini_cluster_->mini_tablet_server(i)->bound_rpc_addr()));
+  }
+  auto fs_manager = mini_cluster_->mini_tablet_server(kCopyTserverIndex)->server()->fs_manager();
+  string src_fs_wal_dir = fs_manager->GetWalsRootDir();
+  src_fs_wal_dir = src_fs_wal_dir.substr(0, src_fs_wal_dir.length() - strlen("/wals"));
+  string src_fs_data_dirs = JoinMapped(fs_manager->GetDataRootDirs(),
+      [] (const string& data_dir) {
+        return data_dir.substr(0, data_dir.length() - strlen("/data"));
+      }, ",");
+  string src_fs_paths_with_prefix = "--src_fs_wal_dir=" + src_fs_wal_dir + " "
+                                    "--src_fs_data_dirs=" + src_fs_data_dirs;
+  string src_fs_paths = "--fs_wal_dir=" + src_fs_wal_dir + " "
+                        "--fs_data_dirs=" + src_fs_data_dirs;
+
+  // Build destination filesystem layout with source fs uuid, and obtain filesystem options.
+  string dst_fs_paths_with_prefix;
+  string src_tserver_fs_root = mini_cluster_->GetTabletServerFsRoot(kCopyTserverIndex);
+  string dst_tserver_fs_root = mini_cluster_->GetTabletServerFsRoot(kNumTserver);
+  {
+    FsManagerOpts fs_opts;
+    // The new fs layout has 3 data directories.
+    MiniTabletServer::InitFsOpts(3, dst_tserver_fs_root, &fs_opts);
+    string dst_fs_wal_dir = fs_opts.wal_root;
+    string dst_fs_data_dirs = JoinMapped(fs_opts.data_roots,
+        [] (const string& data_root) {
+          return data_root;
+        }, ",");
+    string dst_fs_paths = "--fs_wal_dir=" + dst_fs_wal_dir + " "
+                          "--fs_data_dirs=" + dst_fs_data_dirs;
+    ASSERT_OK(Env::Default()->CreateDir(dst_tserver_fs_root));
+    // Use 'kudu fs format' with '--uuid' to format the new data directories.
+    NO_FATALS(RunActionStdoutNone(Substitute("fs format $0 --uuid=$1",
+                                             dst_fs_paths, fs_manager->uuid())));
+    dst_fs_paths_with_prefix = "--dst_fs_wal_dir=" + dst_fs_wal_dir + " "
+                               "--dst_fs_data_dirs=" + dst_fs_data_dirs;
+  }
+
+  // Shutdown the cluster before copying.
+  NO_FATALS(StopMiniCluster());
+
+  // Copy source tserver's all replicas from local filesystem.
+  string stdout;
+  NO_FATALS(RunActionStdoutString(Substitute("local_replica copy_from_local $0 $1 $2",
+                                             JoinStrings(tablet_ids, ","),
+                                             src_fs_paths_with_prefix,
+                                             dst_fs_paths_with_prefix),
+                                  &stdout));
+  SCOPED_TRACE(stdout);
+
+  // Replace the old data/wal dirs with the new ones.
+  ASSERT_OK(Env::Default()->RenameFile(src_tserver_fs_root, src_tserver_fs_root + ".bak"));
+  ASSERT_OK(Env::Default()->RenameFile(dst_tserver_fs_root, src_tserver_fs_root));
+
+  // Start masters only.
+  mini_cluster_->opts_.num_tablet_servers = 0;
+  NO_FATALS(mini_cluster_->Start());
+  // Then start tserver with old host:port.
+  ASSERT_OK(mini_cluster_->AddTabletServer(hps[0]));
+  ASSERT_OK(mini_cluster_->AddTabletServer(hps[1]));
+  // The new tserver has 3 data directories.
+  mini_cluster_->opts_.num_data_dirs = 3;
+  ASSERT_OK(mini_cluster_->AddTabletServer(hps[2]));
+  // Wait all tserver start normally.
+  ASSERT_OK(mini_cluster_->WaitForTabletServerCount(3));
+  for (int i = 0; i < mini_cluster_->num_tablet_servers(); ++i) {
+    ASSERT_OK(mini_cluster_->mini_tablet_server(i)->WaitStarted());
+  }
+
+  // Restart the cluster, and check the cluster state is OK.
+  ASSERT_EVENTUALLY([&] {
+    string out;
+    string err;
+    Status s =
+        RunActionStdoutStderrString(Substitute("cluster ksck $0", GetMasterAddrsStr()), &out, &err);
+    ASSERT_TRUE(s.ok()) << s.ToString() << ", err:\n" << err << ", out:\n" << out;
+  });
+}
+
+class SetFlagForAllTest :
+    public ToolTest,
+    public ::testing::WithParamInterface<bool> {
+};
+
+INSTANTIATE_TEST_SUITE_P(IsMaster, SetFlagForAllTest, ::testing::Bool());
+TEST_P(SetFlagForAllTest, TestSetFlagForAll) {
+  const auto is_master = GetParam();
+
+  ExternalMiniClusterOptions opts;
+  string role = "master";
+  if (is_master) {
+    opts.num_masters = 3;
+    role = "master";
+  } else {
+    opts.num_tablet_servers = 3;
+    role = "tserver";
+  }
+
+  NO_FATALS(StartExternalMiniCluster(std::move(opts)));
+  vector<string> master_addresses;
+  for (int i = 0; i < opts.num_masters; i++) {
+    master_addresses.emplace_back(cluster_->master(i)->bound_rpc_addr().ToString());
+  }
+  string str_master_addresses = JoinMapped(master_addresses, [](string addr){return addr;}, ",");
+  const string flag_key = "max_log_size";
+  const string flag_value = "10";
+  NO_FATALS(RunActionStdoutNone(
+      Substitute("$0 set_flag_for_all $1 $2 $3",
+          role, str_master_addresses, flag_key, flag_value)));
+
+  int hosts_num = is_master? opts.num_masters : opts.num_tablet_servers;
+  string out;
+  for (int i = 0; i < hosts_num; i++) {
+    if (is_master) {
+      NO_FATALS(RunActionStdoutString(
+          Substitute("$0 get_flags $1 --format=json", role,
+              cluster_->master(i)->bound_rpc_addr().ToString()),
+              &out));
+    } else {
+      NO_FATALS(RunActionStdoutString(
+          Substitute("$0 get_flags $1 --format=json", role,
+          cluster_->tablet_server(i)->bound_rpc_addr().ToString()),
+          &out));
+    }
+    rapidjson::Document doc;
+    doc.Parse<0>(out.c_str());
+    for (int i = 0; i < doc.Size(); i++) {
+      const rapidjson::Value& item = doc[i];
+      ASSERT_TRUE(item["flag"].IsString());
+      if (item["flag"].GetString() == flag_key) {
+        ASSERT_TRUE(item["value"].IsString());
+        ASSERT_TRUE(item["value"].GetString() == flag_value);
+        return;
+      }
+    }
+  }
+
+  // A test for setting a non-existing flag.
+  Status s = RunTool(
+      Substitute("$0 set_flag_for_all $2 test_flag test_value",
+          role, str_master_addresses),
+      nullptr, nullptr, nullptr, nullptr);
+  ASSERT_TRUE(s.IsRuntimeError());
+  ASSERT_STR_CONTAINS(s.ToString(), "set flag failed");
 }
 
 } // namespace tools

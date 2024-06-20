@@ -23,13 +23,13 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
@@ -65,8 +65,11 @@ struct TestClusterConfig;
   } while (false)
 
 using std::endl;
+using std::nullopt;
+using std::optional;
 using std::ostream;
 using std::ostringstream;
+using std::pair;
 using std::set;
 using std::sort;
 using std::string;
@@ -79,6 +82,7 @@ namespace rebalance {
 
 struct TablePerServerReplicas {
   const string table_id;
+  const string tag;
 
   // Number of replicas of this table on each server in the cluster.
   // By definition, the indices in this container correspond to indices
@@ -131,12 +135,14 @@ struct TestClusterConfig {
 bool operator==(const TableReplicaMove& lhs, const TableReplicaMove& rhs) {
   return
       lhs.table_id == rhs.table_id &&
+      lhs.tag == rhs.tag &&
       lhs.from == rhs.from &&
       lhs.to == rhs.to;
 }
 
 ostream& operator<<(ostream& o, const TableReplicaMove& move) {
-  o << move.table_id << ":" << move.from << "->" << move.to;
+  o << move.table_id << " (" << move.tag << ") " << ":"
+    << move.from << "->" << move.to;
   return o;
 }
 
@@ -145,13 +151,14 @@ ostream& operator<<(ostream& o, const TableReplicaMove& move) {
 void ClusterConfigToClusterInfo(const TestClusterConfig& tcc,
                                 ClusterInfo* cluster_info) {
   // First verify that the configuration of the test cluster is valid.
-  set<string> table_ids;
+  set<pair<string, string>> table_ids_and_tags;
   for (const auto& table_replica_info : tcc.table_replicas) {
     CHECK_EQ(tcc.tserver_uuids.size(),
              table_replica_info.num_replicas_by_server.size());
-    table_ids.emplace(table_replica_info.table_id);
+    table_ids_and_tags.emplace(
+        table_replica_info.table_id, table_replica_info.tag);
   }
-  CHECK_EQ(table_ids.size(), tcc.table_replicas.size());
+  CHECK_EQ(table_ids_and_tags.size(), tcc.table_replicas.size());
   {
     // Check for uniqueness of the tablet servers' identifiers.
     set<string> uuids(tcc.tserver_uuids.begin(), tcc.tserver_uuids.end());
@@ -178,6 +185,7 @@ void ClusterConfigToClusterInfo(const TestClusterConfig& tcc,
         tcc.table_replicas[table_idx].num_replicas_by_server;
     TableBalanceInfo info;
     info.table_id = tcc.table_replicas[table_idx].table_id;
+    info.tag = tcc.table_replicas[table_idx].tag;
     for (size_t tserver_idx = 0; tserver_idx < replicas_count.size(); ++tserver_idx) {
       auto count = replicas_count[tserver_idx];
       info.servers_by_replica_count.emplace(count, tcc.tserver_uuids[tserver_idx]);
@@ -239,6 +247,9 @@ void VerifyLocationRebalancingMoves(const TestClusterConfig& cfg) {
                                          const TableReplicaMove& rhs) {
           if (lhs.table_id != rhs.table_id) {
             return lhs.table_id < rhs.table_id;
+          }
+          if (lhs.tag != rhs.tag) {
+            return lhs.tag < rhs.tag;
           }
           if (lhs.from != rhs.from) {
             return lhs.from < rhs.from;
@@ -320,11 +331,11 @@ TEST(RebalanceAlgoUnitTest, NoTableSkewInClusterBalanceInfoGetNextMoves) {
 // Test the behavior of the internal (non-public) algorithm's method
 // GetNextMove() when no input information is given.
 TEST(RebalanceAlgoUnitTest, EmptyBalanceInfoGetNextMove) {
-  boost::optional<TableReplicaMove> move;
+  optional<TableReplicaMove> move;
   const ClusterInfo info = {};
   const auto s = TwoDimensionalGreedyAlgo().GetNextMove(info, &move);
   ASSERT_TRUE(s.IsInvalidArgument()) << s.ToString();
-  EXPECT_EQ(boost::none, move);
+  EXPECT_EQ(nullopt, move);
 }
 
 // Workaround for older libstdc++ (like on RH/CentOS 6). In case of newer
@@ -341,7 +352,7 @@ TEST(RebalanceAlgoUnitTest, AlreadyBalanced) {
       kNoLocations,
       { "0", },
       {
-        { "A", { 1 } },
+        { "A", "", { 1 } },
       },
     },
     {
@@ -349,9 +360,9 @@ TEST(RebalanceAlgoUnitTest, AlreadyBalanced) {
       kNoLocations,
       { "0", },
       {
-        { "A", { 1 } },
-        { "B", { 10 } },
-        { "C", { 100 } },
+        { "A", "", { 1 } },
+        { "B", "", { 10 } },
+        { "C", "", { 100 } },
       },
     },
     {
@@ -359,7 +370,7 @@ TEST(RebalanceAlgoUnitTest, AlreadyBalanced) {
       kNoLocations,
       { "0", "1", },
       {
-        { "A", { 100, 99, } },
+        { "A", "", { 100, 99, } },
       },
     },
     {
@@ -367,8 +378,8 @@ TEST(RebalanceAlgoUnitTest, AlreadyBalanced) {
       kNoLocations,
       { "0", "1", },
       {
-        { "A", { 1, 1, } },
-        { "B", { 1, 2, } },
+        { "A", "", { 1, 1, } },
+        { "B", "", { 1, 2, } },
       },
     },
     {
@@ -378,19 +389,19 @@ TEST(RebalanceAlgoUnitTest, AlreadyBalanced) {
       kNoLocations,
       { "0", "1", },
       {
-        { "A", { 1, 2, } },
-        { "B", { 1, 2, } },
-        { "C", { 1, 0, } },
-        { "D", { 1, 0, } },
+        { "A", "", { 1, 2, } },
+        { "B", "", { 1, 2, } },
+        { "C", "", { 1, 0, } },
+        { "D", "", { 1, 0, } },
       },
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 1, 0, 0, } },
-        { "B", { 0, 1, 0, } },
-        { "C", { 0, 0, 1, } },
+        { "A", "", { 1, 0, 0, } },
+        { "B", "", { 0, 1, 0, } },
+        { "C", "", { 0, 0, 1, } },
       },
     },
     {
@@ -399,89 +410,274 @@ TEST(RebalanceAlgoUnitTest, AlreadyBalanced) {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 1, 1, 1, } },
-        { "B", { 1, 1, 1, } },
-        { "C", { 1, 1, 1, } },
+        { "A", "", { 1, 1, 1, } },
+        { "B", "", { 1, 1, 1, } },
+        { "C", "", { 1, 1, 1, } },
       },
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 0, 1, 1, } },
-        { "B", { 1, 0, 1, } },
-        { "C", { 1, 1, 0, } },
+        { "A", "", { 0, 1, 1, } },
+        { "B", "", { 1, 0, 1, } },
+        { "C", "", { 1, 1, 0, } },
       },
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 2, 1, 1, } },
-        { "B", { 1, 2, 1, } },
-        { "C", { 1, 1, 2, } },
+        { "A", "", { 2, 1, 1, } },
+        { "B", "", { 1, 2, 1, } },
+        { "C", "", { 1, 1, 2, } },
       },
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 1, 1, 0, } },
-        { "B", { 1, 1, 0, } },
-        { "C", { 1, 0, 1, } },
-        { "D", { 1, 0, 1, } },
-        { "E", { 0, 1, 1, } },
-        { "F", { 0, 1, 1, } },
+        { "A", "", { 1, 1, 0, } },
+        { "B", "", { 1, 1, 0, } },
+        { "C", "", { 1, 0, 1, } },
+        { "D", "", { 1, 0, 1, } },
+        { "E", "", { 0, 1, 1, } },
+        { "F", "", { 0, 1, 1, } },
       },
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 1, 0, 1, } },
-        { "B", { 1, 1, 0, } },
+        { "A", "", { 1, 0, 1, } },
+        { "B", "", { 1, 1, 0, } },
       },
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "B", { 1, 0, 1, } },
-        { "A", { 1, 1, 0, } },
+        { "B", "", { 1, 0, 1, } },
+        { "A", "", { 1, 1, 0, } },
       },
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 2, 2, 1, } },
-        { "B", { 1, 0, 1, } },
+        { "A", "", { 2, 2, 1, } },
+        { "B", "", { 1, 0, 1, } },
       },
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 2, 2, 1, } },
-        { "B", { 1, 1, 1, } },
+        { "A", "", { 2, 2, 1, } },
+        { "B", "", { 1, 1, 1, } },
       },
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 2, 2, 1, } },
-        { "B", { 0, 0, 1, } },
-        { "C", { 0, 0, 1, } },
+        { "A", "", { 2, 2, 1, } },
+        { "B", "", { 0, 0, 1, } },
+        { "C", "", { 0, 0, 1, } },
       },
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 0, 1, 0, } },
-        { "B", { 1, 0, 1, } },
-        { "C", { 1, 0, 1, } },
+        { "A", "", { 0, 1, 0, } },
+        { "B", "", { 1, 0, 1, } },
+        { "C", "", { 1, 0, 1, } },
+      },
+    },
+  };
+  VERIFY_MOVES(kConfigs);
+}
+
+// Various scenarios of balanced configurations where no moves are expected
+// to happen, exercising range balancing.
+TEST(RebalanceAlgoUnitTest, AlreadyBalancedRanges) {
+  // The configurations are already balanced, no moves should be attempted.
+  const TestClusterConfig kConfigs[] = {
+    {
+      // A single tablet server with a single replica of the only table.
+      kNoLocations,
+      { "0", },
+      {
+        { "A", "R0", { 1 } },
+      },
+    },
+    {
+      // A single tablet server in the cluster that hosts all replicas.
+      kNoLocations,
+      { "0", },
+      {
+        { "A", "R0", { 1 } },
+        { "B", "R0", { 10 } },
+        { "C", "R0", { 100 } },
+      },
+    },
+    {
+      // A single tablet server in the cluster that hosts all replicas.
+      kNoLocations,
+      { "0", },
+      {
+        { "A", "R0", { 1 } },
+        { "B", "R1", { 10 } },
+        { "C", "R2", { 100 } },
+      },
+    },
+    {
+      // Single table and 2 TS: 100 and 99 replicas at each.
+      kNoLocations,
+      { "0", "1", },
+      {
+        { "A", "R0", { 100, 99, } },
+      },
+    },
+    {
+      // Table- and cluster-wise balanced configuration with one-off skew.
+      kNoLocations,
+      { "0", "1", },
+      {
+        { "A", "R0", { 1, 1, } },
+        { "B", "R0", { 1, 2, } },
+      },
+    },
+    {
+      // Table- and cluster-wise balanced configuration with one-off skew.
+      kNoLocations,
+      { "0", "1", },
+      {
+        { "A", "R0", { 1, 1, } },
+        { "B", "R1", { 1, 2, } },
+      },
+    },
+    {
+      // A configuration which has zero skew cluster-wise, while the table-wise
+      // balance has one-off skew: the algorithm should not try to correct
+      // the latter.
+      kNoLocations,
+      { "0", "1", },
+      {
+        { "A", "R0", { 1, 2, } },
+        { "B", "R1", { 1, 2, } },
+        { "C", "R2", { 1, 0, } },
+        { "D", "R3", { 1, 0, } },
+      },
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 1, 0, 0, } },
+        { "B", "R0", { 0, 1, 0, } },
+        { "C", "R1", { 0, 0, 1, } },
+      },
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 1, 0, 0, } },
+        { "B", "R1", { 0, 1, 0, } },
+        { "C", "R2", { 0, 0, 1, } },
+      },
+    },
+    {
+      // A simple balanced case: 3 tablet servers, 3 tables with
+      // one replica per server.
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 1, 1, 1, } },
+        { "B", "R1", { 1, 1, 1, } },
+        { "C", "R2", { 1, 1, 1, } },
+      },
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 0, 1, 1, } },
+        { "B", "R1", { 1, 0, 1, } },
+        { "C", "R2", { 1, 1, 0, } },
+      },
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 2, 1, 1, } },
+        { "B", "R1", { 1, 2, 1, } },
+        { "C", "R2", { 1, 1, 2, } },
+      },
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 1, 1, 0, } },
+        { "B", "R1", { 1, 1, 0, } },
+        { "C", "R2", { 1, 0, 1, } },
+        { "D", "R1", { 1, 0, 1, } },
+        { "E", "R2", { 0, 1, 1, } },
+        { "F", "R0", { 0, 1, 1, } },
+      },
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 1, 0, 1, } },
+        { "B", "R1", { 1, 1, 0, } },
+      },
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "B", "R0", { 1, 0, 1, } },
+        { "A", "R1", { 1, 1, 0, } },
+      },
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 2, 2, 1, } },
+        { "B", "R1", { 1, 0, 1, } },
+      },
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R1", { 2, 2, 1, } },
+        { "B", "R0", { 1, 1, 1, } },
+      },
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 2, 2, 1, } },
+        { "B", "R1", { 0, 0, 1, } },
+        { "C", "R1", { 0, 0, 1, } },
+      },
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R1", { 0, 1, 0, } },
+        { "B", "R0", { 1, 0, 1, } },
+        { "C", "R2", { 1, 0, 1, } },
       },
     },
   };
@@ -497,61 +693,61 @@ TEST(RebalanceAlgoUnitTest, TableWiseBalanced) {
       kNoLocations,
       { "0", "1", },
       {
-        { "A", { 100, 99, } },
-        { "B", { 100, 99, } },
+        { "A", "", { 100, 99, } },
+        { "B", "", { 100, 99, } },
       },
-      { { "A", "0", "1" }, }
+      { { "A", "", "0", "1" }, }
     },
     {
       kNoLocations,
       { "0", "1", },
       {
-        { "A", { 1, 2, } },
-        { "B", { 1, 2, } },
-        { "C", { 1, 0, } },
-        { "D", { 0, 1, } },
+        { "A", "", { 1, 2, } },
+        { "B", "", { 1, 2, } },
+        { "C", "", { 1, 0, } },
+        { "D", "", { 0, 1, } },
       },
-      { { "A", "1", "0" }, }
+      { { "A", "", "1", "0" }, }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 1, 0, 0, } },
-        { "B", { 0, 1, 0, } },
-        { "C", { 1, 0, 0, } },
+        { "A", "", { 1, 0, 0, } },
+        { "B", "", { 0, 1, 0, } },
+        { "C", "", { 1, 0, 0, } },
       },
-      { { "A", "0", "2" }, }
+      { { "A", "", "0", "2" }, }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 1, 1, 1, } },
-        { "B", { 0, 1, 1, } },
-        { "C", { 0, 0, 1, } },
+        { "A", "", { 1, 1, 1, } },
+        { "B", "", { 0, 1, 1, } },
+        { "C", "", { 0, 0, 1, } },
       },
-      { { "B", "2", "0" }, }
+      { { "B", "", "2", "0" }, }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 1, 1, 0, } },
-        { "B", { 1, 0, 1, } },
-        { "C", { 1, 0, 1, } },
+        { "A", "", { 1, 1, 0, } },
+        { "B", "", { 1, 0, 1, } },
+        { "C", "", { 1, 0, 1, } },
       },
-      { { "B", "0", "1" }, }
+      { { "B", "", "0", "1" }, }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "C", { 1, 0, 1, } },
-        { "B", { 1, 0, 1, } },
-        { "A", { 1, 1, 0, } },
+        { "C", "", { 1, 0, 1, } },
+        { "B", "", { 1, 0, 1, } },
+        { "A", "", { 1, 1, 0, } },
       },
-      { { "C", "0", "1" }, }
+      { { "C", "", "0", "1" }, }
     },
   };
   VERIFY_MOVES(kConfigs);
@@ -567,61 +763,61 @@ TEST(RebalanceAlgoUnitTest, OneMoveNoCycling) {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 1, 0, 1, } },
-        { "B", { 1, 0, 1, } },
-        { "C", { 1, 1, 0, } },
+        { "A", "", { 1, 0, 1, } },
+        { "B", "", { 1, 0, 1, } },
+        { "C", "", { 1, 1, 0, } },
       },
-      { { "A", "0", "1" }, }
+      { { "A", "", "0", "1" }, }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 1, 0, 1, } },
-        { "C", { 1, 0, 1, } },
-        { "B", { 1, 1, 0, } },
+        { "A", "", { 1, 0, 1, } },
+        { "C", "", { 1, 0, 1, } },
+        { "B", "", { 1, 1, 0, } },
       },
-      { { "A", "0", "1" }, }
+      { { "A", "", "0", "1" }, }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "B", { 1, 0, 1, } },
-        { "C", { 1, 0, 1, } },
-        { "A", { 1, 1, 0, } },
+        { "B", "", { 1, 0, 1, } },
+        { "C", "", { 1, 0, 1, } },
+        { "A", "", { 1, 1, 0, } },
       },
-      { { "B", "0", "1" }, }
+      { { "B", "", "0", "1" }, }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "B", { 1, 0, 1, } },
-        { "A", { 1, 0, 1, } },
-        { "C", { 1, 1, 0, } },
+        { "B", "", { 1, 0, 1, } },
+        { "A", "", { 1, 0, 1, } },
+        { "C", "", { 1, 1, 0, } },
       },
-      { { "B", "0", "1" }, }
+      { { "B", "", "0", "1" }, }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "C", { 1, 0, 1, } },
-        { "A", { 1, 0, 1, } },
-        { "B", { 1, 1, 0, } },
+        { "C", "", { 1, 0, 1, } },
+        { "A", "", { 1, 0, 1, } },
+        { "B", "", { 1, 1, 0, } },
       },
-      { { "C", "0", "1" }, }
+      { { "C", "", "0", "1" }, }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "C", { 1, 0, 1, } },
-        { "B", { 1, 0, 1, } },
-        { "A", { 1, 1, 0, } },
+        { "C", "", { 1, 0, 1, } },
+        { "B", "", { 1, 0, 1, } },
+        { "A", "", { 1, 1, 0, } },
       },
-      { { "C", "0", "1" }, }
+      { { "C", "", "0", "1" }, }
     },
   };
   VERIFY_MOVES(kConfigs);
@@ -636,49 +832,49 @@ TEST(RebalanceAlgoUnitTest, ClusterWiseBalanced) {
       kNoLocations,
       { "0", "1", },
       {
-        { "A", { 2, 0, } },
-        { "B", { 1, 2, } },
+        { "A", "", { 2, 0, } },
+        { "B", "", { 1, 2, } },
       },
       {
-        { "A", "0", "1" },
+        { "A", "", "0", "1" },
       }
     },
     {
       kNoLocations,
       { "0", "1", },
       {
-        { "A", { 1, 2, } },
-        { "B", { 2, 0, } },
-        { "C", { 1, 2, } },
+        { "A", "", { 1, 2, } },
+        { "B", "", { 2, 0, } },
+        { "C", "", { 1, 2, } },
       },
       {
-        { "B", "0", "1" },
-        { "A", "1", "0" },
+        { "B", "", "0", "1" },
+        { "A", "", "1", "0" },
       }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 2, 1, 0, } },
-        { "B", { 0, 1, 2, } },
+        { "A", "", { 2, 1, 0, } },
+        { "B", "", { 0, 1, 2, } },
       },
       {
-        { "A", "0", "2" },
-        { "B", "2", "0" },
+        { "A", "", "0", "2" },
+        { "B", "", "2", "0" },
       }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 2, 1, 0, } },
-        { "B", { 0, 1, 2, } },
-        { "C", { 1, 1, 2, } },
+        { "A", "", { 2, 1, 0, } },
+        { "B", "", { 0, 1, 2, } },
+        { "C", "", { 1, 1, 2, } },
       },
       {
-        { "A", "0", "2" },
-        { "B", "2", "0" },
+        { "A", "", "0", "2" },
+        { "B", "", "2", "0" },
       }
     },
   };
@@ -693,108 +889,236 @@ TEST(RebalanceAlgoUnitTest, FewMoves) {
       kNoLocations,
       { "0", "1", },
       {
-        { "A", { 2, 0, } },
+        { "A", "", { 2, 0, } },
       },
-      { { "A", "0", "1" }, }
+      { { "A", "", "0", "1" }, }
     },
     {
       kNoLocations,
       { "0", "1", },
       {
-        { "A", { 3, 0, } },
+        { "A", "", { 3, 0, } },
       },
-      { { "A", "0", "1" }, }
+      { { "A", "", "0", "1" }, }
     },
     {
       kNoLocations,
       { "0", "1", },
       {
-        { "A", { 4, 0, } },
+        { "A", "", { 4, 0, } },
       },
       {
-        { "A", "0", "1" },
-        { "A", "0", "1" },
-      }
-    },
-    {
-      kNoLocations,
-      { "0", "1", },
-      {
-        { "A", { 1, 2, } },
-        { "B", { 2, 0, } },
-        { "C", { 2, 1, } },
-      },
-      {
-        { "B", "0", "1" },
+        { "A", "", "0", "1" },
+        { "A", "", "0", "1" },
       }
     },
     {
       kNoLocations,
       { "0", "1", },
       {
-        { "A", { 4, 0, } },
-        { "B", { 1, 3, } },
+        { "A", "", { 1, 2, } },
+        { "B", "", { 2, 0, } },
+        { "C", "", { 2, 1, } },
       },
       {
-        { "A", "0", "1" },
-        { "B", "1", "0" },
-        { "A", "0", "1" },
+        { "B", "", "0", "1" },
+      }
+    },
+    {
+      kNoLocations,
+      { "0", "1", },
+      {
+        { "A", "", { 4, 0, } },
+        { "B", "", { 1, 3, } },
+      },
+      {
+        { "A", "", "0", "1" },
+        { "B", "", "1", "0" },
+        { "A", "", "0", "1" },
       }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 4, 2, 0, } },
-        { "B", { 2, 1, 0, } },
-        { "C", { 1, 1, 1, } },
+        { "A", "", { 4, 2, 0, } },
+        { "B", "", { 2, 1, 0, } },
+        { "C", "", { 1, 1, 1, } },
       },
       {
-        { "A", "0", "2" },
-        { "B", "0", "2" },
-        { "A", "0", "2" },
+        { "A", "", "0", "2" },
+        { "B", "", "0", "2" },
+        { "A", "", "0", "2" },
       }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 2, 1, 0, } },
-        { "B", { 3, 2, 1, } },
-        { "C", { 2, 3, 5, } },
+        { "A", "", { 2, 1, 0, } },
+        { "B", "", { 3, 2, 1, } },
+        { "C", "", { 2, 3, 5, } },
       },
       {
-        { "C", "2", "0" },
-        { "A", "0", "2" },
-        { "B", "0", "2" },
+        { "C", "", "2", "0" },
+        { "A", "", "0", "2" },
+        { "B", "", "0", "2" },
       }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 5, 1, 0, } },
+        { "A", "", { 5, 1, 0, } },
       },
       {
-        { "A", "0", "2" },
-        { "A", "0", "1" },
-        { "A", "0", "2" },
+        { "A", "", "0", "2" },
+        { "A", "", "0", "1" },
+        { "A", "", "0", "2" },
       }
     },
     {
       kNoLocations,
       { "0", "1", "2", },
       {
-        { "A", { 5, 1, 0, } },
-        { "B", { 0, 1, 5, } },
+        { "A", "", { 5, 1, 0, } },
+        { "B", "", { 0, 1, 5, } },
       },
       {
-        { "A", "0", "2" },
-        { "B", "2", "0" },
-        { "A", "0", "1" },
-        { "B", "2", "1" },
-        { "A", "0", "2" },
-        { "B", "2", "0" },
+        { "A", "", "0", "2" },
+        { "B", "", "2", "0" },
+        { "A", "", "0", "1" },
+        { "B", "", "2", "1" },
+        { "A", "", "0", "2" },
+        { "B", "", "2", "0" },
+      }
+    },
+  };
+  VERIFY_MOVES(kConfigs);
+}
+
+TEST(RebalanceAlgoUnitTest, FewMovesSameTableRanges) {
+  const TestClusterConfig kConfigs[] = {
+    {
+      kNoLocations,
+      { "0", "1", },
+      {
+        { "A", "R0", { 2, 0, } },
+      },
+      { { "A", "R0", "0", "1" }, }
+    },
+    {
+      kNoLocations,
+      { "0", "1", },
+      {
+        { "A", "R0", { 3, 0, } },
+      },
+      { { "A", "R0", "0", "1" }, }
+    },
+    {
+      kNoLocations,
+      { "0", "1", },
+      {
+        { "A", "R0", { 4, 0, } },
+        { "A", "", { 1, 3, } },
+      },
+      {
+        { "A", "R0", "0", "1" },
+        { "A", "", "1", "0" },
+        { "A", "R0", "0", "1" },
+      }
+    },
+    {
+      kNoLocations,
+      { "0", "1", },
+      {
+        { "A", "R0", { 1, 2, } },
+        { "A", "R1", { 2, 0, } },
+        { "A", "R2", { 2, 1, } },
+        { "A", "", { 2, 2, } },
+      },
+      {
+        { "A", "R1", "0", "1" },
+      }
+    },
+    {
+      kNoLocations,
+      { "0", "1", },
+      {
+        { "A", "R0", { 4, 0, } },
+        { "A", "R1", { 1, 3, } },
+        { "A", "", { 0, 2, } },
+      },
+      {
+        { "A", "R0", "0", "1" },
+        { "A", "R1", "1", "0" },
+        { "A", "", "1", "0" },
+        { "A", "R0", "0", "1" },
+      }
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 4, 2, 0, } },
+        { "A", "R1", { 2, 1, 0, } },
+        { "A", "R2", { 1, 1, 1, } },
+        { "A", "", { 0, 2, 1, } },
+      },
+      {
+        { "A", "R0", "0", "2" },
+        { "A", "R1", "0", "2" },
+        { "A", "", "1", "0" },
+        { "A", "R0", "0", "2" },
+      }
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 2, 1, 0, } },
+        { "A", "R1", { 3, 2, 1, } },
+        { "A", "R2", { 2, 3, 5, } },
+        { "A", "", { 6, 0, 0, } },
+      },
+      {
+        { "A", "", "0", "1" },
+        { "A", "", "0", "2" },
+        { "A", "R2", "2", "0" },
+        { "A", "", "0", "2" },
+        { "A", "R0", "0", "2" },
+        { "A", "R1", "0", "2" },
+        { "A", "", "0", "1" },
+      }
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 5, 1, 0, } },
+        { "A", "", { 2, 1, 0, } },
+      },
+      {
+        { "A", "R0", "0", "2" },
+        { "A", "R0", "0", "2" },
+        { "A", "", "0", "2" },
+        { "A", "R0", "0", "1" },
+      }
+    },
+    {
+      kNoLocations,
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 5, 1, 0, } },
+        { "A", "R1", { 0, 1, 5, } },
+      },
+      {
+        { "A", "R0", "0", "2" },
+        { "A", "R1", "2", "0" },
+        { "A", "R0", "0", "1" },
+        { "A", "R1", "2", "1" },
+        { "A", "R0", "0", "2" },
+        { "A", "R1", "2", "0" },
       }
     },
   };
@@ -808,7 +1132,7 @@ TEST(RebalanceAlgoUnitTest, ManyMoves) {
     kNoLocations,
     { "0", "1", "2", },
     {
-      { "A", { 100, 400, 100, } },
+      { "A", "", { 100, 400, 100, } },
     },
   };
   constexpr size_t kExpectedMovesNum = 200;
@@ -819,9 +1143,9 @@ TEST(RebalanceAlgoUnitTest, ManyMoves) {
   vector<TableReplicaMove> ref_moves;
   for (size_t i = 0; i < kExpectedMovesNum; ++i) {
     if (i % 2) {
-      ref_moves.push_back({ "A", "1", "2" });
+      ref_moves.push_back({ "A", "", "1", "2" });
     } else {
-      ref_moves.push_back({ "A", "1", "0" });
+      ref_moves.push_back({ "A", "", "1", "0" });
     }
   }
 
@@ -858,6 +1182,7 @@ TEST(RebalanceAlgoUnitTest, RandomizedTest) {
       }
       table_replicas.push_back(TablePerServerReplicas{
           Substitute("$0", i),
+          std::to_string(r.Next()), // a randomized tag
           std::move(num_replicas_per_server),
       });
     }
@@ -874,7 +1199,7 @@ TEST(RebalanceAlgoUnitTest, RandomizedTest) {
       ClusterInfo ci;
       ClusterConfigToClusterInfo(cfg, &ci);
       TwoDimensionalGreedyAlgo algo;
-      boost::optional<TableReplicaMove> move;
+      optional<TableReplicaMove> move;
       // Set a generous upper bound on the number of moves allowed before we
       // conclude the algorithm is not converging.
       // We shouldn't need to do more moves than there are replicas.
@@ -900,7 +1225,7 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "2", }, },
       },
       { "0", "1", "2", },
-      { { "A", { 1, 0, 0, } }, },
+      { { "A", "", { 1, 0, 0, } }, },
       {}
     },
     {
@@ -909,7 +1234,7 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "2", }, },
       },
       { "0", "1", "2", },
-      { { "A", { 0, 0, 1, } }, },
+      { { "A", "", { 0, 0, 1, } }, },
       {}
     },
     {
@@ -918,7 +1243,7 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "2", }, },
       },
       { "0", "1", "2", },
-      { { "A", { 1, 1, 0, } }, },
+      { { "A", "", { 1, 1, 0, } }, },
       {}
     },
     {
@@ -927,7 +1252,7 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "2", }, },
       },
       { "0", "1", "2", },
-      { { "A", { 1, 1, 1, } }, },
+      { { "A", "", { 1, 1, 1, } }, },
       {}
     },
     {
@@ -936,8 +1261,8 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "2", }, },
       },
       { "0", "1", "2", },
-      { { "A", { 2, 1, 0, } }, },
-      { { "A", "0", "2" }, }
+      { { "A", "", { 2, 1, 0, } }, },
+      { { "A", "", "0", "2" }, }
     },
     {
       {
@@ -945,7 +1270,7 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "2", }, },
       },
       { "0", "1", "2", },
-      { { "A", { 1, 1, 2, } }, },
+      { { "A", "", { 1, 1, 2, } }, },
       {}
     },
     {
@@ -954,8 +1279,8 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "2", }, },
       },
       { "0", "1", "2", },
-      { { "A", { 2, 1, 3, } }, },
-      { { "A", "2", "1" }, }
+      { { "A", "", { 2, 1, 3, } }, },
+      { { "A", "", "2", "1" }, }
     },
     {
       {
@@ -963,10 +1288,10 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "2", }, },
       },
       { "0", "1", "2", },
-      { { "A", { 2, 4, 0, } }, },
+      { { "A", "", { 2, 4, 0, } }, },
       {
-        { "A", "1", "2" },
-        { "A", "1", "2" },
+        { "A", "", "1", "2" },
+        { "A", "", "1", "2" },
       }
     },
     {
@@ -975,7 +1300,7 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "2", "3", "4", "5", }, },
       },
       { "0", "1", "2", "3", "4", "5" },
-      { { "A", { 1, 1, 1, 1, 1, 1, } }, },
+      { { "A", "", { 1, 1, 1, 1, 1, 1, } }, },
       {}
     },
     {
@@ -984,7 +1309,7 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "2", "3", "4", "5", }, },
       },
       { "0", "1", "2", "3", "4", "5" },
-      { { "A", { 2, 0, 4, 0, 0, 0, } }, },
+      { { "A", "", { 2, 0, 4, 0, 0, 0, } }, },
       {}
     },
     {
@@ -993,7 +1318,7 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "1", "2", "3", "4", "5", }, },
       },
       { "0", "1", "2", "3", "4", "5", },
-      { { "A", { 0, 1, 1, 1, 1, 1, } }, },
+      { { "A", "", { 0, 1, 1, 1, 1, 1, } }, },
       {}
     },
     {
@@ -1002,7 +1327,7 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "1", "2", "3", "4", "5", }, },
       },
       { "0", "1", "2", "3", "4", "5", },
-      { { "A", { 0, 5, 0, 0, 0, 0, } }, },
+      { { "A", "", { 0, 5, 0, 0, 0, 0, } }, },
       {}
     },
     {
@@ -1011,8 +1336,127 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingFewMoves) {
         { "L1", { "1", "2", "3", "4", "5", }, },
       },
       { "0", "1", "2", "3", "4", "5", },
-      { { "A", { 2, 1, 1, 1, 1, 0, } }, },
-      { { "A", "0", "5" }, }
+      { { "A", "", { 2, 1, 1, 1, 1, 0, } }, },
+      { { "A", "", "0", "5" }, }
+    },
+  };
+  VERIFY_LOCATION_BALANCING_MOVES(kConfigs);
+}
+
+TEST(RebalanceAlgoUnitTest, LocationBalancingRangesFewMoves) {
+  const TestClusterConfig kConfigs[] = {
+    {
+      {
+        { "L0", { "0", }, },
+        { "L1", { "1", }, },
+        { "L2", { "2", }, },
+      },
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 2, 1, 0, } },
+        { "A", "R1", { 2, 1, 0, } },
+        { "A", "R2", { 1, 1, 4, } },
+      },
+      {
+        { "A", "R0", "0", "2" },
+        { "A", "R1", "0", "2" },
+        { "A", "R2", "2", "0" },
+        { "A", "R2", "2", "1" },
+      },
+      { MovesOrderingComparison::IGNORE }
+    },
+    {
+      {
+        { "L0", { "0", "1", }, },
+        { "L1", { "2", }, },
+      },
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 1, 2, 0 } },
+        { "A", "R1", { 2, 0, 1 } },
+        { "A", "R2", { 2, 1, 0 } },
+      },
+      {
+        { "A", "R0", "0", "2" },
+        { "A", "R2", "0", "2" },
+      },
+      { MovesOrderingComparison::IGNORE }
+    },
+    {
+      {
+        { "L0", { "0", "1", }, },
+        { "L1", { "2", }, },
+      },
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 1, 0, 0, } },
+        { "A", "R1", { 3, 0, 0, } },
+        { "A", "R2", { 0, 0, 2, } },
+      },
+      {
+        { "A", "R2", "2", "1" },
+        { "A", "R1", "0", "2" },
+      }
+    },
+    {
+      {
+        { "L0", { "0", "1", }, },
+        { "L1", { "2", }, },
+      },
+      { "0", "1", "2", },
+      {
+        { "A", "R0", { 0, 0, 5, } },
+      },
+      {
+        { "A", "R0", "2", "0" },
+        { "A", "R0", "2", "1" },
+        { "A", "R0", "2", "0" },
+      }
+    },
+    {
+      {
+        { "L0", { "0", "1", }, },
+        { "L1", { "2", }, },
+      },
+      { "0", "1", "2", },
+      { { "A", "R0", { 1, 1, 0, } }, },
+      {}
+    },
+    {
+      {
+        { "L0", { "0", "1", }, },
+        { "L1", { "2", "3", "4", "5", }, },
+      },
+      { "0", "1", "2", "3", "4", "5" },
+      { { "A", "", { 2, 0, 4, 0, 0, 0, } }, },
+      {}
+    },
+    {
+      {
+        { "L0", { "0", }, },
+        { "L1", { "1", "2", "3", "4", "5", }, },
+      },
+      { "0", "1", "2", "3", "4", "5", },
+      { { "A", "R0", { 0, 1, 1, 1, 1, 1, } }, },
+      {}
+    },
+    {
+      {
+        { "L0", { "0", }, },
+        { "L1", { "1", "2", "3", "4", "5", }, },
+      },
+      { "0", "1", "2", "3", "4", "5", },
+      { { "A", "R0", { 0, 5, 0, 0, 0, 0, } }, },
+      {}
+    },
+    {
+      {
+        { "L0", { "0", }, },
+        { "L1", { "1", "2", "3", "4", "5", }, },
+      },
+      { "0", "1", "2", "3", "4", "5", },
+      { { "A", "R0", { 2, 1, 1, 1, 1, 0, } }, },
+      { { "A", "R0", "0", "5" }, }
     },
   };
   VERIFY_LOCATION_BALANCING_MOVES(kConfigs);
@@ -1028,8 +1472,8 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingSimpleST) {
         { "L2", { "2", }, },
       },
       { "0", "1", "2", },
-      { { "A", { 2, 1, 0, } }, },
-      { { "A", "0", "2" }, }
+      { { "A", "", { 2, 1, 0, } }, },
+      { { "A", "", "0", "2" }, }
     },
     {
       {
@@ -1038,12 +1482,12 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingSimpleST) {
         { "L2", { "2", }, },
       },
       { "0", "1", "2", },
-      { { "A", { 6, 0, 0, } }, },
+      { { "A", "", { 6, 0, 0, } }, },
       {
-        { "A", "0", "1" },
-        { "A", "0", "2" },
-        { "A", "0", "1" },
-        { "A", "0", "2" },
+        { "A", "", "0", "1" },
+        { "A", "", "0", "2" },
+        { "A", "", "0", "1" },
+        { "A", "", "0", "2" },
       },
       { MovesOrderingComparison::IGNORE }
     },
@@ -1055,7 +1499,7 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingSimpleST) {
       },
       { "0", "1", "2", },
       {
-        { "A", { 1, 0, 0, } },
+        { "A", "", { 1, 0, 0, } },
       },
       {}
     },
@@ -1074,10 +1518,10 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingSimpleMT) {
       },
       { "0", "1", "2", },
       {
-        { "A", { 2, 1, 1, } },
-        { "B", { 0, 0, 2, } },
+        { "A", "", { 2, 1, 1, } },
+        { "B", "", { 0, 0, 2, } },
       },
-      { { "B", "2", "1" }, }
+      { { "B", "", "2", "1" }, }
     },
     {
       {
@@ -1087,13 +1531,13 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingSimpleMT) {
       },
       { "0", "1", "2", },
       {
-        { "A", { 2, 1, 0, } },
-        { "B", { 0, 0, 3, } },
+        { "A", "", { 2, 1, 0, } },
+        { "B", "", { 0, 0, 3, } },
       },
       {
-        { "B", "2", "1" },
-        { "B", "2", "0" },
-        { "A", "0", "2" },
+        { "B", "", "2", "1" },
+        { "B", "", "2", "0" },
+        { "A", "", "0", "2" },
       }
     },
     {
@@ -1104,9 +1548,9 @@ TEST(RebalanceAlgoUnitTest, LocationBalancingSimpleMT) {
       },
       { "0", "1", "2", },
       {
-        { "A", { 1, 0, 0, } },
-        { "B", { 1, 1, 2, } },
-        { "C", { 10, 9, 10, } },
+        { "A", "", { 1, 0, 0, } },
+        { "B", "", { 1, 1, 2, } },
+        { "C", "", { 10, 9, 10, } },
       },
       {}
     },

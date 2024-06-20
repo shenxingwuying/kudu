@@ -15,24 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
-#include <google/protobuf/stubs/port.h>
 #include <gtest/gtest.h>
 
 #include "kudu/common/common.pb.h"
@@ -64,6 +63,7 @@
 #include "kudu/tserver/tserver.pb.h"
 #include "kudu/tserver/tserver_service.pb.h"
 #include "kudu/tserver/tserver_service.proxy.h"
+#include "kudu/util/bitset.h"
 #include "kudu/util/memory/arena.h"
 #include "kudu/util/monotime.h"
 #include "kudu/util/openssl_util.h"
@@ -91,6 +91,7 @@ using kudu::tablet::WritePrivileges;
 using kudu::tablet::WritePrivilegeToString;
 using kudu::tablet::WritePrivilegeType;
 using std::make_shared;
+using std::optional;
 using std::set;
 using std::string;
 using std::unique_ptr;
@@ -474,8 +475,9 @@ string GenerateEncodedKey(int32_t val, const Schema& schema) {
 // Returns a column schema PB that matches 'col', but has a different name.
 void MisnamedColumnSchemaToPB(const ColumnSchema& col, ColumnSchemaPB* pb) {
   ColumnSchemaToPB(ColumnSchema(kDummyColumn, col.type_info()->physical_type(), col.is_nullable(),
-                   col.read_default_value(), col.write_default_value(), col.attributes(),
-                   col.type_attributes()), pb);
+                                col.is_immutable(), col.read_default_value(),
+                                col.write_default_value(), col.attributes(),
+                                col.type_attributes()), pb);
 }
 
 } // anonymous namespace
@@ -574,7 +576,7 @@ class ScanPrivilegeAuthzTest : public AuthzTabletServerTestBase,
       }
     }
     // Determine which column to sabotage if needed.
-    boost::optional<string> misnamed_col;
+    optional<string> misnamed_col;
     if (special_col == SpecialColumn::MISNAMED) {
       misnamed_col = SelectRandomElement<unordered_set<string>, string, Random>(
           scan.projected_cols, &prng_);
@@ -593,6 +595,7 @@ class ScanPrivilegeAuthzTest : public AuthzTabletServerTestBase,
       auto* projected_column = pb.add_projected_columns();
       bool default_bool = false;
       ColumnSchemaToPB(ColumnSchema("is_deleted", DataType::IS_DELETED, /*is_nullable=*/false,
+                                    /*is_immutable=*/false,
                                     /*read_default=*/&default_bool, nullptr), projected_column);
     }
     CHECK_OK(GenerateScanAuthzToken(privilege, pb.mutable_authz_token()));
@@ -616,7 +619,7 @@ class ScanPrivilegeAuthzTest : public AuthzTabletServerTestBase,
     Schema client_schema = schema_.CopyWithoutColumnIds();
 
     // Determine which column to sabotage if needed.
-    boost::optional<string> misnamed_col;
+    optional<string> misnamed_col;
     if (special_col == SpecialColumn::MISNAMED) {
       misnamed_col = SelectRandomElement<unordered_set<string>, string, Random>(cols, &prng_);
     }

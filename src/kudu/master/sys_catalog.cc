@@ -22,12 +22,12 @@
 #include <functional>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <google/protobuf/util/message_differencer.h>
@@ -83,6 +83,7 @@
 #include "kudu/util/net/net_util.h"
 #include "kudu/util/pb_util.h"
 #include "kudu/util/slice.h"
+#include "kudu/util/string_case.h"
 
 DEFINE_double(sys_catalog_fail_during_write, 0.0,
               "Fraction of the time when system table writes will fail");
@@ -221,7 +222,7 @@ Status SysCatalogTable::VerifyAndPopulateSingleMasterConfig(ConsensusMetadata* c
     if (peer.has_last_known_addr()) {
       // Verify the supplied master address matches with the on-disk Raft config.
       auto raft_master_addr = HostPortFromPB(peer.last_known_addr());
-      if (raft_master_addr != master_addr) {
+      if (!iequals(raft_master_addr.ToString(), master_addr.ToString())) {
         return Status::InvalidArgument(
             Substitute("Single master Raft config error. On-disk master: $0 and "
                        "supplied master: $1 are different", raft_master_addr.ToString(),
@@ -273,9 +274,12 @@ Status SysCatalogTable::Load(FsManager *fs_manager) {
     // Make sure the set of masters passed in at start time matches the set in
     // the on-disk cmeta.
     set<string> peer_addrs_from_opts;
+    string hp_str;
     const auto& master_addresses = master_->opts().master_addresses();
     for (const auto& hp : master_addresses) {
-      peer_addrs_from_opts.insert(hp.ToString());
+      hp_str = hp.ToString();
+      ToLowerCase(&hp_str);
+      peer_addrs_from_opts.insert(hp_str);
     }
     if (peer_addrs_from_opts.size() < master_addresses.size()) {
       LOG(WARNING) << Substitute("Found duplicates in --master_addresses: "
@@ -283,8 +287,11 @@ Status SysCatalogTable::Load(FsManager *fs_manager) {
                                  JoinStrings(peer_addrs_from_opts, ", "));
     }
     set<string> peer_addrs_from_disk;
+    string last_known_addr_str;
     for (const auto& p : cstate.committed_config().peers()) {
-      peer_addrs_from_disk.insert(HostPortFromPB(p.last_known_addr()).ToString());
+      last_known_addr_str = HostPortFromPB(p.last_known_addr()).ToString();
+      ToLowerCase(&last_known_addr_str);
+      peer_addrs_from_disk.insert(last_known_addr_str);
     }
     vector<string> symm_diff;
     std::set_symmetric_difference(peer_addrs_from_opts.begin(),
@@ -324,6 +331,8 @@ Status SysCatalogTable::Load(FsManager *fs_manager) {
 }
 
 Status SysCatalogTable::CreateNew(FsManager *fs_manager) {
+  using std::nullopt;
+
   // Create the new Metadata
   scoped_refptr<tablet::TabletMetadata> metadata;
   Schema schema = BuildTableSchema();
@@ -332,22 +341,23 @@ Status SysCatalogTable::CreateNew(FsManager *fs_manager) {
 
   vector<KuduPartialRow> split_rows;
   vector<Partition> partitions;
-  RETURN_NOT_OK(partition_schema.CreatePartitions(split_rows, {}, {}, schema, &partitions));
+  RETURN_NOT_OK(partition_schema.CreatePartitions(split_rows, {}, schema, &partitions));
   DCHECK_EQ(1, partitions.size());
 
-  RETURN_NOT_OK(tablet::TabletMetadata::CreateNew(fs_manager,
-                                                  kSysCatalogTabletId,
-                                                  table_name(),
-                                                  table_id(),
-                                                  schema, partition_schema,
-                                                  partitions[0],
-                                                  tablet::TABLET_DATA_READY,
-                                                  /*tombstone_last_logged_opid=*/ boost::none,
-                                                  /*supports_live_row_count=*/ true,
-                                                  /*extra_config=*/ boost::none,
-                                                  /*dimension_label=*/ boost::none,
-                                                  /*table_type=*/ boost::none,
-                                                  &metadata));
+  RETURN_NOT_OK(tablet::TabletMetadata::CreateNew(
+      fs_manager,
+      kSysCatalogTabletId,
+      table_name(),
+      table_id(),
+      schema, partition_schema,
+      partitions[0],
+      tablet::TABLET_DATA_READY,
+      /*tombstone_last_logged_opid=*/ nullopt,
+      /*supports_live_row_count=*/ true,
+      /*extra_config=*/ nullopt,
+      /*dimension_label=*/ nullopt,
+      /*table_type=*/ nullopt,
+      &metadata));
 
   RaftConfigPB config;
   if (master_->opts().IsDistributed()) {
@@ -1147,5 +1157,35 @@ void SysCatalogTable::InitLocalRaftPeerPB() {
   *local_peer_pb_.mutable_last_known_addr() = HostPortToPB(hps[0]);
 }
 
+void TableInfoLoader::Reset() {
+  tables.clear();
+}
+
+Status TableInfoLoader::VisitTable(const string& table_id,
+                                   const SysTablesEntryPB& metadata) {
+  // Setup the table info
+  scoped_refptr<TableInfo> table = new TableInfo(table_id);
+  TableMetadataLock l(table.get(), LockMode::WRITE);
+  l.mutable_data()->pb.CopyFrom(metadata);
+  l.Commit();
+  tables.emplace_back(std::move(table));
+  return Status::OK();
+}
+
+void TabletInfoLoader::Reset() {
+  tablets.clear();
+}
+
+Status TabletInfoLoader::VisitTablet(const string& /*table_id*/,
+                                     const string& tablet_id,
+                                     const SysTabletsEntryPB& metadata) {
+  // Setup the tablet info
+  scoped_refptr<TabletInfo> tablet = new TabletInfo(nullptr, tablet_id);
+  TabletMetadataLock l(tablet.get(), LockMode::WRITE);
+  l.mutable_data()->pb.CopyFrom(metadata);
+  l.Commit();
+  tablets.emplace_back(std::move(tablet));
+  return Status::OK();
+}
 } // namespace master
 } // namespace kudu

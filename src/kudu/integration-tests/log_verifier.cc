@@ -21,13 +21,13 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <glog/logging.h>
 
 #include "kudu/consensus/consensus.pb.h"
@@ -75,7 +75,7 @@ Status LogVerifier::ScanForCommittedOpIds(int ts_idx, const string& tablet_id,
 
   shared_ptr<LogReader> reader;
   const string wal_dir = JoinPathSegments(inspector_->WalDirForTS(ts_idx), tablet_id);
-  RETURN_NOT_OK(LogReader::Open(env_,
+  RETURN_NOT_OK(LogReader::Open(cluster_->ts_env(ts_idx),
                                 wal_dir,
                                 /*index*/nullptr,
                                 tablet_id,
@@ -154,11 +154,11 @@ Status LogVerifier::VerifyCommittedOpIdsMatch() {
         committed_terms.push_back(FindWithDefault(maps_by_ts[ts], index, kNotOnThisServer));
       }
       // 'committed_terms' entries should all be kNotOnThisServer or the same as each other.
-      auto expected_term = boost::make_optional<int64_t>(false, 0);
+      std::optional<int> expected_term;
       for (int ts = 0; ts < cluster_->num_tablet_servers(); ts++) {
         int64_t this_ts_term = committed_terms[ts];
         if (this_ts_term == kNotOnThisServer) continue; // this TS doesn't have the op
-        if (expected_term == boost::none) {
+        if (!expected_term.has_value()) {
           expected_term = this_ts_term;
         } else if (this_ts_term != expected_term) {
           string err = Substitute("Mismatch found for index $0, [", index);

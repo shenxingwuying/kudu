@@ -167,8 +167,10 @@ Status ScanConfiguration::SetReadMode(KuduScanner::ReadMode read_mode) {
 }
 
 Status ScanConfiguration::SetFaultTolerant(bool fault_tolerant) {
-  RETURN_NOT_OK(SetReadMode(KuduScanner::READ_AT_SNAPSHOT));
-  is_fault_tolerant_ = true;
+  if (fault_tolerant) {
+    RETURN_NOT_OK(SetReadMode(KuduScanner::READ_AT_SNAPSHOT));
+  }
+  is_fault_tolerant_ = fault_tolerant;
   return Status::OK();
 }
 
@@ -240,6 +242,7 @@ Status ScanConfiguration::AddIsDeletedColumn() {
   ColumnSchema is_deleted(col_name,
                           IS_DELETED,
                           /*is_nullable=*/false,
+                          /*is_immutable=*/false,
                           &read_default);
   cols.emplace_back(std::move(is_deleted));
 

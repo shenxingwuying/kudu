@@ -22,11 +22,11 @@
 #include <cstdlib>
 #include <functional>
 #include <initializer_list>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
@@ -1462,7 +1462,8 @@ TEST_F(TestColumnPredicate, TestEquals) {
   ASSERT_NE(ColumnPredicate::None(c1), ColumnPredicate::None(c1string));
 
   const int kDefaultOf3 = 3;
-  ColumnSchema c1dflt("c1", INT32, /*is_nullable=*/false, /*read_default=*/&kDefaultOf3);
+  ColumnSchema c1dflt("c1", INT32, /*is_nullable=*/false,
+                      /*is_immutable=*/false, /*read_default=*/&kDefaultOf3);
   ASSERT_NE(ColumnPredicate::None(c1), ColumnPredicate::None(c1dflt));
 }
 

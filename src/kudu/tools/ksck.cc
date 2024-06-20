@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cstddef>
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <map>
@@ -29,11 +30,11 @@
 #include <type_traits>
 #include <vector>
 
-#include <boost/optional.hpp> // IWYU pragma: keep
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <google/protobuf/stubs/port.h>
 
+#include "kudu/common/partition.h"
 #include "kudu/consensus/quorum_util.h"
 #include "kudu/gutil/basictypes.h"
 #include "kudu/gutil/map-util.h"
@@ -94,6 +95,8 @@ using kudu::server::GetFlagsResponsePB;
 
 using std::atomic;
 using std::cout;
+using std::nullopt;
+using std::optional;
 using std::ostream;
 using std::ostringstream;
 using std::pair;
@@ -880,7 +883,7 @@ HealthCheckResult Ksck::VerifyTablet(const shared_ptr<KsckTablet>& tablet,
 
   auto leader_it = std::find_if(tablet->replicas().cbegin(), tablet->replicas().cend(),
       [](const shared_ptr<KsckTabletReplica>& r) { return r->is_leader(); });
-  boost::optional<string> leader_uuid;
+  optional<string> leader_uuid;
   if (leader_it != tablet->replicas().cend()) {
     leader_uuid = (*leader_it)->ts_uuid();
   }
@@ -894,8 +897,8 @@ HealthCheckResult Ksck::VerifyTablet(const shared_ptr<KsckTablet>& tablet,
     }
   }
   ConsensusState master_config(ConsensusConfigType::MASTER,
-                               boost::none,
-                               boost::none,
+                               nullopt,
+                               nullopt,
                                leader_uuid,
                                voter_uuids_from_master,
                                non_voter_uuids_from_master);
@@ -1010,6 +1013,17 @@ HealthCheckResult Ksck::VerifyTablet(const shared_ptr<KsckTablet>& tablet,
   tablet_summary.status = status;
   tablet_summary.master_cstate = std::move(master_config);
   tablet_summary.replicas.swap(replicas);
+
+  // Add printable representation of the key for the start of the range.
+  const auto& range_key_begin = tablet->partition().begin().range_key();
+  ostringstream ss_range_key_begin;
+  for (size_t i = 0; i < range_key_begin.size(); ++i) {
+    ss_range_key_begin << std::hex << std::setw(2) << std::setfill('0')
+                       << static_cast<uint16_t>(range_key_begin[i]);
+  }
+  tablet_summary.range_key_begin = ss_range_key_begin.str();
+  VLOG(1) << Substitute("range start key for tablet $0: '$1'",
+      tablet_summary.id, tablet_summary.range_key_begin);
   results_.cluster_status.tablet_summaries.push_back(std::move(tablet_summary));
   return result;
 }

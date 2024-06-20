@@ -16,7 +16,6 @@
 // under the License.
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <deque>
@@ -26,8 +25,8 @@
 #include <memory>
 #include <ostream>
 #include <string>
-#include <thread>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -45,13 +44,18 @@
 #include "kudu/client/write_op.h"
 #include "kudu/common/common.pb.h"
 #include "kudu/common/partial_row.h"
+#include "kudu/common/partition.h"
+#include "kudu/common/schema.h"
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/consensus.pb.h"
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/opid.pb.h"
 #include "kudu/consensus/quorum_util.h"
+#include "kudu/consensus/raft_consensus.h"
+#include "kudu/fs/fs_manager.h"
 #include "kudu/gutil/basictypes.h"
 #include "kudu/gutil/map-util.h"
+#include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/stl_util.h"
 #include "kudu/gutil/strings/join.h"
 #include "kudu/gutil/strings/split.h"
@@ -61,12 +65,18 @@
 #include "kudu/integration-tests/cluster_verifier.h"
 #include "kudu/integration-tests/test_workload.h"
 #include "kudu/integration-tests/ts_itest-base.h"
+#include "kudu/master/catalog_manager.h"
+#include "kudu/master/master.h"
 #include "kudu/master/master.pb.h"
+#include "kudu/master/master_options.h"
 #include "kudu/master/sys_catalog.h"
 #include "kudu/mini-cluster/external_mini_cluster.h"
 #include "kudu/tablet/metadata.pb.h"
+#include "kudu/tablet/tablet_replica.h"
 #include "kudu/tools/tool_test_util.h"
 #include "kudu/tserver/tablet_server-test-base.h"
+#include "kudu/util/cow_object.h"
+#include "kudu/util/env.h"
 #include "kudu/util/monotime.h"
 #include "kudu/util/net/net_util.h"
 #include "kudu/util/net/sockaddr.h"
@@ -75,12 +85,6 @@
 #include "kudu/util/status.h"
 #include "kudu/util/test_macros.h"
 #include "kudu/util/test_util.h"
-
-namespace kudu {
-namespace tserver {
-class ListTabletsResponsePB;
-}  // namespace tserver
-}  // namespace kudu
 
 DECLARE_int32(num_replicas);
 DECLARE_int32(num_tablet_servers);
@@ -110,6 +114,7 @@ using kudu::consensus::OpId;
 using kudu::itest::FindTabletFollowers;
 using kudu::itest::FindTabletLeader;
 using kudu::itest::GetConsensusState;
+using kudu::itest::ListTablesWithInfo;
 using kudu::itest::StartElection;
 using kudu::itest::WaitUntilLeader;
 using kudu::itest::TabletServerMap;
@@ -118,20 +123,26 @@ using kudu::itest::WAIT_FOR_LEADER;
 using kudu::itest::WaitForReplicasReportedToMaster;
 using kudu::itest::WaitForServersToAgree;
 using kudu::itest::WaitUntilCommittedConfigNumVotersIs;
-using kudu::itest::WaitUntilCommittedOpIdIndexIs;
 using kudu::itest::WaitUntilTabletInState;
 using kudu::itest::WaitUntilTabletRunning;
+using kudu::master::Master;
+using kudu::master::MasterOptions;
+using kudu::master::SysCatalogTable;
+using kudu::master::TableInfo;
+using kudu::master::TableInfoLoader;
+using kudu::master::TableMetadataLock;
+using kudu::master::TabletInfo;
+using kudu::master::TabletInfoLoader;
+using kudu::master::TabletMetadataGroupLock;
 using kudu::master::VOTER_REPLICA;
 using kudu::pb_util::SecureDebugString;
-using kudu::tserver::ListTabletsResponsePB;
-using std::atomic;
 using std::back_inserter;
 using std::copy;
 using std::deque;
 using std::endl;
 using std::ostringstream;
 using std::string;
-using std::thread;
+using std::pair;
 using std::tuple;
 using std::unique_ptr;
 using std::vector;
@@ -142,7 +153,13 @@ namespace kudu {
 
 namespace tools {
 
-  // Helper to format info when a tool action fails.
+namespace {
+Status NoOpCb() {
+  return Status::OK();
+}
+} // anonymous namespace
+
+// Helper to format info when a tool action fails.
 static string ToolRunInfo(const Status& s, const string& out, const string& err) {
   ostringstream str;
   str << s.ToString() << endl;
@@ -1635,7 +1652,8 @@ TEST_F(AdminCliTest, TestDeleteTable) {
     "table",
     "delete",
     master_address,
-    kTableId
+    kTableId,
+    "-reserve_seconds=0"
   );
 
   vector<string> tables;
@@ -1649,16 +1667,51 @@ TEST_F(AdminCliTest, TestListTables) {
 
   NO_FATALS(BuildAndStart());
 
-  string stdout;
-  ASSERT_OK(RunKuduTool({
-    "table",
-    "list",
-    cluster_->master()->bound_rpc_addr().ToString()
-  }, &stdout));
+  {
+    string stdout;
+    ASSERT_OK(RunKuduTool({
+      "table",
+      "list",
+      cluster_->master()->bound_rpc_addr().ToString()
+    }, &stdout));
 
-  vector<string> stdout_lines = Split(stdout, ",", strings::SkipEmpty());
-  ASSERT_EQ(1, stdout_lines.size());
-  ASSERT_EQ(Substitute("$0\n", kTableId), stdout_lines[0]);
+    vector<string> stdout_lines = Split(stdout, ",", strings::SkipEmpty());
+    ASSERT_EQ(1, stdout_lines.size());
+    ASSERT_EQ(Substitute("$0\n", kTableId), stdout_lines[0]);
+  }
+
+  {
+    string stdout;
+    ASSERT_OK(RunKuduTool({
+      "table",
+      "list",
+      "-soft_deleted_only=true",
+      cluster_->master()->bound_rpc_addr().ToString()
+    }, &stdout));
+
+    vector<string> stdout_lines = Split(stdout, ",", strings::SkipEmpty());
+    ASSERT_EQ(0, stdout_lines.size());
+
+    ASSERT_OK(RunKuduTool({
+      "table",
+      "delete",
+      cluster_->master()->bound_rpc_addr().ToString(),
+      kTableId
+    }, &stdout));
+
+    stdout.clear();
+    ASSERT_OK(RunKuduTool({
+      "table",
+      "list",
+      "-soft_deleted_only=true",
+      cluster_->master()->bound_rpc_addr().ToString()
+    }, &stdout));
+
+    stdout_lines.clear();
+    stdout_lines = Split(stdout, ",", strings::SkipEmpty());
+    ASSERT_EQ(1, stdout_lines.size());
+    ASSERT_EQ(Substitute("$0\n", kTableId), stdout_lines[0]);
+  }
 }
 
 TEST_F(AdminCliTest, TestListTablesDetail) {
@@ -2067,6 +2120,170 @@ TEST_F(AdminCliTest, TestDescribeTableNoOwner) {
       },
       &stdout));
   ASSERT_STR_CONTAINS(stdout, "OWNER \n");
+}
+
+TEST_F(AdminCliTest, TestDescribeTableCustomHashSchema) {
+  NO_FATALS(BuildAndStart({}, {}, {}, /*create_table*/false));
+  KuduSchema schema;
+
+  // Build the schema
+  {
+    KuduSchemaBuilder builder;
+    builder.AddColumn("key_range")->Type(KuduColumnSchema::INT32)->NotNull();
+    builder.AddColumn("key_hash0")->Type(KuduColumnSchema::INT32)->NotNull();
+    builder.AddColumn("key_hash1")->Type(KuduColumnSchema::INT32)->NotNull();
+    builder.SetPrimaryKey({"key_range", "key_hash0", "key_hash1"});
+    ASSERT_OK(builder.Build(&schema));
+  }
+
+  constexpr const char* const kTableName = "table_with_custom_hash_schema";
+  unique_ptr<KuduTableCreator> table_creator(client_->NewTableCreator());
+  table_creator->table_name(kTableName)
+      .schema(&schema)
+      .add_hash_partitions({"key_hash0"}, 2)
+      .set_range_partition_columns({"key_range"})
+      .num_replicas(1);
+
+  // Create a KuduRangePartition with custom hash schema
+  {
+    unique_ptr<KuduPartialRow> lower(schema.NewRow());
+    CHECK_OK(lower->SetInt32("key_range", 0));
+    unique_ptr<KuduPartialRow> upper(schema.NewRow());
+    CHECK_OK(upper->SetInt32("key_range", 100));
+    unique_ptr<client::KuduRangePartition> partition(
+        new client::KuduRangePartition(lower.release(), upper.release()));
+    partition->add_hash_partitions({"key_hash1"}, 3);
+    table_creator->add_custom_range_partition(partition.release());
+  }
+
+  // Create a partition with table wide hash schema
+  {
+    unique_ptr<KuduPartialRow> lower(schema.NewRow());
+    CHECK_OK(lower->SetInt32("key_range", 100));
+    unique_ptr<KuduPartialRow> upper(schema.NewRow());
+    CHECK_OK(upper->SetInt32("key_range", 200));
+    table_creator->add_range_partition(lower.release(), upper.release());
+  }
+
+  // Create the table and run the tool
+  ASSERT_OK(table_creator->Create());
+  string stdout;
+  ASSERT_OK(RunKuduTool(
+      {
+          "table",
+          "describe",
+          cluster_->master()->bound_rpc_addr().ToString(),
+          kTableName,
+      },
+      &stdout));
+  ASSERT_STR_CONTAINS(stdout, "PARTITION 0 <= VALUES < 100 HASH(key_hash1) PARTITIONS 3,\n"
+                              "    PARTITION 100 <= VALUES < 200");
+}
+
+class ListTableCliParamTest : public AdminCliTest,
+                              public ::testing::WithParamInterface<bool> {
+};
+
+// Basic test that the kudu tool works in the list tablets case.
+TEST_P(ListTableCliParamTest, TestListTabletWithPartition) {
+  auto show_hp = GetParam() ? PartitionSchema::HashPartitionInfo::SHOW :
+      PartitionSchema::HashPartitionInfo::HIDE;
+  FLAGS_num_tablet_servers = 1;
+  FLAGS_num_replicas = 1;
+
+  NO_FATALS(BuildAndStart());
+
+  vector<TServerDetails*> tservers;
+  vector<string> base_tablet_ids;
+  AppendValuesFromMap(tablet_servers_, &tservers);
+  ListRunningTabletIds(tservers.front(),
+                       MonoDelta::FromSeconds(30), &base_tablet_ids);
+
+  // Test a table with all types in its schema, multiple hash partitioning
+  // levels, multiple range partitions, and non-covered ranges.
+  const string kTableId = "TestTableListPartition";
+  KuduSchema schema;
+
+  // Build the schema.
+  {
+    KuduSchemaBuilder builder;
+    builder.AddColumn("key_hash0")->Type(KuduColumnSchema::INT32)->NotNull();
+    builder.AddColumn("key_hash1")->Type(KuduColumnSchema::INT32)->NotNull();
+    builder.AddColumn("key_hash2")->Type(KuduColumnSchema::INT32)->NotNull();
+    builder.AddColumn("key_range")->Type(KuduColumnSchema::INT32)->NotNull();
+    builder.SetPrimaryKey({ "key_hash0", "key_hash1", "key_hash2", "key_range" });
+    ASSERT_OK(builder.Build(&schema));
+  }
+
+  // Set up partitioning and create the table.
+  {
+    unique_ptr<KuduPartialRow> lower_bound0(schema.NewRow());
+    ASSERT_OK(lower_bound0->SetInt32("key_range", 0));
+    unique_ptr<KuduPartialRow> upper_bound0(schema.NewRow());
+    ASSERT_OK(upper_bound0->SetInt32("key_range", 1));
+    unique_ptr<KuduPartialRow> lower_bound1(schema.NewRow());
+    ASSERT_OK(lower_bound1->SetInt32("key_range", 2));
+    unique_ptr<KuduPartialRow> upper_bound1(schema.NewRow());
+    ASSERT_OK(upper_bound1->SetInt32("key_range", 3));
+    unique_ptr<KuduTableCreator> table_creator(client_->NewTableCreator());
+    ASSERT_OK(table_creator->table_name(kTableId)
+        .schema(&schema)
+        .add_hash_partitions({"key_hash0"}, 2)
+        .add_hash_partitions({"key_hash1", "key_hash2"}, 3)
+        .set_range_partition_columns({"key_range"})
+        .add_range_partition(lower_bound0.release(), upper_bound0.release())
+        .add_range_partition(lower_bound1.release(), upper_bound1.release())
+        .num_replicas(FLAGS_num_replicas)
+        .Create());
+  }
+
+  vector<string> new_tablet_ids;
+  ListRunningTabletIds(tservers.front(),
+                       MonoDelta::FromSeconds(30), &new_tablet_ids);
+  vector<string> delta_tablet_ids;
+  for (auto& tablet_id : base_tablet_ids) {
+    if (std::find(new_tablet_ids.begin(), new_tablet_ids.end(), tablet_id) ==
+        new_tablet_ids.end()) {
+      delta_tablet_ids.push_back(tablet_id);
+    }
+  }
+
+  // Test the list tablet with partition output.
+  string stdout;
+  string stderr;
+  Status s = RunKuduTool({
+    "table",
+    "list",
+    "--list_tablets",
+    GetParam() ? "--show_tablet_partition_info" : "",
+    "--tables",
+    kTableId,
+    cluster_->master()->bound_rpc_addr().ToString(),
+  }, &stdout, &stderr);
+  ASSERT_TRUE(s.ok()) << ToolRunInfo(s, stdout, stderr);
+
+  client::sp::shared_ptr<KuduTable> table;
+  ASSERT_OK(client_->OpenTable(kTableId, &table));
+  const auto& partition_schema = table->partition_schema();
+  const auto& schema_internal = KuduSchema::ToSchema(table->schema());
+
+  // make sure table name correct
+  ASSERT_STR_CONTAINS(stdout, kTableId);
+
+  master::ListTablesResponsePB tables_info;
+  ASSERT_OK(ListTablesWithInfo(cluster_->master_proxy(), kTableId,
+      MonoDelta::FromSeconds(30), &tables_info));
+  for (const auto& table : tables_info.tables()) {
+    for (const auto& pt : table.tablet_with_partition()) {
+      Partition partition;
+      Partition::FromPB(pt.partition(), &partition);
+      string partition_str = partition_schema.PartitionDebugString(partition,
+                                                                   schema_internal,
+                                                                   show_hp);
+      string tablet_with_partition = pt.tablet_id() + " : " + partition_str;
+      ASSERT_STR_CONTAINS(stdout, tablet_with_partition);
+    }
+  }
 }
 
 TEST_F(AdminCliTest, TestLocateRow) {
@@ -3033,11 +3250,173 @@ TEST_F(AdminCliTest, TestAddAndDropRangePartitionForMultipleRangeColumnsTable) {
   });
 }
 
+TEST_F(AdminCliTest, AddAndDropRangeWithCustomHashSchema) {
+  FLAGS_num_tablet_servers = 1;
+  FLAGS_num_replicas = 1;
+
+  NO_FATALS(BuildAndStart());
+
+  const string& master_addr = cluster_->master()->bound_rpc_addr().ToString();
+  constexpr const char* const kTestTableName = "custom_hash_schemas";
+  constexpr const char* const kC0 = "c0";
+  constexpr const char* const kC1 = "c1";
+  constexpr const char* const kC2 = "c2";
+
+  {
+    KuduSchemaBuilder builder;
+    builder.AddColumn(kC0)->Type(KuduColumnSchema::INT8)->NotNull();
+    builder.AddColumn(kC1)->Type(KuduColumnSchema::INT16)->NotNull();
+    builder.AddColumn(kC2)->Type(KuduColumnSchema::STRING);
+    builder.SetPrimaryKey({ kC0, kC1 });
+    KuduSchema schema;
+    ASSERT_OK(builder.Build(&schema));
+
+    // Create a table with left-unbounded range partition having the
+    // table-wide hash schema.
+    unique_ptr<KuduPartialRow> l(schema.NewRow());
+    unique_ptr<KuduPartialRow> u(schema.NewRow());
+    ASSERT_OK(u->SetInt8(kC0, 0));
+
+    unique_ptr<KuduTableCreator> table_creator(client_->NewTableCreator());
+    ASSERT_OK(table_creator->table_name(kTestTableName)
+        .schema(&schema)
+        .set_range_partition_columns({ kC0 })
+        .add_hash_partitions({ kC1 }, 2)
+        .add_range_partition(l.release(), u.release())
+        .num_replicas(FLAGS_num_replicas)
+        .Create());
+  }
+
+  string stdout;
+  string stderr;
+
+  // Add a range partition with custom hash schema using the kudu CLI tool.
+  {
+    constexpr const char* const kHashSchemaJson = R"*({
+      "hash_schema": [
+        { "columns": ["c1"], "num_buckets": 5, "seed": 8 }
+      ]
+    })*";
+    const auto s = RunKuduTool({
+      "table",
+      "add_range_partition",
+      master_addr,
+      kTestTableName,
+      "[0]",
+      "[1]",
+      Substitute("--hash_schema=$0", kHashSchemaJson),
+    }, &stdout, &stderr);
+    ASSERT_TRUE(s.ok()) << ToolRunInfo(s, stdout, stderr);
+  }
+  {
+    const auto s = RunKuduTool({
+      "table",
+      "describe",
+      master_addr,
+      kTestTableName,
+    }, &stdout, &stderr);
+    ASSERT_TRUE(s.ok()) << ToolRunInfo(s, stdout, stderr);
+    ASSERT_STR_CONTAINS(stdout,
+                        "PARTITION 0 <= VALUES < 1 HASH(c1) PARTITIONS 5");
+  }
+
+  // Insert a row into the newly added range partition.
+  {
+    client::sp::shared_ptr<KuduTable> table;
+    ASSERT_OK(client_->OpenTable(kTestTableName, &table));
+
+    auto session = client_->NewSession();
+    unique_ptr<KuduInsert> insert(table->NewInsert());
+    auto* row = insert->mutable_row();
+    ASSERT_OK(row->SetInt8(kC0, 0));
+    ASSERT_OK(row->SetInt16(kC1, 0));
+    ASSERT_OK(row->SetString(kC2, "0"));
+    ASSERT_OK(session->Apply(insert.release()));
+    ASSERT_OK(session->Flush());
+    ASSERT_EQ(1, CountTableRows(table.get()));
+  }
+
+  // Add unbounded range using the kudu CLI tool.
+  {
+    constexpr const char* const kHashSchemaJson = R"*({
+      "hash_schema": [ { "columns": ["c0", "c1"], "num_buckets": 3 } ] })*";
+    const auto s = RunKuduTool({
+      "table",
+      "add_range_partition",
+      master_addr,
+      kTestTableName,
+      "[1]",
+      "[]",
+      Substitute("--hash_schema=$0", kHashSchemaJson),
+    }, &stdout, &stderr);
+    ASSERT_TRUE(s.ok()) << ToolRunInfo(s, stdout, stderr);
+  }
+  {
+    const auto s = RunKuduTool({
+      "table",
+      "describe",
+      master_addr,
+      kTestTableName,
+    }, &stdout, &stderr);
+    ASSERT_TRUE(s.ok()) << ToolRunInfo(s, stdout, stderr);
+    ASSERT_STR_CONTAINS(stdout,
+                        "PARTITION 0 <= VALUES < 1 HASH(c1) PARTITIONS 5");
+    ASSERT_STR_CONTAINS(stdout,
+                        "PARTITION 1 <= VALUES HASH(c0, c1) PARTITIONS 3");
+  }
+
+  // Insert a row into the newly added range partition.
+  {
+    client::sp::shared_ptr<KuduTable> table;
+    ASSERT_OK(client_->OpenTable(kTestTableName, &table));
+    auto session = client_->NewSession();
+    unique_ptr<KuduInsert> insert(table->NewInsert());
+    auto* row = insert->mutable_row();
+    ASSERT_OK(row->SetInt8(kC0, 10));
+    ASSERT_OK(row->SetInt16(kC1, 10));
+    ASSERT_OK(row->SetString(kC2, "10"));
+    ASSERT_OK(session->Apply(insert.release()));
+    ASSERT_OK(session->Flush());
+    ASSERT_EQ(2, CountTableRows(table.get()));
+  }
+
+  // Drop all the ranges one-by-one.
+  const vector<pair<string, string>> kRangesStr = {
+    {"", "0"}, {"0", "1"}, {"1", ""},
+  };
+
+  for (const std::pair<string, string>& r : kRangesStr) {
+    SCOPED_TRACE(Substitute("range ['$0', '$1')", r.first, r.second));
+    const auto s = RunKuduTool({
+      "table",
+      "drop_range_partition",
+      master_addr,
+      kTestTableName,
+      Substitute("[$0]", r.first),
+      Substitute("[$0]", r.second),
+    }, &stdout, &stderr);
+    ASSERT_TRUE(s.ok()) << ToolRunInfo(s, stdout, stderr);
+  }
+
+  // There should be 0 rows left.
+  client::sp::shared_ptr<KuduTable> table;
+  ASSERT_OK(client_->OpenTable(kTestTableName, &table));
+  ASSERT_EVENTUALLY([&]() {
+    ASSERT_EQ(0, CountTableRows(table.get()));
+  });
+}
+
 namespace {
 constexpr const char* kPrincipal = "oryx";
 
 vector<string> RebuildMasterCmd(const ExternalMiniCluster& cluster,
-                                bool is_secure, bool log_to_stderr = false) {
+                                int tserver_num,
+                                bool is_secure,
+                                bool log_to_stderr = false,
+                                const string& tables = "",
+                                const int& default_replica_num = 1) {
+  CHECK_GT(tserver_num, 0);
+  CHECK_LE(tserver_num, cluster.num_tablet_servers());
   vector<string> command = {
     "master",
     "unsafe_rebuild",
@@ -3046,16 +3425,23 @@ vector<string> RebuildMasterCmd(const ExternalMiniCluster& cluster,
     "-fs_wal_dir",
     cluster.master()->wal_dir(),
   };
+  if (!tables.empty()) {
+    command.emplace_back(Substitute("-tables=$0", tables));
+  }
+  if (Env::Default()->IsEncryptionEnabled()) {
+    command.emplace_back("--encrypt_data_at_rest=true");
+  }
   if (log_to_stderr) {
     command.emplace_back("--logtostderr");
   }
   if (is_secure) {
     command.emplace_back(Substitute("--sasl_protocol_name=$0", kPrincipal));
   }
-  for (int i = 0; i < cluster.num_tablet_servers(); i++) {
+  for (int i = 0; i < tserver_num; i++) {
     auto* ts = cluster.tablet_server(i);
     command.emplace_back(ts->bound_rpc_hostport().ToString());
   }
+  command.emplace_back(Substitute("--default_num_replicas=$0", default_replica_num));
   return command;
 }
 
@@ -3085,7 +3471,8 @@ TEST_F(AdminCliTest, TestRebuildMasterWhenNonEmpty) {
   NO_FATALS(cluster_->master()->Shutdown());
   string stdout;
   string stderr;
-  Status s = RunKuduTool(RebuildMasterCmd(*cluster_, /*is_secure*/false, /*log_to_stderr*/true),
+  Status s = RunKuduTool(RebuildMasterCmd(*cluster_, FLAGS_num_tablet_servers,
+                                          /*is_secure*/false, /*log_to_stderr*/true),
                          &stdout, &stderr);
   ASSERT_TRUE(s.IsRuntimeError()) << s.ToString();
   ASSERT_STR_CONTAINS(stderr, "must be empty");
@@ -3093,12 +3480,125 @@ TEST_F(AdminCliTest, TestRebuildMasterWhenNonEmpty) {
   // Delete the contents of the old master from disk. This should allow the
   // tool to run.
   ASSERT_OK(cluster_->master()->DeleteFromDisk());
-  ASSERT_OK(RunKuduTool(RebuildMasterCmd(*cluster_, /*is_secure*/false, /*log_to_stderr*/true),
+  ASSERT_OK(RunKuduTool(RebuildMasterCmd(*cluster_, FLAGS_num_tablet_servers,
+                                         /*is_secure*/false, /*log_to_stderr*/true),
                         &stdout, &stderr));
   ASSERT_STR_NOT_CONTAINS(stderr, "must be empty");
   ASSERT_STR_CONTAINS(stdout,
                       "Rebuilt from 3 tablet servers, of which 0 had errors");
   ASSERT_STR_CONTAINS(stdout, "Rebuilt from 1 replicas, of which 0 had errors");
+}
+
+void delete_table_in_syscatalog(const string& wal_dir,
+                                const std::vector<std::string>& data_dirs,
+                                const string& del_table_name) {
+  MasterOptions opts;
+  opts.fs_opts.wal_root = wal_dir;
+  opts.fs_opts.data_roots = data_dirs;
+  Master master(opts);
+  ASSERT_OK(master.Init());
+  SysCatalogTable sys_catalog(&master, &NoOpCb);
+  ASSERT_OK(sys_catalog.Load(master.fs_manager()));
+  // Get table from sys_catalog.
+  const auto kLeaderTimeout = MonoDelta::FromSeconds(10);
+  ASSERT_OK(sys_catalog.tablet_replica()->consensus()->WaitUntilLeader(kLeaderTimeout));
+  TableInfoLoader table_info_loader;
+  sys_catalog.VisitTables(&table_info_loader);
+  scoped_refptr<TableInfo> table_info;
+  for (const auto& table : table_info_loader.tables) {
+    table->metadata().ReadLock();
+    string table_name = table->metadata().state().name();
+    table->metadata().ReadUnlock();
+    if (table_name == del_table_name) {
+      table_info = table;
+      break;
+    }
+  }
+  ASSERT_NE(nullptr, table_info);
+
+  // Get tablet from sys_catalog.
+  TabletInfoLoader tablet_info_loader;
+  sys_catalog.VisitTablets(&tablet_info_loader);
+  vector<scoped_refptr<TabletInfo>> tablets;
+  for (const auto& tablet : tablet_info_loader.tablets) {
+    tablet->metadata().ReadLock();
+    if (tablet->metadata().state().pb.table_id() == table_info->id())
+      tablets.push_back(tablet);
+    tablet->metadata().ReadUnlock();
+  }
+  ASSERT_GT(tablets.size(), 0);
+
+  // Delete one table and it's tablets.
+  TableMetadataLock l_table(table_info.get(), LockMode::WRITE);
+  TabletMetadataGroupLock l_tablets(LockMode::RELEASED);
+  l_tablets.AddMutableInfos(tablets);
+  l_tablets.Lock(LockMode::WRITE);
+  SysCatalogTable::Actions actions;
+  actions.table_to_delete = table_info;
+  actions.tablets_to_delete = tablets;
+  ASSERT_OK(sys_catalog.Write(actions));
+
+  NO_FATALS(sys_catalog.Shutdown());
+  NO_FATALS(master.Shutdown());
+}
+
+// Rebuild tables according to part of tables not all tables.
+TEST_F(AdminCliTest, TestRebuildTables) {
+  FLAGS_num_tablet_servers = 3;
+  NO_FATALS(BuildAndStart({}, {}, {}, /*create_table*/false));
+  // Create 3 tables.
+  constexpr const char* kTable1 = "TestTable";
+  NO_FATALS(MakeTestTable(kTable1, /*num_rows*/10, /*num_replicas*/1, cluster_.get()));
+  constexpr const char* kTable2 = "TestTable1";
+  NO_FATALS(MakeTestTable(kTable2, /*num_rows*/10, /*num_replicas*/1, cluster_.get()));
+  constexpr const char* kTable3 = "TestTable2";
+  NO_FATALS(MakeTestTable(kTable3, /*num_rows*/10, /*num_replicas*/1, cluster_.get()));
+
+  const string& part_tables = Substitute("$0,$1", kTable1, kTable2);
+  NO_FATALS(cluster_->master()->Shutdown());
+
+  string stdout1;
+  string stderr1;
+  // Rebuild 2 tables in update mode.
+  ASSERT_OK(RunKuduTool(RebuildMasterCmd(*cluster_, FLAGS_num_tablet_servers,
+                                         /*is_secure*/false, /*log_to_stderr*/true,
+                                         part_tables, /*default_replica_num*/1),
+                        &stdout1, &stderr1));
+  ASSERT_STR_CONTAINS(stdout1,
+                      "Rebuilt from 3 tablet servers, of which 0 had errors");
+  ASSERT_STR_CONTAINS(stdout1, "Rebuilt from 2 replicas, of which 0 had errors");
+  for (int i = 0; i < cluster_->num_tablet_servers(); i++) {
+    cluster_->tablet_server(i)->Shutdown();
+  }
+  // Restart the cluster to check cluster healthy.
+  cluster_->Restart();
+  WaitForTSAndReplicas();
+  ClusterVerifier cv1(cluster_.get());
+  NO_FATALS(cv1.CheckCluster());
+
+  NO_FATALS(cluster_->master()->Shutdown());
+  // Delete kTable1 in syscatalog.
+  delete_table_in_syscatalog(cluster_->master()->wal_dir(),
+                            cluster_->master()->data_dirs(),
+                            kTable1);
+  string stdout2;
+  string stderr2;
+  // Rebuild kTable1 in add mode.
+  ASSERT_OK(RunKuduTool(RebuildMasterCmd(*cluster_, FLAGS_num_tablet_servers,
+                                         /*is_secure*/false, /*log_to_stderr*/true, kTable1),
+                        &stdout2, &stderr2));
+  ASSERT_STR_NOT_CONTAINS(stderr2, "must be empty");
+  ASSERT_STR_CONTAINS(stdout2,
+                      "Rebuilt from 3 tablet servers, of which 0 had errors");
+  ASSERT_STR_CONTAINS(stdout2, "Rebuilt from 1 replicas, of which 0 had errors");
+  for (int i = 0; i < cluster_->num_tablet_servers(); i++) {
+    cluster_->tablet_server(i)->Shutdown();
+  }
+  // Restart the cluster to check cluster healthy.
+  cluster_->Restart();
+  WaitForTSAndReplicas();
+  ClusterVerifier cv2(cluster_.get());
+  NO_FATALS(cv2.CheckCluster());
 }
 
 // Test that the master rebuilder ignores tombstones.
@@ -3136,7 +3636,8 @@ TEST_F(AdminCliTest, TestRebuildMasterWithTombstones) {
   ASSERT_OK(cluster_->master()->DeleteFromDisk());
   string stdout;
   string stderr;
-  ASSERT_OK(RunKuduTool(RebuildMasterCmd(*cluster_, /*is_secure*/false, /*log_to_stderr*/true),
+  ASSERT_OK(RunKuduTool(RebuildMasterCmd(*cluster_, FLAGS_num_tablet_servers,
+                                         /*is_secure*/false, /*log_to_stderr*/true),
                                          &stdout, &stderr));
   ASSERT_STR_CONTAINS(stderr, Substitute("Skipping replica of tablet $0 of table $1",
                                          tablet_id, kTable));
@@ -3165,15 +3666,24 @@ TEST_F(AdminCliTest, TestRebuildMasterWithTombstones) {
   NO_FATALS(cv.CheckCluster());
 }
 
-TEST_F(AdminCliTest, TestRebuildMasterAndAddColumns) {
-  FLAGS_num_tablet_servers = 1;
-  FLAGS_num_replicas = 1;
+TEST_F(AdminCliTest, TestAddColumnsAndRebuildMaster) {
+  FLAGS_num_tablet_servers = 3;
+  FLAGS_num_replicas = 3;
 
   NO_FATALS(BuildAndStart());
 
+  // Add a column and shutdown a tserver, the tserver holds a schema with a lower version.
   {
     unique_ptr<KuduTableAlterer> table_alterer(client_->NewTableAlterer(kTableId));
     table_alterer->AddColumn("old_column_0")->Type(KuduColumnSchema::INT32);
+    ASSERT_OK(table_alterer->Alter());
+  }
+  NO_FATALS(cluster_->tablet_server(0)->Shutdown());
+
+  // Add another column, the latest schema has a higher version.
+  {
+    unique_ptr<KuduTableAlterer> table_alterer(client_->NewTableAlterer(kTableId));
+    table_alterer->AddColumn("old_column_1")->Type(KuduColumnSchema::INT32);
     ASSERT_OK(table_alterer->Alter());
   }
 
@@ -3181,23 +3691,32 @@ TEST_F(AdminCliTest, TestRebuildMasterAndAddColumns) {
   NO_FATALS(cluster_->master()->Shutdown());
   ASSERT_OK(cluster_->master()->DeleteFromDisk());
 
+  // Restart the shutdown tserver, which holds a lower version schema.
+  ASSERT_OK(cluster_->tablet_server(0)->Restart());
+
   // Rebuild the master with the tool.
+  // The tool will firstly use schema on tserver-0 which holds an outdated schema, then
+  // use the newer schema on tserver-1 to rebuild master.
   string stdout;
-  ASSERT_OK(RunKuduTool(RebuildMasterCmd(*cluster_, /*is_secure*/false, /*log_to_stderr*/true),
+  ASSERT_OK(RunKuduTool(RebuildMasterCmd(*cluster_, 2,
+                        /*is_secure*/false, /*log_to_stderr*/true, "", 3),
                         &stdout));
-  ASSERT_STR_CONTAINS(stdout, "Rebuilt from 1 tablet servers, of which 0 had errors");
-  ASSERT_STR_CONTAINS(stdout, "Rebuilt from 1 replicas, of which 0 had errors");
+  ASSERT_STR_CONTAINS(stdout, "Rebuilt from 2 tablet servers, of which 0 had errors");
+  ASSERT_STR_CONTAINS(stdout, "Rebuilt from 2 replicas, of which 0 had errors");
 
   // Restart the master and the tablet servers.
   // The tablet servers must be restarted so they accept the new master's certs.
-  for (int i = 0; i < cluster_->num_tablet_servers(); i++) {
+  for (int i = 0; i < FLAGS_num_tablet_servers; i++) {
     cluster_->tablet_server(i)->Shutdown();
   }
   ASSERT_OK(cluster_->Restart());
+  WaitForTSAndReplicas();
 
-  ASSERT_OK(cluster_->WaitForTabletsRunning(cluster_->tablet_server(0),
-                                            1,
-                                            MonoDelta::FromSeconds(10)));
+  // Wait the cluster to become healthy.
+  string master_address = cluster_->master()->bound_rpc_addr().ToString();
+  ASSERT_EVENTUALLY([&]() {
+    ASSERT_OK(RunKuduTool({"cluster", "ksck", master_address}, nullptr, nullptr));
+  });
 
   // The client has to be rebuilt since there's a new master.
   KuduClientBuilder builder;
@@ -3210,19 +3729,46 @@ TEST_F(AdminCliTest, TestRebuildMasterAndAddColumns) {
     ASSERT_OK(table_alterer->Alter());
   }
 
-  const string& ts_addr = cluster_->tablet_server(0)->bound_rpc_addr().ToString();
-  ASSERT_EVENTUALLY([&]() {
-    string stdout;
-    ASSERT_OK(RunKuduTool({"remote_replica", "list", ts_addr, "-include_schema"} , &stdout));
-    ASSERT_STR_CONTAINS(stdout, "new_column_0");
-  });
+  // Check master and all tservers have the latest schema.
+  ASSERT_OK(RunKuduTool({"table", "describe", master_address, kTableId}, &stdout));
+  ASSERT_STR_MATCHES(stdout, "old_column_0.*old_column_1.*new_column_0");
+  for (int i = 0; i < FLAGS_num_tablet_servers; i++) {
+    const string& ts_addr = cluster_->tablet_server(i)->bound_rpc_addr().ToString();
+    ASSERT_OK(RunKuduTool({"remote_replica", "list", ts_addr, "-include_schema"}, &stdout));
+    ASSERT_STR_MATCHES(stdout, "old_column_0.*old_column_1.*new_column_0");
+  }
 
-  // Check the altered table is readable.
+  // Check the altered table schema in client view, and check it is writable and readable.
   {
-    vector<string> rows;
+    KuduSchema schema;
+    ASSERT_OK(client_->GetTableSchema(kTableId, &schema));
+    ASSERT_EQ(6, schema.num_columns());
+    // Here we use the first column to initialize an object of KuduColumnSchema
+    // for there is no default constructor for it.
+    KuduColumnSchema col_schema = schema.Column(0);
+    ASSERT_TRUE(schema.HasColumn("old_column_0", &col_schema));
+    ASSERT_TRUE(schema.HasColumn("old_column_1", &col_schema));
+    ASSERT_TRUE(schema.HasColumn("new_column_0", &col_schema));
+
     client::sp::shared_ptr<KuduTable> table;
     ASSERT_OK(client_->OpenTable(kTableId, &table));
+
+    TestWorkload workload(cluster_.get());
+    workload.set_table_name(kTableId);
+    workload.set_num_write_threads(1);
+    workload.set_schema(table->schema());
+    workload.Setup();
+    workload.Start();
+    while (workload.rows_inserted() < 1000) {
+      SleepFor(MonoDelta::FromMilliseconds(10));
+    }
+    workload.StopAndJoin();
+
+    vector<string> rows;
     ScanTableToStrings(table.get(), &rows);
+    for (const auto& row : rows) {
+      ASSERT_STR_MATCHES(row, "old_column_0.*old_column_1.*new_column_0");
+    }
   }
 }
 
@@ -3292,7 +3838,8 @@ TEST_P(SecureClusterAdminCliParamTest, TestRebuildMaster) {
 
   // Rebuild the master with the tool.
   string stdout;
-  ASSERT_OK(RunKuduTool(RebuildMasterCmd(*cluster_, is_secure), &stdout));
+  ASSERT_OK(RunKuduTool(RebuildMasterCmd(*cluster_, FLAGS_num_tablet_servers, is_secure),
+                        &stdout));
   ASSERT_STR_CONTAINS(stdout,
                       "Rebuilt from 3 tablet servers, of which 0 had errors");
   ASSERT_STR_CONTAINS(stdout, "Rebuilt from 3 replicas, of which 0 had errors");
@@ -3340,7 +3887,7 @@ TEST_P(SecureClusterAdminCliParamTest, TestRebuildMasterAndAddColumns) {
   FLAGS_num_tablet_servers = 3;
   FLAGS_num_replicas = 3;
 
-  // Create a table and insert some rows
+  // Create a table and insert some rows.
   NO_FATALS(MakeTestTable(kTableName, kNumRows, /*num_replicas*/3, cluster_.get()));
 
   // Shut down the master and wipe out its data.
@@ -3349,7 +3896,8 @@ TEST_P(SecureClusterAdminCliParamTest, TestRebuildMasterAndAddColumns) {
 
   // Rebuild the master with the tool.
   string stdout;
-  ASSERT_OK(RunKuduTool(RebuildMasterCmd(*cluster_, is_secure), &stdout));
+  ASSERT_OK(RunKuduTool(RebuildMasterCmd(*cluster_, FLAGS_num_tablet_servers, is_secure),
+                        &stdout));
   ASSERT_STR_CONTAINS(stdout,
                       "Rebuilt from 3 tablet servers, of which 0 had errors");
   ASSERT_STR_CONTAINS(stdout, "Rebuilt from 3 replicas, of which 0 had errors");

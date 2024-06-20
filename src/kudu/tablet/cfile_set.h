@@ -14,12 +14,12 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-#ifndef KUDU_TABLET_LAYER_BASEDATA_H
-#define KUDU_TABLET_LAYER_BASEDATA_H
+#pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,12 +38,8 @@
 #include "kudu/gutil/port.h"
 #include "kudu/tablet/rowset_metadata.h"
 #include "kudu/util/make_shared.h"
+#include "kudu/util/memory/arena.h"
 #include "kudu/util/status.h"
-
-namespace boost {
-template <class T>
-class optional;
-}  // namespace boost
 
 namespace kudu {
 
@@ -109,10 +105,10 @@ class CFileSet :
   uint64_t OnDiskColumnDataSize(const ColumnId& col_id) const;
 
   // Determine the index of the given row key.
-  // Sets *idx to boost::none if the row is not found.
+  // Sets *idx to std::nullopt if the row is not found.
   Status FindRow(const RowSetKeyProbe& probe,
                  const fs::IOContext* io_context,
-                 boost::optional<rowid_t>* idx,
+                 std::optional<rowid_t>* idx,
                  ProbeStats* stats) const;
 
   std::string ToString() const {
@@ -227,17 +223,21 @@ class CFileSet::Iterator : public ColumnwiseIterator {
   friend class CFileSet;
 
   // 'projection' must remain valid for the lifetime of this object.
-  Iterator(std::shared_ptr<CFileSet const> base_data, const Schema* projection,
+  Iterator(std::shared_ptr<CFileSet const> base_data,
+           const Schema* projection,
            const fs::IOContext* io_context)
       : base_data_(std::move(base_data)),
         projection_(projection),
         initted_(false),
         cur_idx_(0),
         prepared_count_(0),
-        io_context_(io_context) {}
+        io_context_(io_context),
+        arena_(256) {}
 
   // Fill in col_iters_ for each of the requested columns.
   Status CreateColumnIterators(const ScanSpec* spec);
+
+  Status OptimizePKPredicates(ScanSpec* spec);
 
   // Look for a predicate which can be converted into a range scan using the key
   // column's index. If such a predicate exists, remove it from the scan spec and
@@ -281,8 +281,8 @@ class CFileSet::Iterator : public ColumnwiseIterator {
   // stored in 'col_iters_'.
   std::vector<cfile::ColumnIterator*> prepared_iters_;
 
+  Arena arena_;
 };
 
 } // namespace tablet
 } // namespace kudu
-#endif

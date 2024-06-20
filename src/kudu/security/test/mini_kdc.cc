@@ -19,13 +19,11 @@
 
 #include <csignal>
 #include <cstdlib>
-
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include <boost/optional/optional.hpp>
 #include <glog/logging.h>
 
 #include "kudu/gutil/map-util.h"
@@ -40,7 +38,6 @@
 #include "kudu/util/subprocess.h"
 #include "kudu/util/test_util.h"
 
-using boost::none;
 using std::map;
 using std::string;
 using std::unique_ptr;
@@ -108,6 +105,8 @@ Status GetBinaryPath(const string& binary, string* path) {
   static const vector<string> kCommonLocations = {
     "/usr/local/opt/krb5/sbin", // Homebrew
     "/usr/local/opt/krb5/bin", // Homebrew
+    "/opt/homebrew/opt/krb5/sbin", // Homebrew arm
+    "/opt/homebrew/opt/krb5/bin", // Homebrew arm
     "/opt/local/sbin", // Macports
     "/opt/local/bin", // Macports
     "/usr/lib/mit/sbin", // SLES

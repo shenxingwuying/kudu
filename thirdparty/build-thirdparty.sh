@@ -107,7 +107,8 @@ else
       "ranger")       F_RANGER=1 ;;
       "oatpp")        F_OATPP=1 ;;
       "oatpp-swagger") F_OATPP_SWAGGER=1 ;;
-      "jwt-cpp")      F_JWT_CPP=1;;
+      "jwt-cpp")      F_JWT_CPP=1 ;;
+      "ranger-kms")   F_RANGER_KMS=1 ;;
       *)              echo "Unknown module: $arg"; exit 1 ;;
     esac
   done
@@ -117,7 +118,11 @@ fi
 
 finish() {
   # Run the post-flight checks.
-  $TP_DIR/postflight.py
+  local postflight_args=
+  if [ -n "$F_TSAN" ]; then
+    postflight_args="$postflight_args --tsan"
+  fi
+  $TP_DIR/postflight.py $postflight_args
 
   echo "---------------------"
   echo "Thirdparty dependencies '$ARGS_TO_PRINT' built and installed successfully"
@@ -174,11 +179,13 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
   # the Kudu build.
   if ! OPENSSL_CFLAGS=$(pkg-config --cflags openssl); then
     # If OpenSSL is built via Homebrew, pkg-config does not report on cflags.
-    homebrew_openssl_dir=/usr/local/opt/openssl
-    if [ -d $homebrew_openssl_dir ]; then
-      OPENSSL_CFLAGS="-I$homebrew_openssl_dir/include"
-      OPENSSL_LDFLAGS="-L$homebrew_openssl_dir/lib"
-    fi
+    homebrew_openssl_dirs=(/usr/local/opt/openssl /opt/homebrew/opt/openssl@1.1)
+    for homebrew_openssl_dir in "${homebrew_openssl_dirs[@]}"; do
+      if [ -d $homebrew_openssl_dir ]; then
+        OPENSSL_CFLAGS="-I$homebrew_openssl_dir/include"
+        OPENSSL_LDFLAGS="-L$homebrew_openssl_dir/lib"
+      fi
+    done
   fi
 
   # TSAN doesn't work on macOS. If it was explicitly asked for, respond with an
@@ -280,6 +287,18 @@ if [ -n "$F_COMMON" -o -n "$F_RANGER" ]; then
   # Symlink conf.dist to conf
   ln -nsf $PREFIX/opt/ranger/ews/webapp/WEB-INF/classes/conf.dist \
   $PREFIX/opt/ranger/ews/webapp/WEB-INF/classes/conf
+fi
+
+if [ -n "$F_COMMON" -o -n "$F_RANGER_KMS" ]; then
+  mkdir -p $PREFIX/opt
+  # Remove any hadoop jars included in the Ranger package to avoid unexpected
+  # runtime behavior due to different versions of hadoop jars.
+  rm -rf $RANGER_KMS_SOURCE/lib/hadoop-[a-z-]*.jar
+  ln -nsf $RANGER_KMS_SOURCE $PREFIX/opt/ranger-kms
+
+  # Symlink conf.dist to conf
+  ln -nsf $PREFIX/opt/ranger-kms/ews/webapp/WEB-INF/classes/conf.dist \
+  $PREFIX/opt/ranger-kms/ews/webapp/WEB-INF/classes/conf
 fi
 
 ### Build C dependencies without instrumentation

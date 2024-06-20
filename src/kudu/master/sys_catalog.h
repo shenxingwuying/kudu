@@ -19,11 +19,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gtest/gtest_prod.h>
 
 #include "kudu/common/schema.h"
@@ -101,6 +101,27 @@ class TServerStateVisitor {
                        const SysTServerStateEntryPB& metadata) = 0;
 };
 
+class TableInfoLoader : public TableVisitor {
+ public:
+  void Reset();
+
+  Status VisitTable(const std::string& table_id,
+                    const SysTablesEntryPB& metadata) override;
+
+  std::vector<scoped_refptr<TableInfo>> tables;
+};
+
+class TabletInfoLoader : public TabletVisitor {
+ public:
+  void Reset();
+
+  Status VisitTablet(const std::string& /*table_id*/,
+                     const std::string& tablet_id,
+                     const SysTabletsEntryPB& metadata) override;
+
+  std::vector<scoped_refptr<TabletInfo>> tablets;
+};
+
 // SysCatalogTable is a Kudu table that keeps track of the following
 // system information:
 //   * cluster id
@@ -157,6 +178,12 @@ class SysCatalogTable {
     CLUSTER_ID = 7            // Unique Cluster ID.
   };
 
+  enum SysCatalogOperation {
+    ADD,
+    UPDATE,
+    DELETE,
+  };
+
   // 'leader_cb_' is invoked whenever this node is elected as a leader
   // of the consensus configuration for this tablet, including for local standalone
   // master consensus configurations. It used to initialize leader state, submit any
@@ -189,7 +216,7 @@ class SysCatalogTable {
     std::vector<scoped_refptr<TabletInfo>> tablets_to_add;
     std::vector<scoped_refptr<TabletInfo>> tablets_to_update;
     std::vector<scoped_refptr<TabletInfo>> tablets_to_delete;
-    boost::optional<int64_t> hms_notification_log_event_id;
+    std::optional<int64_t> hms_notification_log_event_id;
   };
 
   // The way how actions are persisted into the system catalog table when

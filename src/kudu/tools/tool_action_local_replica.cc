@@ -22,13 +22,15 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <boost/container/flat_map.hpp>
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
@@ -77,13 +79,18 @@
 #include "kudu/tools/tool_action_common.h"
 #include "kudu/tserver/tablet_copy_client.h"
 #include "kudu/tserver/ts_tablet_manager.h"
+#include "kudu/util/countdown_latch.h"
 #include "kudu/util/env.h"
 #include "kudu/util/env_util.h"
 #include "kudu/util/faststring.h"
+#include "kudu/util/locks.h"
 #include "kudu/util/metrics.h"
+#include "kudu/util/monotime.h"
 #include "kudu/util/net/net_util.h"
 #include "kudu/util/pb_util.h"
 #include "kudu/util/status.h"
+#include "kudu/util/thread.h"
+#include "kudu/util/threadpool.h"
 
 namespace kudu {
 namespace rpc {
@@ -112,7 +119,32 @@ DEFINE_bool(ignore_nonexistent, false,
             "Whether to ignore non-existent tablet replicas when deleting: if "
             "set to 'true', the tool does not report an error if the requested "
             "tablet replica to remove is not found");
+DEFINE_string(src_fs_wal_dir, "",
+              "Source: Directory with write-ahead logs.");
+DEFINE_string(src_fs_data_dirs, "",
+              "Source: Comma-separated list of directories with data blocks. If this "
+              "is not specified, --src_fs_wal_dir will be used as the sole data "
+              "block directory.");
+DEFINE_string(src_fs_metadata_dir, "",
+              "Source: Directory with metadata. If this is not specified, for "
+              "compatibility with Kudu 1.6 and below, Kudu will check the "
+              "first entry of --dst_fs_data_dirs for metadata and use it as the "
+              "metadata directory if any exists. If none exists, --dst_fs_wal_dir "
+              "will be used as the metadata directory.");
+DEFINE_string(dst_fs_wal_dir, "",
+              "Destination: Directory with write-ahead logs.");
+DEFINE_string(dst_fs_data_dirs, "",
+              "Destination: Comma-separated list of directories with data blocks. If this "
+              "is not specified, --dst_fs_wal_dir will be used as the sole data "
+              "block directory.");
+DEFINE_string(dst_fs_metadata_dir, "",
+              "Destination: Directory with metadata. If this is not specified, for "
+              "compatibility with Kudu 1.6 and below, Kudu will check the "
+              "first entry of --dst_fs_data_dirs for metadata and use it as the "
+              "metadata directory if any exists. If none exists, --dst_fs_wal_dir "
+              "will be used as the metadata directory.");;
 
+DECLARE_int32(num_threads);
 DECLARE_int32(tablet_copy_download_threads_nums_per_session);
 
 using kudu::consensus::ConsensusMetadata;
@@ -133,13 +165,19 @@ using kudu::tablet::RowIteratorOptions;
 using kudu::tablet::RowSetMetadata;
 using kudu::tablet::TabletDataState;
 using kudu::tablet::TabletMetadata;
-using kudu::tserver::TSTabletManager;
+using kudu::tablet::TabletReplica;
+using kudu::tserver::LocalTabletCopyClient;
+using kudu::tserver::RemoteTabletCopyClient;
 using kudu::tserver::TabletCopyClient;
+using kudu::tserver::TabletCopyClientMetrics;
+using kudu::tserver::TSTabletManager;
 using std::cout;
 using std::endl;
 using std::map;
+using std::move;
 using std::pair;
 using std::shared_ptr;
+using std::set;
 using std::string;
 using std::unique_ptr;
 using std::vector;
@@ -168,6 +206,161 @@ constexpr const char* const kRaftPeersArgDesc =
 string Indent(int indent) {
   return string(indent, ' ');
 }
+} // anonymous namespace
+
+class TabletCopier {
+ public:
+  TabletCopier(set<string> tablet_ids_to_copy,
+               FsManager* dst_fs_manager,
+               scoped_refptr<ConsensusMetadataManager> dst_cmeta_manager,
+               HostPort source_addr) :
+                  tablet_ids_to_copy_(move(tablet_ids_to_copy)),
+                  dst_fs_manager_(dst_fs_manager),
+                  dst_cmeta_manager_(move(dst_cmeta_manager)),
+                  source_addr_(move(source_addr)),
+                  copy_type_(CopyType::FROM_REMOTE) {
+  }
+
+  TabletCopier(set<string> tablet_ids_to_copy,
+               FsManager* dst_fs_manager,
+               scoped_refptr<ConsensusMetadataManager> dst_cmeta_manager,
+               FsManager* src_fs_manager,
+               set<string> src_tablet_ids_set) :
+                  tablet_ids_to_copy_(move(tablet_ids_to_copy)),
+                  dst_fs_manager_(dst_fs_manager),
+                  dst_cmeta_manager_(move(dst_cmeta_manager)),
+                  src_fs_manager_(move(src_fs_manager)),
+                  src_tablet_ids_set_(move(src_tablet_ids_set)),
+                  copy_type_(CopyType::FROM_LOCAL) {
+  }
+
+  ~TabletCopier() = default;
+
+  Status CopyTablets() {
+    // Prepare to check copy progress.
+    int total_tablet_count = tablet_ids_to_copy_.size();
+    // 'lock' is used for protecting 'copying_replicas', 'failed_tablet_ids'
+    // and 'succeed_tablet_count'.
+    simple_spinlock lock;
+    set<TabletReplica*> copying_replicas;
+    set<string> failed_tablet_ids;
+    int succeed_tablet_count = 0;
+    if (copy_type_ == CopyType::FROM_LOCAL) {
+      for (auto tablet_id = tablet_ids_to_copy_.begin();
+          tablet_id != tablet_ids_to_copy_.end();) {
+        if (!ContainsKey(src_tablet_ids_set_, *tablet_id)) {
+          LOG(ERROR) << Substitute("Tablet $0 copy failed: not found in source filesystem.",
+                                   *tablet_id);
+          InsertOrDie(&failed_tablet_ids, *tablet_id);
+          tablet_id = tablet_ids_to_copy_.erase(tablet_id);
+        } else {
+          tablet_id++;
+        }
+      }
+    }
+
+    // Create a thread to obtain copy process periodically.
+    CountDownLatch latch(1);
+    scoped_refptr<Thread> check_thread;
+    RETURN_NOT_OK(Thread::Create("tool-tablet-copy", "check-progress",
+        [&] () {
+          while (!latch.WaitFor(MonoDelta::FromSeconds(10))) {
+            std::lock_guard<simple_spinlock> l(lock);
+            for (const auto& copying_replica : copying_replicas) {
+              LOG(INFO) << Substitute("Tablet $0 copy status: $1",
+                                      copying_replica->tablet_id(),
+                                      copying_replica->last_status());
+            }
+          }
+        }, &check_thread));
+
+    // Init TabletCopyClientMetrics.
+    MetricRegistry metric_registry;
+    scoped_refptr<MetricEntity> metric_entity(
+        METRIC_ENTITY_server.Instantiate(&metric_registry, "tool-tablet-copy"));
+    TabletCopyClientMetrics tablet_copy_client_metrics(metric_entity);
+
+    // Create a thread pool to copy tablets.
+    std::unique_ptr<ThreadPool> copy_pool;
+    ThreadPoolBuilder("tool-tablet-copy-pool")
+        .set_max_threads(FLAGS_num_threads)
+        .set_min_threads(FLAGS_num_threads)
+        .Build(&copy_pool);
+
+    shared_ptr<Messenger> messenger;
+    RETURN_NOT_OK(BuildMessenger("tablet_copy_client", &messenger));
+    // Start to copy tablets.
+    for (const auto& tablet_id : tablet_ids_to_copy_) {
+      RETURN_NOT_OK(copy_pool->Submit([&]() {
+        // 'fake_replica' is used for checking copy progress only.
+        scoped_refptr<TabletReplica> fake_replica(new TabletReplica());
+        {
+          std::lock_guard<simple_spinlock> l(lock);
+          LOG(WARNING) << "Start to copy tablet " << tablet_id;
+          InsertOrDie(&copying_replicas, fake_replica.get());
+        }
+        Status s;
+        unique_ptr<TabletCopyClient> client;
+        if (copy_type_ == CopyType::FROM_REMOTE) {
+          client.reset(new RemoteTabletCopyClient(tablet_id, dst_fs_manager_, dst_cmeta_manager_,
+                                                  messenger, &tablet_copy_client_metrics));
+          s = client->Start(source_addr_, nullptr);
+        } else {
+          CHECK_EQ(copy_type_, CopyType::FROM_LOCAL);
+          client.reset(new LocalTabletCopyClient(tablet_id, dst_fs_manager_,
+                                                 dst_cmeta_manager_, /* messenger */ nullptr,
+                                                 &tablet_copy_client_metrics, src_fs_manager_,
+                                                 /* tablet_copy_source_metrics */ nullptr));
+          s = client->Start(tablet_id, /* meta */ nullptr);
+        }
+        s = s.AndThen([&] {
+          return client->FetchAll(fake_replica);
+        }).AndThen([&] {
+          return client->Finish();
+        });
+        {
+          std::lock_guard<simple_spinlock> l(lock);
+          if (!s.ok()) {
+            InsertOrDie(&failed_tablet_ids, tablet_id);
+            LOG(ERROR) << Substitute("Tablet $0 copy failed: $1.", tablet_id, s.ToString());
+          } else {
+            succeed_tablet_count++;
+            LOG(INFO) << Substitute("Tablet $0 copy succeed.", tablet_id);
+          }
+          copying_replicas.erase(fake_replica.get());
+
+          LOG(INFO) << Substitute("$0/$1 tablets, $2 bytes copied, include $3 failed tablets.",
+                                  succeed_tablet_count + failed_tablet_ids.size(),
+                                  total_tablet_count,
+                                  tablet_copy_client_metrics.bytes_fetched->value(),
+                                  failed_tablet_ids.size());
+        }
+        return Status::OK();
+      }));
+    }
+
+    copy_pool->Wait();
+    copy_pool->Shutdown();
+    latch.CountDown();
+    check_thread->Join();
+
+    return Status::OK();
+  }
+
+ private:
+  enum CopyType {
+    FROM_LOCAL,
+    FROM_REMOTE,
+  };
+
+  set<string> tablet_ids_to_copy_;
+  FsManager* dst_fs_manager_;
+  scoped_refptr<consensus::ConsensusMetadataManager> dst_cmeta_manager_;
+  FsManager* src_fs_manager_;
+  const set<string> src_tablet_ids_set_;
+  const HostPort source_addr_;
+  CopyType copy_type_;
+};
 
 Status FsInit(bool skip_block_manager, unique_ptr<FsManager>* fs_manager) {
   FsManagerOpts fs_opts;
@@ -386,29 +579,65 @@ Status SetRaftTerm(const RunnerContext& context) {
 
 Status CopyFromRemote(const RunnerContext& context) {
   // Parse the tablet ID and source arguments.
-  const string& tablet_id = FindOrDie(context.required_args, kTabletIdArg);
-  const string& rpc_address = FindOrDie(context.required_args, "source");
+  const string& tablet_ids_str = FindOrDie(context.required_args, kTabletIdsCsvArg);
+  set<string> tablet_ids_to_copy = Split(tablet_ids_str, ",", strings::SkipWhitespace());
+  if (tablet_ids_to_copy.empty())
+    return Status::InvalidArgument("no tablet identifiers provided");
 
+  const string& rpc_address = FindOrDie(context.required_args, "source");
   HostPort hp;
   RETURN_NOT_OK(ParseHostPortString(rpc_address, &hp));
 
-  // Copy the tablet over.
   FsManager fs_manager(Env::Default(), FsManagerOpts());
   RETURN_NOT_OK(fs_manager.Open());
   scoped_refptr<ConsensusMetadataManager> cmeta_manager(new ConsensusMetadataManager(&fs_manager));
-  shared_ptr<Messenger> messenger;
-  RETURN_NOT_OK(BuildMessenger("tablet_copy_client", &messenger));
-  TabletCopyClient client(tablet_id, &fs_manager, cmeta_manager,
-                          messenger, nullptr /* no metrics */);
-  RETURN_NOT_OK(client.Start(hp, nullptr));
-  RETURN_NOT_OK(client.FetchAll(nullptr));
-  return client.Finish();
+
+  TabletCopier copier(move(tablet_ids_to_copy), &fs_manager, move(cmeta_manager), move(hp));
+  return copier.CopyTablets();
+}
+
+Status CopyFromLocal(const RunnerContext& context) {
+  const string& tablet_ids_str = FindOrDie(context.required_args, kTabletIdsCsvArg);
+  set<string> tablet_ids_to_copy = strings::Split(tablet_ids_str, ",", strings::SkipEmpty());
+  if (tablet_ids_to_copy.empty()) {
+    return Status::InvalidArgument("no tablet identifiers provided");
+  }
+
+  // Open source filesystem.
+  FsManagerOpts src_fs_mgr_opt;
+  src_fs_mgr_opt.wal_root = FLAGS_src_fs_wal_dir;
+  src_fs_mgr_opt.metadata_root = FLAGS_src_fs_metadata_dir;
+  src_fs_mgr_opt.data_roots = strings::Split(FLAGS_src_fs_data_dirs, ",", strings::SkipEmpty());
+  FsManager src_fs_manager(Env::Default(), src_fs_mgr_opt);
+  RETURN_NOT_OK(src_fs_manager.Open());
+
+  // Open destination filesystem.
+  FsManagerOpts dst_fs_mgr_opt;
+  dst_fs_mgr_opt.wal_root = FLAGS_dst_fs_wal_dir;
+  dst_fs_mgr_opt.metadata_root = FLAGS_dst_fs_metadata_dir;
+  dst_fs_mgr_opt.data_roots = strings::Split(FLAGS_dst_fs_data_dirs, ",", strings::SkipEmpty());
+  FsManager dst_fs_manager(Env::Default(), dst_fs_mgr_opt);
+  RETURN_NOT_OK(dst_fs_manager.Open());
+  scoped_refptr<ConsensusMetadataManager> dst_cmeta_manager(
+      new ConsensusMetadataManager(&dst_fs_manager));
+
+  // Get all tablet ids in source filesystem.
+  vector<string> src_tablet_ids;
+  RETURN_NOT_OK(src_fs_manager.ListTabletIds(&src_tablet_ids));
+  set<string> src_tablet_ids_set(src_tablet_ids.begin(), src_tablet_ids.end());
+
+  TabletCopier copier(move(tablet_ids_to_copy),
+                      &dst_fs_manager,
+                      move(dst_cmeta_manager),
+                      &src_fs_manager,
+                      move(src_tablet_ids_set));
+  return copier.CopyTablets();
 }
 
 Status DeleteLocalReplica(const string& tablet_id,
                           FsManager* fs_manager,
                           const scoped_refptr<ConsensusMetadataManager>& cmeta_manager) {
-  boost::optional<OpId> last_logged_opid = boost::none;
+  std::optional<OpId> last_logged_opid = std::nullopt;
   TabletDataState state = TabletDataState::TABLET_DATA_DELETED;
   if (!FLAGS_clean_unsafe) {
     state = TabletDataState::TABLET_DATA_TOMBSTONED;
@@ -898,8 +1127,6 @@ unique_ptr<Mode> BuildDumpMode() {
       .Build();
 }
 
-} // anonymous namespace
-
 unique_ptr<Mode> BuildLocalReplicaMode() {
   unique_ptr<Action> print_replica_uuids =
       ActionBuilder("print_replica_uuids", &PrintReplicaUuids)
@@ -944,14 +1171,30 @@ unique_ptr<Mode> BuildLocalReplicaMode() {
 
   unique_ptr<Action> copy_from_remote =
       ActionBuilder("copy_from_remote", &CopyFromRemote)
-      .Description("Copy a tablet replica from a remote server")
-      .AddRequiredParameter({ kTabletIdArg, kTabletIdArgDesc })
+      .Description("Copy tablet replicas from a remote server")
+      .AddRequiredParameter({ kTabletIdsCsvArg, kTabletIdsCsvArgDesc })
       .AddRequiredParameter({ "source", "Source RPC address of "
                               "form hostname:port" })
       .AddOptionalParameter("fs_data_dirs")
       .AddOptionalParameter("fs_metadata_dir")
       .AddOptionalParameter("fs_wal_dir")
       .AddOptionalParameter("tablet_copy_download_threads_nums_per_session")
+      .AddOptionalParameter("num_threads")
+      .Build();
+
+  unique_ptr<Action> copy_from_local =
+      ActionBuilder("copy_from_local", &CopyFromLocal)
+      .Description("Copy tablet replicas from local filesystem. Before using this tool, you "
+          "MUST stop the master/tserver you want to copy from, and make sure --src_*_dir(s) and "
+          "--dst_*_dir(s) are exactly what whey should be.")
+      .AddRequiredParameter({ kTabletIdsCsvArg, kTabletIdsCsvArgDesc })
+      .AddOptionalParameter("src_fs_wal_dir")
+      .AddOptionalParameter("src_fs_metadata_dir")
+      .AddOptionalParameter("src_fs_data_dirs")
+      .AddOptionalParameter("dst_fs_wal_dir")
+      .AddOptionalParameter("dst_fs_metadata_dir")
+      .AddOptionalParameter("dst_fs_data_dirs")
+      .AddOptionalParameter("num_threads")
       .Build();
 
   unique_ptr<Action> list =
@@ -988,6 +1231,7 @@ unique_ptr<Mode> BuildLocalReplicaMode() {
   return ModeBuilder("local_replica")
       .Description("Operate on local tablet replicas via the local filesystem")
       .AddMode(std::move(cmeta))
+      .AddAction(std::move(copy_from_local))
       .AddAction(std::move(copy_from_remote))
       .AddAction(std::move(data_size))
       .AddAction(std::move(delete_local_replica))

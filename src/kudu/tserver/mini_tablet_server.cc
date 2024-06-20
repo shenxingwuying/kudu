@@ -17,11 +17,11 @@
 
 #include "kudu/tserver/mini_tablet_server.h"
 
+#include <optional>
 #include <ostream>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags_declare.h>
 #include <glog/logging.h>
 
@@ -52,6 +52,7 @@ DECLARE_bool(rpc_server_allow_ephemeral_ports);
 using kudu::tablet::TabletReplica;
 using kudu::consensus::RaftPeerPB;
 using kudu::consensus::RaftConfigPB;
+using std::nullopt;
 using std::pair;
 using std::string;
 using std::unique_ptr;
@@ -72,16 +73,23 @@ MiniTabletServer::MiniTabletServer(string fs_root,
   opts_.rpc_opts.rpc_bind_addresses = rpc_bind_addr.ToString();
   opts_.webserver_opts.bind_interface = rpc_bind_addr.host();
   opts_.webserver_opts.port = 0;
+  InitFsOpts(num_data_dirs, fs_root_, &opts_.fs_opts);
+}
+
+void MiniTabletServer::InitFsOpts(int num_data_dirs, const string& fs_root,
+                                  FsManagerOpts* fs_opts) {
+  CHECK(fs_opts);
   if (num_data_dirs == 1) {
-    opts_.fs_opts.wal_root = fs_root_;
-    opts_.fs_opts.data_roots = { fs_root_ };
+    fs_opts->wal_root = fs_root;
+    fs_opts->data_roots = { fs_root };
   } else {
     vector<string> fs_data_dirs;
+    fs_data_dirs.reserve(num_data_dirs);
     for (int dir = 0; dir < num_data_dirs; dir++) {
-      fs_data_dirs.emplace_back(JoinPathSegments(fs_root_, Substitute("data-$0", dir)));
+      fs_data_dirs.emplace_back(JoinPathSegments(fs_root, Substitute("data-$0", dir)));
     }
-    opts_.fs_opts.wal_root = JoinPathSegments(fs_root_, "wal");
-    opts_.fs_opts.data_roots = fs_data_dirs;
+    fs_opts->wal_root = JoinPathSegments(fs_root, "wal");
+    fs_opts->data_roots = fs_data_dirs;
   }
 }
 
@@ -119,6 +127,7 @@ void MiniTabletServer::Shutdown() {
 }
 
 Status MiniTabletServer::Restart() {
+  Shutdown();
   return Start();
 }
 
@@ -148,7 +157,7 @@ Status MiniTabletServer::AddTestTablet(const std::string& table_id,
 
   return server_->tablet_manager()->CreateNewTablet(
       table_id, tablet_id, partition.second, table_id,
-      schema_with_ids, partition.first, config, boost::none, boost::none, boost::none, nullptr);
+      schema_with_ids, partition.first, config, nullopt, nullopt, nullopt, nullptr);
 }
 
 vector<string> MiniTabletServer::ListTablets() const {

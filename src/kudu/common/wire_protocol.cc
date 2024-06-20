@@ -22,12 +22,13 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <ostream>
 #include <string>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <glog/logging.h>
 #include <google/protobuf/map.h>
 #include <google/protobuf/stubs/common.h>
@@ -50,7 +51,6 @@
 #include "kudu/gutil/walltime.h"
 #include "kudu/util/bitmap.h"
 #include "kudu/util/block_bloom_filter.h"
-#include "kudu/util/compression/compression.pb.h"
 #include "kudu/util/faststring.h"
 #include "kudu/util/memory/arena.h"
 #include "kudu/util/net/net_util.h"
@@ -60,21 +60,20 @@
 #include "kudu/util/slice.h"
 #include "kudu/util/string_case.h"
 
-namespace kudu {
-class BlockBloomFilterPB;
-}  // namespace kudu
-
 using google::protobuf::Map;
 using google::protobuf::RepeatedPtrField;
 using kudu::pb_util::SecureDebugString;
 using kudu::pb_util::SecureShortDebugString;
 using std::map;
+using std::optional;
 using std::string;
 using std::unordered_set;
 using std::vector;
 using strings::Substitute;
 
 namespace kudu {
+
+class BlockBloomFilterPB;
 
 void StatusToPB(const Status& status, AppStatusPB* pb) {
   pb->Clear();
@@ -119,6 +118,8 @@ void StatusToPB(const Status& status, AppStatusPB* pb) {
     pb->set_code(AppStatusPB::INCOMPLETE);
   } else if (status.IsEndOfFile()) {
     pb->set_code(AppStatusPB::END_OF_FILE);
+  } else if (status.IsImmutable()) {
+    pb->set_code(AppStatusPB::IMMUTABLE);
   } else {
     LOG(WARNING) << "Unknown error code translation from internal error "
                  << status.ToString() << ": sending UNKNOWN_ERROR";
@@ -182,6 +183,8 @@ Status StatusFromPB(const AppStatusPB& pb) {
       return Status::Incomplete(pb.message(), "", posix_code);
     case AppStatusPB::END_OF_FILE:
       return Status::EndOfFile(pb.message(), "", posix_code);
+    case AppStatusPB::IMMUTABLE:
+      return Status::Immutable(pb.message(), "", posix_code);
     case AppStatusPB::UNKNOWN_ERROR:
     default:
       LOG(WARNING) << "Unknown error code in status: " << SecureShortDebugString(pb);
@@ -229,6 +232,7 @@ void ColumnSchemaToPB(const ColumnSchema& col_schema, ColumnSchemaPB *pb, int fl
   pb->Clear();
   pb->set_name(col_schema.name());
   pb->set_is_nullable(col_schema.is_nullable());
+  pb->set_immutable(col_schema.is_immutable());
   DataType type = col_schema.type_info()->type();
   pb->set_type(type);
   // Only serialize precision and scale for decimal types.
@@ -268,7 +272,7 @@ void ColumnSchemaToPB(const ColumnSchema& col_schema, ColumnSchemaPB *pb, int fl
   }
 }
 
-Status ColumnSchemaFromPB(const ColumnSchemaPB& pb, boost::optional<ColumnSchema>* col_schema) {
+Status ColumnSchemaFromPB(const ColumnSchemaPB& pb, optional<ColumnSchema>* col_schema) {
   const void *write_default_ptr = nullptr;
   const void *read_default_ptr = nullptr;
   Slice write_default;
@@ -330,7 +334,9 @@ Status ColumnSchemaFromPB(const ColumnSchemaPB& pb, boost::optional<ColumnSchema
   // in protobuf is the empty string. So, it's safe to use pb.comment() directly
   // regardless of whether has_comment() is true or false.
   // https://developers.google.com/protocol-buffers/docs/proto#optional
+  bool immutable = pb.has_immutable() ? pb.immutable() : false;
   *col_schema = ColumnSchema(pb.name(), pb.type(), pb.is_nullable(),
+                             immutable,
                              read_default_ptr, write_default_ptr,
                              attributes, type_attributes, pb.comment());
   return Status::OK();
@@ -366,25 +372,25 @@ void ColumnSchemaDeltaToPB(const ColumnSchemaDelta& col_delta, ColumnSchemaDelta
 ColumnSchemaDelta ColumnSchemaDeltaFromPB(const ColumnSchemaDeltaPB& pb) {
   ColumnSchemaDelta col_delta(pb.name());
   if (pb.has_new_name()) {
-    col_delta.new_name = boost::optional<string>(pb.new_name());
+    col_delta.new_name = pb.new_name();
   }
   if (pb.has_default_value()) {
-    col_delta.default_value = boost::optional<Slice>(Slice(pb.default_value()));
+    col_delta.default_value = Slice(pb.default_value());
   }
   if (pb.has_remove_default()) {
     col_delta.remove_default = true;
   }
   if (pb.has_encoding()) {
-    col_delta.encoding = boost::optional<EncodingType>(pb.encoding());
+    col_delta.encoding = pb.encoding();
   }
   if (pb.has_compression()) {
-    col_delta.compression = boost::optional<CompressionType>(pb.compression());
+    col_delta.compression = pb.compression();
   }
   if (pb.has_block_size()) {
-    col_delta.cfile_block_size = boost::optional<int32_t>(pb.block_size());
+    col_delta.cfile_block_size = pb.block_size();
   }
   if (pb.has_new_comment()) {
-    col_delta.new_comment = boost::optional<string>(pb.new_comment());
+    col_delta.new_comment = pb.new_comment();
   }
   return col_delta;
 }
@@ -398,7 +404,7 @@ Status ColumnPBsToSchema(const RepeatedPtrField<ColumnSchemaPB>& column_pbs,
   int num_key_columns = 0;
   bool is_handling_key = true;
   for (const ColumnSchemaPB& pb : column_pbs) {
-    boost::optional<ColumnSchema> column;
+    optional<ColumnSchema> column;
     RETURN_NOT_OK(ColumnSchemaFromPB(pb, &column));
     columns.emplace_back(std::move(*column));
     if (pb.is_key()) {
@@ -556,7 +562,7 @@ void ColumnPredicateToPB(const ColumnPredicate& predicate,
 Status ColumnPredicateFromPB(const Schema& schema,
                              Arena* arena,
                              const ColumnPredicatePB& pb,
-                             boost::optional<ColumnPredicate>* predicate) {
+                             optional<ColumnPredicate>* predicate) {
   if (!pb.has_column()) {
     return Status::InvalidArgument("Column predicate must include a column", SecureDebugString(pb));
   }
@@ -677,10 +683,6 @@ Status ParseBoolConfig(const string& name, const string& value, bool* result) {
   *result = true_flag;
   return Status::OK();
 }
-
-static const std::string kTableHistoryMaxAgeSec = "kudu.table.history_max_age_sec";
-static const std::string kTableMaintenancePriority = "kudu.table.maintenance_priority";
-static const std::string kTableDisableCompaction = "kudu.table.disable_compaction";
 
 Status ExtraConfigPBFromPBMap(const Map<string, string>& configs, TableExtraConfigPB* pb) {
   static const unordered_set<string> kSupportedConfigs({kTableHistoryMaxAgeSec,

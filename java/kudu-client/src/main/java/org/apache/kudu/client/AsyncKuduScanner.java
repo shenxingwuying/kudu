@@ -689,7 +689,31 @@ public final class AsyncKuduScanner {
       new Callback<RowResultIterator, Response>() {
         @Override
         public RowResultIterator call(final Response resp) {
+          long lastPropagatedTimestamp = AsyncKuduClient.NO_TIMESTAMP;
+          if (readMode == ReadMode.READ_YOUR_WRITES &&
+              resp.scanTimestamp != AsyncKuduClient.NO_TIMESTAMP) {
+            // For READ_YOUR_WRITES mode, update the latest propagated timestamp
+            // with the chosen snapshot timestamp sent back from the server, to
+            // avoid unnecessarily wait for subsequent reads. Since as long as
+            // the chosen snapshot timestamp of the next read is greater than
+            // the previous one, the scan does not violate READ_YOUR_WRITES
+            // session guarantees.
+            lastPropagatedTimestamp = resp.scanTimestamp;
+          } else if (resp.propagatedTimestamp != AsyncKuduClient.NO_TIMESTAMP) {
+            // Otherwise we just use the propagated timestamp returned from
+            // the server as the latest propagated timestamp.
+            lastPropagatedTimestamp = resp.propagatedTimestamp;
+          }
+          if (lastPropagatedTimestamp != AsyncKuduClient.NO_TIMESTAMP) {
+            client.updateLastPropagatedTimestamp(lastPropagatedTimestamp);
+          }
           numRowsReturned += resp.data.getNumRows();
+          if (isFaultTolerant && resp.lastPrimaryKey != null) {
+            lastPrimaryKey = resp.lastPrimaryKey;
+          }
+          if (resp.resourceMetricsPb != null) {
+            resourceMetrics.update(resp.resourceMetricsPb);
+          }
           if (!resp.more) {  // We're done scanning this tablet.
             scanFinished();
             return resp.data;
@@ -817,6 +841,11 @@ public final class AsyncKuduScanner {
       buf.append(", endPrimaryKey=").append(Bytes.hex(endPrimaryKey));
     } else {
       buf.append(", endPrimaryKey=<end>");
+    }
+    if (lastPrimaryKey.length > 0) {
+      buf.append(", lastPrimaryKey=").append(Bytes.hex(lastPrimaryKey));
+    } else {
+      buf.append(", lastPrimaryKey=<last>");
     }
     buf.append(')');
     return buf.toString();

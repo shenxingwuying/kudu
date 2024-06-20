@@ -18,14 +18,16 @@
 #include "kudu/tools/tool_action.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
@@ -37,6 +39,7 @@
 #include "kudu/util/logging.h"
 #include "kudu/util/url-coding.h"
 
+using std::optional;
 using std::pair;
 using std::string;
 using std::unique_ptr;
@@ -71,44 +74,6 @@ string FakeDescribeOneFlag(const ActionArgsDescriptor::Arg& arg) {
 
 string BuildUsageString(const vector<Mode*>& chain) {
   return JoinMapped(chain, [](Mode* a){ return a->name(); }, " ");
-}
-
-
-// Append 'to_append' to 'dst', but hard-wrapped at 78 columns.
-// After any newline, 'continuation_indent' spaces are prepended.
-void AppendHardWrapped(StringPiece to_append,
-                       int continuation_indent,
-                       string* dst) {
-  const int kWrapColumns = 78;
-  DCHECK_LT(continuation_indent, kWrapColumns);
-
-  // The string we're appending to might not be already at a newline.
-  int last_line_length = 0;
-  auto newline_pos = dst->rfind('\n');
-  if (newline_pos != string::npos) {
-    last_line_length = dst->size() - newline_pos;
-  }
-
-  // Iterate through the words deciding where to wrap.
-  vector<StringPiece> words = strings::Split(to_append, " ");
-  if (words.empty()) return;
-
-  for (const auto& word : words) {
-    // If the next word won't fit on this line, break before we append it.
-    if (last_line_length + word.size() > kWrapColumns) {
-      dst->push_back('\n');
-      for (int i = 0; i < continuation_indent; i++) {
-        dst->push_back(' ');
-      }
-      last_line_length = continuation_indent;
-    }
-    word.AppendToString(dst);
-    dst->push_back(' ');
-    last_line_length += word.size() + 1;
-  }
-
-  // Remove the extra space that we added at the end.
-  dst->resize(dst->size() - 1);
 }
 
 string SpacePad(StringPiece s, int len) {
@@ -210,13 +175,13 @@ ActionBuilder& ActionBuilder::Description(const string& description) {
 }
 
 ActionBuilder& ActionBuilder::ExtraDescription(const string& extra_description) {
-  CHECK(!extra_description_.is_initialized());
+  CHECK(!extra_description_.has_value());
   extra_description_ = extra_description;
   return *this;
 }
 
 ActionBuilder& ActionBuilder::ProgramName(const string& program_name) {
-  CHECK(!program_name_.is_initialized());
+  CHECK(!program_name_.has_value());
   program_name_ = program_name;
   return *this;
 }
@@ -234,9 +199,10 @@ ActionBuilder& ActionBuilder::AddRequiredVariadicParameter(
   return *this;
 }
 
-ActionBuilder& ActionBuilder::AddOptionalParameter(string param,
-                                                   boost::optional<std::string> default_value,
-                                                   boost::optional<std::string> description) {
+ActionBuilder& ActionBuilder::AddOptionalParameter(
+    string param,
+    optional<std::string> default_value,
+    optional<std::string> description) {
 #ifndef NDEBUG
   // Make sure this gflag exists.
   string option;
@@ -273,7 +239,7 @@ Status Action::Run(const vector<Mode*>& chain,
         program_name_->c_str(),
         google::FlagSettingMode::SET_FLAGS_DEFAULT));
   }
-  kudu::InitGoogleLoggingSafe(program_name_.get_value_or(gflags::GetArgv0()).c_str());
+  kudu::InitGoogleLoggingSafe(program_name_.value_or(gflags::GetArgv0()).c_str());
   kudu::ValidateFlags();
 
   return runner_({ chain, this, required_args, variadic_args });
@@ -290,7 +256,7 @@ string Action::BuildHelp(const vector<Mode*>& chain,
     desc_msg += "\n";
   }
   if (args_.variadic) {
-    const ActionArgsDescriptor::Arg& param = args_.variadic.get();
+    const ActionArgsDescriptor::Arg& param = *args_.variadic;
     usage_msg += Substitute(" <$0>...", param.name);
     desc_msg += FakeDescribeOneFlag(param);
     desc_msg += "\n";
@@ -332,7 +298,7 @@ string Action::BuildHelp(const vector<Mode*>& chain,
   AppendHardWrapped(description_, 0, &msg);
   if (extra_description_) {
     msg += "\n\n";
-    AppendHardWrapped(extra_description_.get(), 0, &msg);
+    AppendHardWrapped(*extra_description_, 0, &msg);
   }
   msg += "\n\n";
   msg += desc_msg;
@@ -348,8 +314,7 @@ string Action::BuildHelpXML(const vector<Mode*>& chain) const {
   xml += Substitute("<description>$0</description>",
                     EscapeForHtmlToString(description()));
   xml += Substitute("<extra_description>$0</extra_description>",
-                    EscapeForHtmlToString(extra_description()
-                                              .get_value_or("")));
+                    EscapeForHtmlToString(extra_description().value_or("")));
   for (const auto& r : args().required) {
     usage += Substitute(" &lt;$0&gt;", r.name);
     xml += "<argument>";
@@ -362,7 +327,7 @@ string Action::BuildHelpXML(const vector<Mode*>& chain) const {
   }
 
   if (args().variadic) {
-    const ActionArgsDescriptor::Arg& v = args().variadic.get();
+    const ActionArgsDescriptor::Arg& v = *args().variadic;
     usage += Substitute(" &lt;$0&gt;...", v.name);
     xml += "<argument>";
     xml += "<kind>variadic</kind>";
@@ -424,5 +389,45 @@ void Action::SetOptionalParameterDefaultValues() const {
   }
 }
 
+void AppendHardWrapped(StringPiece to_append,
+                       int continuation_indent,
+                       string* dst) {
+  constexpr int kWrapColumns = 78;
+  DCHECK_LT(continuation_indent, kWrapColumns);
+
+  if (to_append.empty() && dst->empty()) return;
+
+  // The string we're appending to might not be already at a newline.
+  size_t last_line_length = dst->size();
+  auto newline_pos = dst->rfind('\n');
+  if (newline_pos != string::npos) {
+    last_line_length = dst->size() - newline_pos;
+  }
+  vector<StringPiece> lines = strings::Split(to_append, "\n");
+  for (const auto& line : lines) {
+    // Iterate through the words deciding where to wrap.
+    vector<StringPiece> words = strings::Split(line, " ");
+    if (words.empty()) continue;
+    for (const auto& word : words) {
+      // If the next word won't fit on this line, break before we append it.
+      if (last_line_length + word.size() > kWrapColumns) {
+        dst->push_back('\n');
+        for (int i = 0; i < continuation_indent; i++) {
+          dst->push_back(' ');
+        }
+        last_line_length = continuation_indent;
+      }
+      word.AppendToString(dst);
+      dst->push_back(' ');
+      last_line_length += word.size() + 1;
+    }
+    // Remove the extra space that we added at the end.
+    dst->resize(dst->size() - 1);
+    dst->push_back('\n');
+    last_line_length = continuation_indent;
+  }
+  // Remove the extra Enter key that we added at the end.
+  dst->resize(dst->size() - 1);
+}
 } // namespace tools
 } // namespace kudu

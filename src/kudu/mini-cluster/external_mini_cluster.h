@@ -23,13 +23,13 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <glog/logging.h>
 
 #include "kudu/common/common.pb.h"
@@ -48,6 +48,17 @@ class Env;
 class NodeInstancePB;
 class Sockaddr;
 class Subprocess;
+namespace ranger {
+class MiniRanger;
+}  // namespace ranger
+
+namespace rangerkms {
+class MiniRangerKMS;
+}  // namespace rangerkms
+
+namespace security {
+class KeyProvider;
+}  // namespace security
 
 namespace client {
 class KuduClient;
@@ -72,9 +83,9 @@ namespace rpc {
 class Messenger;
 } // namespace rpc
 
-namespace ranger {
-class MiniRanger;
-} // namespace ranger
+namespace postgres {
+class MiniPostgres;
+} // namespace postgres
 
 namespace server {
 class ServerStatusPB;
@@ -210,6 +221,21 @@ struct ExternalMiniClusterOptions {
   //
   // Default: false.
   bool enable_ranger;
+
+  // If true, set up a Ranger KMS service as part of this ExternalMiniCluster.
+  //
+  // Default: false.
+  bool enable_ranger_kms;
+
+  // Cluster key in Ranger.
+  //
+  // Default: "".
+  std::string ranger_cluster_key;
+
+  // Cluster key version in Ranger.
+  //
+  // Default: "".
+  std::string ranger_cluster_key_version;
 
   // If true, enable data at rest encryption.
   //
@@ -373,8 +399,16 @@ class ExternalMiniCluster : public MiniCluster {
     return hms_.get();
   }
 
+  postgres::MiniPostgres* postgres() const {
+    return postgres_.get();
+  }
+
   ranger::MiniRanger* ranger() const {
     return ranger_.get();
+  }
+
+  rangerkms::MiniRangerKMS* ranger_kms() const {
+    return ranger_kms_.get();
   }
 
   const std::string& cluster_root() const {
@@ -402,8 +436,16 @@ class ExternalMiniCluster : public MiniCluster {
   // Returns the UUID for the tablet server 'ts_idx'.
   virtual std::string UuidForTS(int ts_idx) const override;
 
-  // Returns the Env on which the cluster operates.
+  // Returns the Env on which the cluster operates. If encryption is enabled,
+  // the encryption key is incorrect. For reading/writing files, ts_env() and
+  // master_env() should be used instead.
   virtual Env* env() const override;
+
+  // Returns the Env on which a specific tablet server operates.
+  virtual Env* ts_env(int ts_idx) const override;
+
+  // Returns the Env on which a specific master operates.
+  virtual Env* master_env(int master_idx) const override;
 
   BindMode bind_mode() const override {
     return opts_.bind_mode;
@@ -488,7 +530,7 @@ class ExternalMiniCluster : public MiniCluster {
   // 'dir_index' is an optional numeric suffix to be added to the default path.
   // If it is not specified, the cluster must be configured to use a single data dir.
   std::string GetDataPath(const std::string& daemon_id,
-                          boost::optional<uint32_t> dir_index = boost::none) const;
+                          std::optional<uint32_t> dir_index = std::nullopt) const;
 
   // Returns paths where 'daemon_id' is expected to store its data, each with a
   // numeric suffix appropriate for 'opts_.num_data_dirs'
@@ -539,7 +581,10 @@ class ExternalMiniCluster : public MiniCluster {
 #endif
   std::unique_ptr<MiniKdc> kdc_;
   std::unique_ptr<hms::MiniHms> hms_;
-  std::unique_ptr<ranger::MiniRanger> ranger_;
+  std::shared_ptr<postgres::MiniPostgres> postgres_;
+  std::shared_ptr<ranger::MiniRanger> ranger_;
+  std::unique_ptr<security::KeyProvider> key_provider_;
+  std::unique_ptr<rangerkms::MiniRangerKMS> ranger_kms_;
 
   std::shared_ptr<rpc::Messenger> messenger_;
 
@@ -551,11 +596,13 @@ class ExternalMiniCluster : public MiniCluster {
 struct ExternalDaemonOptions {
   ExternalDaemonOptions()
       : logtostderr(false),
-        enable_encryption(false) {
+        enable_encryption(false),
+        enable_ranger_kms(false) {
   }
 
   bool logtostderr;
   bool enable_encryption;
+  bool enable_ranger_kms;
   std::shared_ptr<rpc::Messenger> messenger;
   std::string block_manager_type;
   std::string exe;
@@ -566,6 +613,8 @@ struct ExternalDaemonOptions {
   std::string perf_record_filename;
   std::vector<std::string> extra_flags;
   MonoDelta start_process_timeout;
+  std::string ranger_kms_url;
+  std::string ranger_cluster_key;
 };
 
 class ExternalDaemon : public RefCountedThreadSafe<ExternalDaemon> {
@@ -623,6 +672,8 @@ class ExternalDaemon : public RefCountedThreadSafe<ExternalDaemon> {
                         const std::string& principal_base,
                         const std::string& bind_host);
 
+  Status SetServerKey();
+
   // Sends a SIGSTOP signal to the daemon.
   Status Pause() WARN_UNUSED_RESULT;
 
@@ -676,6 +727,8 @@ class ExternalDaemon : public RefCountedThreadSafe<ExternalDaemon> {
   // Return the options used to create the daemon.
   ExternalDaemonOptions opts() const { return opts_; }
 
+  virtual Env* env() const;
+
   void SetRpcBindAddress(HostPort rpc_hostport) {
     DCHECK(!IsProcessAlive());
     bound_rpc_ = std::move(rpc_hostport);
@@ -727,6 +780,8 @@ class ExternalDaemon : public RefCountedThreadSafe<ExternalDaemon> {
 
   std::unique_ptr<server::ServerStatusPB> status_;
 
+  std::unique_ptr<security::KeyProvider> key_provider_;
+
   // These capture the daemons parameters and running ports and
   // are used to Restart() the daemon with the same parameters.
   HostPort bound_rpc_;
@@ -767,6 +822,8 @@ class ExternalMaster : public ExternalDaemon {
   // Requires that it has previously been shutdown.
   virtual Status Restart() override WARN_UNUSED_RESULT;
 
+  Env* env() const override { return env_.get(); }
+
   // Blocks until the master's catalog manager is initialized and responding to
   // RPCs. If 'wait_mode' is WAIT_FOR_LEADERSHIP, will further block until the
   // master has been elected leader.
@@ -791,6 +848,7 @@ class ExternalMaster : public ExternalDaemon {
   // addresses in case of restart.
   static std::vector<std::string> GetCommonFlags(const HostPort& rpc_bind_addr,
                                                  const HostPort& http_addr = HostPort());
+  const std::unique_ptr<Env> env_;
   virtual ~ExternalMaster();
 };
 
@@ -805,8 +863,10 @@ class ExternalTabletServer : public ExternalDaemon {
   // Requires that it has previously been shutdown.
   virtual Status Restart() override WARN_UNUSED_RESULT;
 
+  Env* env() const override { return env_.get(); }
  private:
   const std::vector<HostPort> master_addrs_;
+  const std::unique_ptr<Env> env_;
 
   friend class RefCountedThreadSafe<ExternalTabletServer>;
   virtual ~ExternalTabletServer();

@@ -24,6 +24,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -31,7 +32,6 @@
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
@@ -72,6 +72,7 @@ DECLARE_int64(timeout_ms);
 DECLARE_string(columns);
 DECLARE_string(fs_wal_dir);
 DECLARE_string(fs_data_dirs);
+DECLARE_string(tables);
 
 DEFINE_string(master_uuid, "", "Permanent UUID of the master. Only needed to disambiguate in case "
                                "of multiple masters with same RPC address");
@@ -141,6 +142,56 @@ Status MasterSetFlag(const RunnerContext& context) {
   const string& flag = FindOrDie(context.required_args, kFlagArg);
   const string& value = FindOrDie(context.required_args, kValueArg);
   return SetServerFlag(address, Master::kDefaultPort, flag, value);
+}
+
+Status MasterSetAllMasterFlag(const RunnerContext& context) {
+  LeaderMasterProxy proxy;
+  RETURN_NOT_OK(proxy.Init(context));
+
+  ListMastersRequestPB req;
+  ListMastersResponsePB resp;
+
+  RETURN_NOT_OK((proxy.SyncRpc<ListMastersRequestPB, ListMastersResponsePB>(
+      req, &resp, "ListMasters", &MasterServiceProxy::ListMastersAsync)));
+
+  if (resp.has_error()) {
+    return StatusFromPB(resp.error().status());
+  }
+
+  const auto hostport_to_string = [] (const HostPortPB& hostport) {
+    return Substitute("$0:$1", hostport.host(), hostport.port());
+  };
+
+  vector<ServerEntryPB> masters;
+  std::copy_if(resp.masters().begin(), resp.masters().end(), std::back_inserter(masters),
+               [](const ServerEntryPB& master) {
+                 if (master.has_error()) {
+                   LOG(WARNING) << "Failed to retrieve info for master: "
+                                << StatusFromPB(master.error()).ToString();
+                   return false;
+                 }
+                 return true;
+               });
+  vector<string> master_addresses;
+  for (const auto& master : masters) {
+    master_addresses.push_back(JoinMapped(master.registration().rpc_addresses(),
+                     hostport_to_string, ","));
+  }
+  const string& flag = FindOrDie(context.required_args, kFlagArg);
+  const string& value = FindOrDie(context.required_args, kValueArg);
+  bool set_failed_flag = false;
+  for (const auto& addr : master_addresses) {
+      Status s = SetServerFlag(addr, Master::kDefaultPort, flag, value);
+      if (!s.ok()) {
+        set_failed_flag = true;
+        LOG(WARNING) << Substitute("Set config {$0:$1} for $2 failed, error message: $3",
+                                   flag, value, addr, s.ToString());
+      }
+  }
+  if (set_failed_flag) {
+    return Status::RuntimeError("Some Masters set flag failed!");
+  }
+  return Status::OK();
 }
 
 Status MasterStatus(const RunnerContext& context) {
@@ -302,20 +353,27 @@ Status CopyRemoteSystemCatalog(const string& kudu_abs_path,
     return Status::RuntimeError("Failed to find source master to copy system catalog");
   }
 
-  LOG(INFO) << Substitute("Deleting system catalog on $0", dst_master_str);
-  RETURN_NOT_OK_PREPEND(
-      Subprocess::Call(
-          { kudu_abs_path, "local_replica", "delete", master::SysCatalogTable::kSysCatalogTabletId,
-            "--fs_wal_dir=" + FLAGS_fs_wal_dir, "--fs_data_dirs=" + FLAGS_fs_data_dirs,
-            "-clean_unsafe" }),
-      "Failed to delete system catalog");
-
-  LOG(INFO) << Substitute("Copying system catalog from master $0", src_master);
-  RETURN_NOT_OK_PREPEND(
-      Subprocess::Call(
+  vector<string> delete_args =
+      { kudu_abs_path, "local_replica", "delete", master::SysCatalogTable::kSysCatalogTabletId,
+        "--fs_wal_dir=" + FLAGS_fs_wal_dir, "--fs_data_dirs=" + FLAGS_fs_data_dirs,
+        "-clean_unsafe" };
+  vector<string> copy_args =
       { kudu_abs_path, "local_replica", "copy_from_remote",
         master::SysCatalogTable::kSysCatalogTabletId, src_master,
-        "--fs_wal_dir=" + FLAGS_fs_wal_dir, "--fs_data_dirs=" + FLAGS_fs_data_dirs }),
+        "--fs_wal_dir=" + FLAGS_fs_wal_dir, "--fs_data_dirs=" + FLAGS_fs_data_dirs };
+
+  if (Env::Default()->IsEncryptionEnabled()) {
+    delete_args.emplace_back("--encrypt_data_at_rest=true");
+    copy_args.emplace_back("--encrypt_data_at_rest=true");
+  }
+
+  LOG(INFO) << Substitute("Deleting system catalog on $0", dst_master_str);
+  RETURN_NOT_OK_PREPEND(
+      Subprocess::Call(delete_args),
+      "Failed to delete system catalog");
+  LOG(INFO) << Substitute("Copying system catalog from master $0", src_master);
+  RETURN_NOT_OK_PREPEND(
+      Subprocess::Call(copy_args),
       "Failed to copy system catalog");
 
   return Status::OK();
@@ -704,7 +762,7 @@ unique_ptr<Mode> BuildMasterMode() {
         ClusterActionBuilder("refresh", &RefreshAuthzCache)
         .Description("Refresh the authorization policies")
         .AddOptionalParameter(
-            "force", boost::none,
+            "force", std::nullopt,
             string(
                 "Ignore mismatches of the specified and the actual lists "
                 "of master addresses in the cluster"))
@@ -768,6 +826,16 @@ unique_ptr<Mode> BuildMasterMode() {
         .AddOptionalParameter("force")
         .Build();
     builder.AddAction(std::move(set_flag));
+  }
+  {
+    unique_ptr<Action> set_flag_for_all =
+        ClusterActionBuilder("set_flag_for_all", &MasterSetAllMasterFlag)
+        .Description("Change a gflag value for all Kudu Masters in the cluster")
+        .AddRequiredParameter({ kFlagArg, "Name of the gflag" })
+        .AddRequiredParameter({ kValueArg, "New value for the gflag" })
+        .AddOptionalParameter("force")
+        .Build();
+    builder.AddAction(std::move(set_flag_for_all));
   }
   {
     unique_ptr<Action> status =
@@ -846,30 +914,33 @@ unique_ptr<Mode> BuildMasterMode() {
   }
 
   {
-    const char* rebuild_extra_description = "Attempts to create on-disk metadata\n"
-        "that can be used by a non-replicated master to recover a Kudu cluster\n"
-        "that has permanently lost its masters. It has a number of limitations:\n"
-        " - Security metadata like cryptographic keys are not rebuilt. Tablet servers\n"
-        "   and clients must be restarted before starting the new master in order to\n"
-        "   communicate with the new master.\n"
-        " - Table IDs are known only by the masters. Reconstructed tables will have\n"
-        "   new IDs.\n"
-        " - If a create, delete, or alter table was in progress when the masters were lost,\n"
-        "   it may not be possible to restore the table.\n"
-        " - If all replicas of a tablet are missing, it may not be able to recover the\n"
-        "   table fully. Moreover, the rebuild tool cannot detect that a tablet is\n"
-        "   missing.\n"
-        " - It's not possible to determine the replication factor of a table from tablet\n"
-        "   server metadata. The rebuild tool sets the replication factor of each\n"
-        "   table to --default_num_replicas instead.\n"
-        " - It's not possible to determine the next column id for a table from tablet\n"
-        "   server metadata. Instead, the rebuilt tool sets the next column id to\n"
-        "   a very large number.\n"
-        " - Table metadata like comments, owners, and configurations are not stored on\n"
-        "   tablet servers and are thus not restored.\n"
-        "WARNING: This tool is potentially unsafe. Only use it when there is no\n"
-        "possibility of recovering the original masters, and you know what you\n"
-        "are doing.";
+    const char* rebuild_extra_description = "Attempts to create or update on-disk metadata "
+        "that can be used by a non-replicated master to recover a Kudu cluster "
+        "that has permanently lost its masters. It has a number of limitations:\n\n"
+        " - Security metadata like cryptographic keys are not rebuilt. Tablet servers "
+        "and clients must be restarted before starting the new master in order to "
+        "communicate with the new master.\n\n"
+        " - Table IDs are known only by the masters. Reconstructed tables will have "
+        "new IDs.\n\n"
+        " - If a create, delete, or alter table was in progress when the masters were lost, "
+        "it may not be possible to restore the table.\n\n"
+        " - If all replicas of a tablet are missing, it may not be able to recover the "
+        "table fully. Moreover, the rebuild tool cannot detect that a tablet is "
+        "missing.\n\n"
+        " - It's not possible to determine the replication factor of a table from tablet "
+        "server metadata. The rebuild tool sets the replication factor of each "
+        "table to --default_num_replicas instead.\n\n"
+        " - It's not possible to determine the next column id for a table from tablet "
+        "server metadata. Instead, the rebuilt tool sets the next column id to "
+        "a very large number.\n\n"
+        " - Table metadata like comments, owners, and configurations are not stored on "
+        "tablet servers and are thus not restored.\n\n"
+        " - Without '--tables', the tool will build a brand new syscatalog table based on "
+        "tablet data on tablet server metadata.\n\n"
+        " - With '--tables', the tool will update specific tables in current syscatalog.\n\n"
+        "WARNING: This tool is potentially unsafe. Only use it when there is no "
+        "possibility of recovering the original masters, and you know what you "
+        "are doing.\n";
     unique_ptr<Action> unsafe_rebuild =
         ActionBuilder("unsafe_rebuild", &RebuildMaster)
         .Description("Rebuild a Kudu master from tablet server metadata")
@@ -880,6 +951,7 @@ unique_ptr<Mode> BuildMasterMode() {
         .AddOptionalParameter("fs_data_dirs")
         .AddOptionalParameter("fs_metadata_dir")
         .AddOptionalParameter("fs_wal_dir")
+        .AddOptionalParameter("tables")
         .Build();
     builder.AddAction(std::move(unsafe_rebuild));
   }

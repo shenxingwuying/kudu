@@ -20,8 +20,8 @@
 #include <gflags/gflags.h>
 
 #include "kudu/gutil/macros.h"
-#include "kudu/util/flag_tags.h"
 #include "kudu/util/env.h"
+#include "kudu/util/flag_tags.h"
 
 DEFINE_string(server_dump_info_path, "",
               "Path into which the server information will be "
@@ -41,6 +41,25 @@ DEFINE_int32(metrics_log_interval_ms, 60000,
              "value, then metrics logging will be disabled.");
 TAG_FLAG(metrics_log_interval_ms, advanced);
 
+DEFINE_string(test_server_key, "",
+              "Server key in plain-text to be persisted into the instance file. "
+              "It is only used when creating the file system, it's disregarded on "
+              "consecutive startups. It should only be used in tests.");
+TAG_FLAG(test_server_key, hidden);
+
+
+DEFINE_string(test_server_key_iv, "",
+              "Server key IV in plain-text to be persisted into the instance file. "
+              "It is only used when creating the file system, it's disregarded on "
+              "consecutive startups. It should only be used in tests.");
+TAG_FLAG(test_server_key_iv, hidden);
+
+
+DEFINE_string(test_server_key_version, "",
+              "Server key version in plain-text to be persisted into the instance file. "
+              "It is only used when creating the file system, it's disregarded on "
+              "consecutive startups. It should only be used in tests.");
+TAG_FLAG(test_server_key_version, hidden);
 namespace kudu {
 namespace server {
 
@@ -48,7 +67,10 @@ ServerBaseOptions::ServerBaseOptions()
   : env(Env::Default()),
     dump_info_path(FLAGS_server_dump_info_path),
     dump_info_format(FLAGS_server_dump_info_format),
-    metrics_log_interval_ms(FLAGS_metrics_log_interval_ms) {
+    metrics_log_interval_ms(FLAGS_metrics_log_interval_ms),
+    server_key(FLAGS_test_server_key),
+    server_key_iv(FLAGS_test_server_key_iv),
+    server_key_version(FLAGS_test_server_key_version) {
 }
 
 } // namespace server

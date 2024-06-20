@@ -20,11 +20,11 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <glog/logging.h>
 
 #include "kudu/common/row_changelist.h"
@@ -161,8 +161,8 @@ class SelectedDeltas {
 
   // All tracked deltas, indexed by row ordinal.
   //
-  // If an element is boost::none, there are no deltas for that row.
-  std::vector<boost::optional<DeltaPair>> rows_;
+  // If an element is std::nullopt, there are no deltas for that row.
+  std::vector<std::optional<DeltaPair>> rows_;
 };
 
 // Interface for the pieces of the system that track deltas/updates.
@@ -340,7 +340,7 @@ class DeltaIterator : public PreparedDeltas {
     // Prepare a batch of deltas for applying. All deltas in the batch will be
     // decoded. Operations affecting row data (i.e. UPDATEs and REINSERTs) will
     // be coalesced into a column-major data structure suitable for
-    // ApplyUpdates. Operations affecting row lifecycle (i.e. DELETES and
+    // ApplyUpdates. Operations affecting row lifecycle (i.e. DELETEs and
     // REINSERTs) will be coalesced into a row-major data structure suitable for ApplyDeletes.
     //
     // On success, ApplyUpdates and ApplyDeltas will be callable.
@@ -362,7 +362,7 @@ class DeltaIterator : public PreparedDeltas {
   virtual Status PrepareBatch(size_t nrows, int prepare_flags) = 0;
 
   // Returns true if there are any more rows left in this iterator.
-  virtual bool HasNext() = 0;
+  virtual bool HasNext() const = 0;
 
   // Return a string representation suitable for debug printouts.
   virtual std::string ToString() const = 0;
@@ -464,7 +464,7 @@ class DeltaPreparer : public PreparedDeltas {
   bool MayHaveDeltas() const override;
 
   rowid_t cur_prepared_idx() const { return cur_prepared_idx_; }
-  boost::optional<rowid_t> last_added_idx() const { return last_added_idx_; }
+  std::optional<rowid_t> last_added_idx() const { return last_added_idx_; }
   const RowIteratorOptions& opts() const { return opts_; }
 
   int64_t deltas_selected() const {
@@ -492,7 +492,7 @@ class DeltaPreparer : public PreparedDeltas {
   //
   // 'cur_row_idx' may be unset when there is no new row index, such as when
   // called upon completion of an entire batch of deltas (i.e. from Finish()).
-  void MaybeProcessPreviousRowChange(boost::optional<rowid_t> cur_row_idx);
+  void MaybeProcessPreviousRowChange(std::optional<rowid_t> cur_row_idx);
 
   // Update the deletion state of the current row being processed based on 'op'.
   void UpdateDeletionState(RowChangeList::ChangeType op);
@@ -507,7 +507,7 @@ class DeltaPreparer : public PreparedDeltas {
   rowid_t prev_prepared_idx_;
 
   // The index of the row last added in AddDelta(), if one exists.
-  boost::optional<rowid_t> last_added_idx_;
+  std::optional<rowid_t> last_added_idx_;
 
   // Whether there are any prepared blocks.
   int prepared_flags_;
@@ -558,7 +558,7 @@ class DeltaPreparer : public PreparedDeltas {
 
   // Used for PREPARED_FOR_APPLY mode.
   //
-  // Set to true in all of the spots where deleted, reinserted_, and updates_by_col_
+  // Set to true in all of the spots where deleted_, reinserted_, and updates_by_col_
   // are modified.
   bool may_have_deltas_;
 

@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <type_traits>
@@ -28,7 +29,6 @@
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <glog/logging.h>
 #include <sparsehash/dense_hash_map>
 
@@ -48,6 +48,7 @@
 
 namespace kudu {
 class Schema;
+
 typedef std::shared_ptr<Schema> SchemaPtr;
 }  // namespace kudu
 
@@ -66,7 +67,6 @@ typedef std::shared_ptr<Schema> SchemaPtr;
                                  << (s2).ToString(); \
   } while (0)
 
-template <class X> struct GoodFastHash;
 
 namespace kudu {
 
@@ -179,24 +179,24 @@ public:
 
   const std::string name;
 
-  boost::optional<std::string> new_name;
+  std::optional<std::string> new_name;
 
   // NB: these properties of a column cannot be changed yet,
   // ergo type and nullable should always be empty.
   // TODO(wdberkeley) allow changing of type and nullability
-  boost::optional<DataType> type;
+  std::optional<DataType> type;
 
-  boost::optional<bool> nullable;
+  std::optional<bool> nullable;
 
-  boost::optional<Slice> default_value;
+  std::optional<Slice> default_value;
 
   bool remove_default;
 
-  boost::optional<EncodingType> encoding;
-  boost::optional<CompressionType> compression;
-  boost::optional<int32_t> cfile_block_size;
+  std::optional<EncodingType> encoding;
+  std::optional<CompressionType> compression;
+  std::optional<int32_t> cfile_block_size;
 
-  boost::optional<std::string> new_comment;
+  std::optional<std::string> new_comment;
 };
 
 // The schema for a given column.
@@ -208,6 +208,8 @@ class ColumnSchema {
   // name: column name
   // type: column type (e.g. UINT8, INT32, STRING, ...)
   // is_nullable: true if a row value can be null
+  // is_immutable: true if the column is immutable.
+  //    Immutable column means the cell value can not be updated after the first insert.
   // read_default: default value used on read if the column was not present before alter.
   //    The value will be copied and released on ColumnSchema destruction.
   // write_default: default value added to the row if the column value was
@@ -218,13 +220,15 @@ class ColumnSchema {
   // Example:
   //   ColumnSchema col_a("a", UINT32)
   //   ColumnSchema col_b("b", STRING, true);
+  //   ColumnSchema col_b("b", STRING, false, true);
   //   uint32_t default_i32 = -15;
-  //   ColumnSchema col_c("c", INT32, false, &default_i32);
+  //   ColumnSchema col_c("c", INT32, false, false, &default_i32);
   //   Slice default_str("Hello");
-  //   ColumnSchema col_d("d", STRING, false, &default_str);
+  //   ColumnSchema col_d("d", STRING, false, false, &default_str);
   ColumnSchema(std::string name,
                DataType type,
                bool is_nullable = false,
+               bool is_immutable = false,
                const void* read_default = nullptr,
                const void* write_default = nullptr,
                ColumnStorageAttributes attributes = ColumnStorageAttributes(),
@@ -233,6 +237,7 @@ class ColumnSchema {
       : name_(std::move(name)),
         type_info_(GetTypeInfo(type)),
         is_nullable_(is_nullable),
+        is_immutable_(is_immutable),
         read_default_(read_default ? std::make_shared<Variant>(type, read_default) : nullptr),
         attributes_(attributes),
         type_attributes_(type_attributes),
@@ -250,6 +255,10 @@ class ColumnSchema {
 
   bool is_nullable() const {
     return is_nullable_;
+  }
+
+  bool is_immutable() const {
+    return is_immutable_;
   }
 
   const std::string& name() const {
@@ -327,6 +336,7 @@ class ColumnSchema {
   bool EqualsType(const ColumnSchema& other) const {
     if (this == &other) return true;
     return is_nullable_ == other.is_nullable_ &&
+           is_immutable_ == other.is_immutable_ &&
            type_info()->type() == other.type_info()->type() &&
            type_attributes().EqualsForType(other.type_attributes(), type_info()->type());
   }
@@ -436,6 +446,7 @@ class ColumnSchema {
   std::string name_;
   const TypeInfo* type_info_;
   bool is_nullable_;
+  bool is_immutable_;
   // use shared_ptr since the ColumnSchema is always copied around.
   std::shared_ptr<Variant> read_default_;
   std::shared_ptr<Variant> write_default_;
@@ -534,6 +545,7 @@ class Schema {
   // Return the number of bytes needed to represent
   // only the key portion of this schema.
   size_t key_byte_size() const {
+    DCHECK(initialized());
     return col_offsets_[num_key_columns_];
   }
 
@@ -545,6 +557,7 @@ class Schema {
     // division-by-a-constant gets optimized into multiplication,
     // the multiplication instruction has a significantly higher latency
     // than the simple load.
+    DCHECK_EQ(cols_.size(), name_to_index_.size());
     return name_to_index_.size();
   }
 
@@ -597,12 +610,11 @@ class Schema {
   // Return the column index corresponding to the given column,
   // or kColumnNotFound if the column is not in this schema.
   int find_column(const StringPiece col_name) const {
-    auto iter = name_to_index_.find(col_name);
+    const auto iter = name_to_index_.find(col_name);
     if (PREDICT_FALSE(iter == name_to_index_.end())) {
       return kColumnNotFound;
-    } else {
-      return (*iter).second;
     }
+    return iter->second;
   }
 
   // Returns true if the schema contains nullable columns
@@ -622,8 +634,9 @@ class Schema {
 
   // Returns the list of primary key column IDs.
   std::vector<ColumnId> get_key_column_ids() const {
-    return std::vector<ColumnId>(
-        col_ids_.begin(), col_ids_.begin() + num_key_columns_);
+    DCHECK_LE(num_key_columns_, col_ids_.size());
+    return std::vector<ColumnId>(col_ids_.begin(),
+                                 col_ids_.begin() + num_key_columns_);
   }
 
   // Return true if this Schema is initialized and valid.
@@ -717,15 +730,19 @@ class Schema {
 
   // Return the projection of this schema which contains only
   // the key columns.
-  // TODO: this should take a Schema* out-parameter to avoid an
+  //
+  // TODO(todd): this should take a Schema* out-parameter to avoid an
   // extra copy of the ColumnSchemas.
-  // TODO this should probably be cached since the key projection
+  //
+  // TODO(dralves): this should probably be cached since the key projection
   // is not supposed to change, for a single schema.
   Schema CreateKeyProjection() const {
+    DCHECK_LE(num_key_columns_, cols_.size());
     std::vector<ColumnSchema> key_cols(cols_.begin(),
-                                  cols_.begin() + num_key_columns_);
+                                       cols_.begin() + num_key_columns_);
     std::vector<ColumnId> col_ids;
     if (!col_ids_.empty()) {
+      DCHECK_LE(num_key_columns_, col_ids_.size());
       col_ids.assign(col_ids_.begin(), col_ids_.begin() + num_key_columns_);
     }
 
@@ -869,7 +886,7 @@ class Schema {
     const bool use_column_ids = base_schema.has_column_ids() && has_column_ids();
 
     int proj_idx = 0;
-    for (int i = 0; i < num_columns(); ++i) {
+    for (size_t i = 0; i < num_columns(); ++i) {
       const ColumnSchema& col_schema = cols_[i];
 
       // try to lookup the column by ID if present or just by name.
@@ -1038,16 +1055,23 @@ class SchemaBuilder {
   Status AddColumn(const ColumnSchema& column, bool is_key);
 
   Status AddColumn(const std::string& name, DataType type) {
-    return AddColumn(name, type, false, nullptr, nullptr);
+    return AddColumn(name, type, false, false, nullptr, nullptr);
   }
 
   Status AddNullableColumn(const std::string& name, DataType type) {
-    return AddColumn(name, type, true, nullptr, nullptr);
+    return AddColumn(name, type, true, false, nullptr, nullptr);
   }
 
   Status AddColumn(const std::string& name,
                    DataType type,
                    bool is_nullable,
+                   const void* read_default,
+                   const void* write_default);
+
+  Status AddColumn(const std::string& name,
+                   DataType type,
+                   bool is_nullable,
+                   bool is_immutable,
                    const void* read_default,
                    const void* write_default);
 

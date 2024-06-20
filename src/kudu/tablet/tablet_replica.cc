@@ -22,13 +22,13 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
@@ -184,6 +184,13 @@ TabletReplica::TabletReplica(
                        } : std::move(cb)),
       state_(NOT_INITIALIZED),
       last_status_("Tablet initializing...") {
+}
+
+TabletReplica::TabletReplica()
+    : apply_pool_(nullptr),
+      reload_txn_status_tablet_pool_(nullptr),
+      state_(SHUTDOWN),
+      last_status_("Fake replica created") {
 }
 
 TabletReplica::~TabletReplica() {

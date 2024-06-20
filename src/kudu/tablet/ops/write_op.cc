@@ -22,11 +22,12 @@
 #include <cstdint>
 #include <ctime>
 #include <new>
+#include <optional>
 #include <ostream>
+#include <type_traits>
 #include <vector>
 
 #include <boost/container/small_vector.hpp>
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <google/protobuf/arena.h>
@@ -73,6 +74,7 @@ TAG_FLAG(tablet_inject_latency_on_apply_write_op_ms, runtime);
 
 DECLARE_bool(enable_txn_partition_lock);
 
+using std::optional;
 using std::string;
 using std::unique_ptr;
 using std::vector;
@@ -81,11 +83,12 @@ using strings::Substitute;
 namespace kudu {
 namespace tablet {
 
-using pb_util::SecureShortDebugString;
 using consensus::CommitMsg;
 using consensus::DriverType;
 using consensus::ReplicateMsg;
 using consensus::WRITE_OP;
+using pb_util::SecureShortDebugString;
+using tserver::ResourceMetricsPB;
 using tserver::TabletServerErrorPB;
 using tserver::WriteRequestPB;
 using tserver::WriteResponsePB;
@@ -111,6 +114,7 @@ void AddWritePrivilegesForRowOperations(const RowOperationsPB::Type& op_type,
       InsertIfNotPresent(privileges, WritePrivilegeType::INSERT);
       break;
     case RowOperationsPB::UPSERT:
+    case RowOperationsPB::UPSERT_IGNORE:
       InsertIfNotPresent(privileges, WritePrivilegeType::INSERT);
       InsertIfNotPresent(privileges, WritePrivilegeType::UPDATE);
       break;
@@ -290,6 +294,11 @@ Status WriteOp::Apply(CommitMsg** commit_msg) {
 void WriteOp::Finish(OpResult result) {
   TRACE_EVENT0("op", "WriteOp::Finish");
 
+  if (result == Op::APPLIED) {
+    // Populate response metrics.
+    state()->FillResponseMetrics(type());
+  }
+
   state()->FinishApplyingOrAbort(result);
 
   if (PREDICT_FALSE(result == Op::ABORTED)) {
@@ -309,6 +318,7 @@ void WriteOp::Finish(OpResult result) {
     metrics->rows_inserted->IncrementBy(op_m.successful_inserts);
     metrics->insert_ignore_errors->IncrementBy(op_m.insert_ignore_errors);
     metrics->rows_upserted->IncrementBy(op_m.successful_upserts);
+    metrics->upsert_ignore_errors->IncrementBy(op_m.upsert_ignore_errors);
     metrics->rows_updated->IncrementBy(op_m.successful_updates);
     metrics->update_ignore_errors->IncrementBy(op_m.update_ignore_errors);
     metrics->rows_deleted->IncrementBy(op_m.successful_deletes);
@@ -348,7 +358,7 @@ WriteOpState::WriteOpState(TabletReplica* tablet_replica,
                            const tserver::WriteRequestPB *request,
                            const rpc::RequestIdPB* request_id,
                            tserver::WriteResponsePB *response,
-                           boost::optional<WriteAuthorizationContext> authz_ctx)
+                           optional<WriteAuthorizationContext> authz_ctx)
   : OpState(tablet_replica),
     request_(DCHECK_NOTNULL(request)),
     response_(response),
@@ -495,6 +505,13 @@ void WriteOpState::UpdateMetricsForOp(const RowOp& op) {
     case RowOperationsPB::UPSERT:
       DCHECK(!op.error_ignored);
       op_metrics_.successful_upserts++;
+      break;
+    case RowOperationsPB::UPSERT_IGNORE:
+      if (op.error_ignored) {
+        op_metrics_.upsert_ignore_errors++;
+      } else {
+        op_metrics_.successful_upserts++;
+      }
       break;
     case RowOperationsPB::UPDATE:
       DCHECK(!op.error_ignored);
@@ -653,6 +670,22 @@ string WriteOpState::ToString() const {
                     SecureShortDebugString(op_id()),
                     ts_str,
                     row_ops_str);
+}
+
+void WriteOpState::FillResponseMetrics(consensus::DriverType type) {
+  const auto& op_m = op_metrics_;
+  tserver::ResourceMetricsPB* resp_metrics = response_->mutable_resource_metrics();
+  resp_metrics->set_successful_inserts(op_m.successful_inserts);
+  resp_metrics->set_insert_ignore_errors(op_m.insert_ignore_errors);
+  resp_metrics->set_successful_upserts(op_m.successful_upserts);
+  resp_metrics->set_upsert_ignore_errors(op_m.upsert_ignore_errors);
+  resp_metrics->set_successful_updates(op_m.successful_updates);
+  resp_metrics->set_update_ignore_errors(op_m.update_ignore_errors);
+  resp_metrics->set_successful_deletes(op_m.successful_deletes);
+  resp_metrics->set_delete_ignore_errors(op_m.delete_ignore_errors);
+  if (type == consensus::LEADER && external_consistency_mode() == COMMIT_WAIT) {
+    resp_metrics->set_commit_wait_duration_usec(op_m.commit_wait_duration_usec);
+  }
 }
 
 }  // namespace tablet

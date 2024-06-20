@@ -28,6 +28,7 @@
 
 #include "kudu/client/authz_token_cache.h"
 #include "kudu/client/client.h"
+#include "kudu/common/partition.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/rpc/rpc_controller.h"
@@ -42,7 +43,6 @@
 namespace kudu {
 
 class DnsResolver;
-class PartitionSchema;
 class Sockaddr;
 
 namespace security {
@@ -83,6 +83,8 @@ class RemoteTabletServer;
 
 class KuduClient::Data {
  public:
+  static const uint32_t kSoftDeletedTableReservationSeconds = 60 * 60 * 24 * 7;
+
   Data();
   ~Data();
 
@@ -105,7 +107,8 @@ class KuduClient::Data {
                             const master::CreateTableRequestPB& req,
                             master::CreateTableResponsePB* resp,
                             const MonoTime& deadline,
-                            bool has_range_partition_bounds);
+                            bool has_range_partition_bounds,
+                            bool has_range_specific_hash_schema);
 
   static Status IsCreateTableInProgress(KuduClient* client,
                                         master::TableIdentifierPB table,
@@ -119,13 +122,20 @@ class KuduClient::Data {
   static Status DeleteTable(KuduClient* client,
                             const std::string& table_name,
                             const MonoTime& deadline,
-                            bool modify_external_catalogs = true);
+                            bool modify_external_catalogs = true,
+                            uint32_t reserve_seconds = kSoftDeletedTableReservationSeconds);
+
+  static Status RecallTable(KuduClient* client,
+                            const std::string& table_id,
+                            const MonoTime& deadline,
+                            const std::string& new_table_name = "");
 
   static Status AlterTable(KuduClient* client,
                            const master::AlterTableRequestPB& req,
                            master::AlterTableResponsePB* resp,
                            const MonoTime& deadline,
-                           bool has_add_drop_partition);
+                           bool has_add_drop_partition,
+                           bool adding_range_with_custom_hash_schema);
 
   static Status IsAlterTableInProgress(KuduClient* client,
                                        master::TableIdentifierPB table,
@@ -136,15 +146,24 @@ class KuduClient::Data {
                                           master::TableIdentifierPB table,
                                           const MonoTime& deadline);
 
+  struct PartitionWithTabletId {
+    std::string tablet_id;
+    Partition partition;
+  };
+
   struct TableInfo {
     std::string table_name;
     uint64_t live_row_count;
     int num_tablets;
     int num_replicas;
+    std::vector<PartitionWithTabletId> partition_with_tablet_info;
   };
+
   static Status ListTablesWithInfo(KuduClient* client,
                                    std::vector<TableInfo>* tables_info,
-                                   const std::string& filter);
+                                   const std::string& filter,
+                                   bool list_tablet_with_partition = false,
+                                   bool show_soft_deleted = false);
 
   // Open the table identified by 'table_identifier'.
   Status OpenTable(KuduClient* client,

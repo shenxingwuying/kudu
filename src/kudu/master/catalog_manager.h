@@ -26,6 +26,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -33,7 +34,6 @@
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <glog/logging.h>
 #include <gtest/gtest_prod.h>
 #include <sparsehash/dense_hash_map>
@@ -41,10 +41,12 @@
 #include "kudu/common/partition.h"
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/consensus/raft_consensus.h"
+#include "kudu/gutil/integral_types.h"
 #include "kudu/gutil/macros.h"
 #include "kudu/gutil/port.h"
 #include "kudu/gutil/ref_counted.h"
 #include "kudu/gutil/strings/stringpiece.h"
+#include "kudu/gutil/walltime.h"
 #include "kudu/master/master.pb.h"
 #include "kudu/tablet/metadata.pb.h"
 #include "kudu/tserver/tablet_replica_lookup.h"
@@ -62,7 +64,6 @@ namespace protobuf {
 class Arena;
 }  // namespace protobuf
 }  // namespace google
-template <class X> struct GoodFastHash;
 
 namespace kudu {
 
@@ -81,6 +82,7 @@ struct ColumnId;
 
 // Working around FRIEND_TEST() ugliness.
 namespace client {
+class ClientTest_TestSoftDeleteAndReserveTable_Test;
 class ServiceUnavailableRetryClientTest_CreateTable_Test;
 } // namespace client
 
@@ -114,6 +116,7 @@ class TabletReplica;
 namespace master {
 
 class AuthzProvider;
+class AutoLeaderRebalancerTask;
 class AutoRebalancerTask;
 class CatalogManagerBgTasks;
 class HmsNotificationLogListenerTask;
@@ -131,12 +134,17 @@ struct TableMetrics;
 // It wraps the underlying protobuf to add useful accessors.
 struct PersistentTabletInfo {
   bool is_running() const {
-    return pb.state() == SysTabletsEntryPB::RUNNING;
+    return pb.state() == SysTabletsEntryPB::RUNNING ||
+           pb.state() == SysTabletsEntryPB::SOFT_DELETED;
   }
 
   bool is_deleted() const {
     return pb.state() == SysTabletsEntryPB::REPLACED ||
            pb.state() == SysTabletsEntryPB::DELETED;
+  }
+
+  bool is_soft_deleted() const {
+    return pb.state() == SysTabletsEntryPB::SOFT_DELETED;
   }
 
   // Helper to set the state of the tablet with a custom message.
@@ -244,7 +252,24 @@ struct PersistentTableInfo {
 
   bool is_running() const {
     return pb.state() == SysTablesEntryPB::RUNNING ||
-           pb.state() == SysTablesEntryPB::ALTERING;
+           pb.state() == SysTablesEntryPB::ALTERING ||
+           pb.state() == SysTablesEntryPB::SOFT_DELETED;
+  }
+
+  bool is_soft_deleted() const {
+    return pb.state() == SysTablesEntryPB::SOFT_DELETED;
+  }
+
+  // Expired table must in SOFT_DELETED state.
+  bool is_expired() const {
+    if (!is_soft_deleted() ||
+        !pb.has_delete_timestamp() ||
+        !pb.has_soft_deleted_reserved_seconds()) {
+      return false;
+    }
+
+    return pb.delete_timestamp() + pb.soft_deleted_reserved_seconds()
+            <= static_cast<uint64_t>(WallTime_Now());
   }
 
   // Return the table's name.
@@ -262,8 +287,18 @@ struct PersistentTableInfo {
     return pb.comment();
   }
 
-  // Helper to set the state of the tablet with a custom message.
+  // Helper to set the state of the table with a custom message.
   void set_state(SysTablesEntryPB::State state, const std::string& msg);
+
+  // Helper to set the delete_timestamp of the table.
+  void set_delete_timestamp(int64 timestamp) {
+    pb.set_delete_timestamp(timestamp);
+  }
+
+  // Helper to set the soft_deleted_reserved_seconds of the table.
+  void set_soft_deleted_reserved_seconds(uint32 reserve_seconds) {
+    pb.set_soft_deleted_reserved_seconds(reserve_seconds);
+  }
 
   SysTablesEntryPB pb;
 };
@@ -291,6 +326,9 @@ class TableInfo : public RefCountedThreadSafe<TableInfo> {
   explicit TableInfo(std::string table_id);
 
   std::string ToString() const;
+
+  std::string table_name() const;
+
   uint32_t schema_version() const;
 
   // Return the table's ID. Does not require synchronization.
@@ -600,6 +638,12 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
 
   void Shutdown();
 
+  enum TableInfoMapType {
+    kNormalTableType = 1 << 0,        // normalized_table_names_map_
+    kSoftDeletedTableType = 1 << 1,   // soft_deleted_table_names_map_
+    kAllTableType = 0b00000011
+  };
+
   // Create a new Table with the specified attributes.
   //
   // The RPC context is provded for logging/tracing purposes,
@@ -612,7 +656,7 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   // provided, checks that the user is authorized to get such information.
   Status IsCreateTableDone(const IsCreateTableDoneRequestPB* req,
                            IsCreateTableDoneResponsePB* resp,
-                           boost::optional<const std::string&> user);
+                           const std::optional<std::string>& user);
 
   // Delete the specified table in response to a DeleteTableRequest RPC.
   //
@@ -622,11 +666,25 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
                         DeleteTableResponsePB* resp,
                         rpc::RpcContext* rpc) WARN_UNUSED_RESULT;
 
+  // Mark the table as soft-deleted with ability to restore it back within
+  // the soft-delete reservation period.
+  Status SoftDeleteTableRpc(const DeleteTableRequestPB& req,
+                            DeleteTableResponsePB* resp,
+                            rpc::RpcContext* rpc);
+
   // Delete the specified table in response to a 'DROP TABLE' HMS notification
   // log listener event.
   Status DeleteTableHms(const std::string& table_name,
                         const std::string& table_id,
                         int64_t notification_log_event_id) WARN_UNUSED_RESULT;
+
+  // Recall a table in response to a RecallDeletedTableRequestPB RPC.
+  //
+  // The RPC context is provided for logging/tracing purposes,
+  // but this function does not itself respond to the RPC.
+  Status RecallDeletedTableRpc(const RecallDeletedTableRequestPB& req,
+                               RecallDeletedTableResponsePB* resp,
+                               rpc::RpcContext* rpc) WARN_UNUSED_RESULT;
 
   // Alter the specified table in response to an AlterTableRequest RPC.
   //
@@ -640,16 +698,16 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   // notification log listener event.
   Status AlterTableHms(const std::string& table_id,
                         const std::string& table_name,
-                        const boost::optional<std::string>& new_table_name,
-                        const boost::optional<std::string>& new_table_owner,
-                        const boost::optional<std::string>& new_table_comment,
+                        const std::optional<std::string>& new_table_name,
+                        const std::optional<std::string>& new_table_owner,
+                        const std::optional<std::string>& new_table_comment,
                         int64_t notification_log_event_id) WARN_UNUSED_RESULT;
 
   // Get the information about an in-progress alter operation. If 'user' is
   // provided, checks that the user is authorized to get such information.
   Status IsAlterTableDone(const IsAlterTableDoneRequestPB* req,
                           IsAlterTableDoneResponsePB* resp,
-                          boost::optional<const std::string&> user);
+                          const std::optional<std::string>& user);
 
   // Get the information about the specified table. If 'user' is provided,
   // checks that the user is authorized to get such information. If a token
@@ -657,20 +715,21 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   // token will be attached to the response.
   Status GetTableSchema(const GetTableSchemaRequestPB* req,
                         GetTableSchemaResponsePB* resp,
-                        boost::optional<const std::string&> user,
-                        const security::TokenSigner* token_signer);
+                        const std::optional<std::string>& user,
+                        const security::TokenSigner* token_signer,
+                        TableInfoMapType map_type = kAllTableType);
 
   // Lists all the running tables. If 'user' is provided, only lists those that
   // the given user is authorized to see.
   Status ListTables(const ListTablesRequestPB* req,
                     ListTablesResponsePB* resp,
-                    boost::optional<const std::string&> user);
+                    const std::optional<std::string>& user);
 
   // Get table statistics. If 'user' is provided, checks if the user is
   // authorized to get such statistics.
   Status GetTableStatistics(const GetTableStatisticsRequestPB* req,
                             GetTableStatisticsResponsePB* resp,
-                            boost::optional<const std::string&> user);
+                            const std::optional<std::string>& user);
 
   // Lookup the tablets contained in the partition range of the request. If 'user'
   // is provided, checks that the user is authorized to get such information.
@@ -678,7 +737,7 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   // Returns an error if any of the tablets are not running.
   Status GetTableLocations(const GetTableLocationsRequestPB* req,
                            GetTableLocationsResponsePB* resp,
-                           boost::optional<const std::string&> user);
+                           const std::optional<std::string>& user);
 
   // Dictionary mapping tablet servers to indexes, so that when a GetTableLocations
   // response returns many replicas mapping to the same UUID, they can be sent
@@ -724,7 +783,7 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
                             master::ReplicaTypeFilter filter,
                             TabletLocationsPB* locs_pb,
                             TSInfosDict* ts_infos_dict,
-                            boost::optional<const std::string&> user);
+                            const std::optional<std::string>& user);
 
   // Replace the given tablet with a new, empty one. The replaced tablet is
   // deleted and its data is permanently lost.
@@ -766,8 +825,13 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   // Retrieve a table by ID, or null if no such table exists. May fail if the
   // catalog manager is not yet running. Caller must hold leader_lock_.
   //
-  // NOTE: This should only be used by tests or web-ui
-  Status GetTableInfo(const std::string& table_id, scoped_refptr<TableInfo> *table);
+  // NOTE: This should only be used by tests or web-ui.
+  Status GetTableInfo(const std::string& table_id, scoped_refptr<TableInfo>* table);
+
+  // Retrieve a table by table_name, or null if no such table exists.
+  //
+  // NOTE: This should only be used by tests.
+  void GetTableInfoByName(const std::string& table_name, scoped_refptr<TableInfo>* table);
 
   // Retrieve all known tables, even those that are not running. May fail if
   // the catalog manager is not yet running. Caller must hold leader_lock_.
@@ -821,6 +885,10 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
     return auto_rebalancer_.get();
   }
 
+  master::AutoLeaderRebalancerTask* auto_leader_rebalancer() const {
+    return auto_leader_rebalancer_.get();
+  }
+
   // Returns the normalized form of the provided table name.
   //
   // If the HMS integration is configured and the table name is a valid HMS
@@ -842,8 +910,25 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   Status InitiateMasterChangeConfig(ChangeConfigOp op, const HostPort& hp,
                                     const std::string& uuid, rpc::RpcContext* rpc);
 
+  // Check whether the reservation period for a soft-deleted table has expired.
+  Status GetTableStates(const TableIdentifierPB& table_identifier,
+                        TableInfoMapType map_type,
+                        bool* is_soft_deleted_table,
+                        bool* is_expired_table = nullptr);
+
+  // Move the deleted table to soft-deleted map for keep it temporarily.
+  Status MoveToSoftDeletedContainer(const DeleteTableRequestPB& req);
+
+  // Move the soft-deleted table to normal map for recall.
+  Status MoveToNormalContainer(const RecallDeletedTableRequestPB& req);
+
+  // Use for seach table with table name.
+  scoped_refptr<TableInfo> FindTableWithNameUnlocked(const std::string& table_name,
+                                                     TableInfoMapType map_type = kAllTableType);
+
  private:
-  // These tests call ElectedAsLeaderCb() directly.
+  // These tests calls ElectedAsLeaderCb() directly.
+  FRIEND_TEST(kudu::client::ClientTest, TestSoftDeleteAndReserveTable);
   FRIEND_TEST(MasterTest, TestShutdownDuringTableVisit);
   FRIEND_TEST(MasterTest, TestGetTableLocationsDuringRepeatedTableVisit);
   FRIEND_TEST(kudu::AuthzTokenTest, TestSingleMasterUnavailable);
@@ -866,10 +951,31 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
 
   void GetAllTabletsForTests(std::vector<scoped_refptr<TabletInfo>>* tablets);
 
+  // Soft delete the specified table and keep it for reserve time.
+  // If 'user' is provided, checks that the user is authorized to delete the table.
+  // Otherwise, it indicates its an internal operation (originates from catalog
+  // manager).
+  Status SoftDeleteTable(const DeleteTableRequestPB& req,
+                         DeleteTableResponsePB* resp,
+                         rpc::RpcContext* rpc);
+
+  // Recall the specified table. If the table is in soft-deleted state and within the
+  // reservation period, the operation make sense. Otherwise, the request will be
+  // rejected.
+  Status RecallDeletedTable(const RecallDeletedTableRequestPB& req,
+                            RecallDeletedTableResponsePB* resp,
+                            rpc::RpcContext* rpc);
+
   // Check whether the table's write limit is reached,
   // if true, the write permission should be disabled.
   static bool IsTableWriteDisabled(const scoped_refptr<TableInfo>& table,
                                    const std::string& table_name);
+
+  static Status ApplyAlterSchemaSteps(
+      const SysTablesEntryPB& current_pb,
+      const std::vector<AlterTableRequestPB::Step>& steps,
+      Schema* new_schema,
+      ColumnId* next_col_id);
 
   // Delete the specified table in the catalog. If 'user' is provided,
   // checks that the user is authorized to delete the table. Otherwise,
@@ -880,8 +986,8 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   // catalog.
   Status DeleteTable(const DeleteTableRequestPB& req,
                      DeleteTableResponsePB* resp,
-                     boost::optional<int64_t> hms_notification_log_event_id,
-                     boost::optional<const std::string&> user) WARN_UNUSED_RESULT;
+                     std::optional<int64_t> hms_notification_log_event_id,
+                     const std::optional<std::string>& user) WARN_UNUSED_RESULT;
 
   // Alter the specified table in the catalog. If 'user' is provided,
   // checks that the user is authorized to alter the table. Otherwise,
@@ -892,8 +998,8 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   // catalog along with the altered table metadata.
   Status AlterTable(const AlterTableRequestPB& req,
                     AlterTableResponsePB* resp,
-                    boost::optional<int64_t> hms_notification_log_event_id,
-                    boost::optional<const std::string&> user) WARN_UNUSED_RESULT;
+                    std::optional<int64_t> hms_notification_log_event_id,
+                    const std::optional<std::string>& user) WARN_UNUSED_RESULT;
 
   // Called by SysCatalog::SysCatalogStateChanged when this node
   // becomes the leader of a consensus configuration. Executes
@@ -1004,7 +1110,7 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   // "dirty" state field.
   scoped_refptr<TabletInfo> CreateTabletInfo(const scoped_refptr<TableInfo>& table,
                                              const PartitionPB& partition,
-                                             const boost::optional<std::string>& dimension_label);
+                                             const std::optional<std::string>& dimension_label);
 
   // Builds the TabletLocationsPB for a tablet based on the provided TabletInfo
   // and the replica type filter specified. Populates locs_pb and returns
@@ -1041,9 +1147,10 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
                                    RespClass* response,
                                    LockMode lock_mode,
                                    F authz_func,
-                                   boost::optional<const std::string&> user,
+                                   const std::optional<std::string>& user,
                                    scoped_refptr<TableInfo>* table_info,
-                                   TableMetadataLock* table_lock) WARN_UNUSED_RESULT;
+                                   TableMetadataLock* table_lock,
+                                   TableInfoMapType map_type = kAllTableType) WARN_UNUSED_RESULT;
 
   // Extract the set of tablets that must be processed because not running yet.
   void ExtractTabletsToProcess(std::vector<scoped_refptr<TabletInfo>>* tablets_to_process);
@@ -1070,17 +1177,14 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   // container must not be empty.
   Status DeleteTskEntries(const std::set<std::string>& entry_ids);
 
-  Status ApplyAlterSchemaSteps(const SysTablesEntryPB& current_pb,
-                               std::vector<AlterTableRequestPB::Step> steps,
-                               Schema* new_schema,
-                               ColumnId* next_col_id);
-
-  Status ApplyAlterPartitioningSteps(const TableMetadataLock& l,
-                                     const scoped_refptr<TableInfo>& table,
-                                     const Schema& client_schema,
-                                     std::vector<AlterTableRequestPB::Step> steps,
-                                     std::vector<scoped_refptr<TabletInfo>>* tablets_to_add,
-                                     std::vector<scoped_refptr<TabletInfo>>* tablets_to_drop);
+  Status ApplyAlterPartitioningSteps(
+      const scoped_refptr<TableInfo>& table,
+      const Schema& client_schema,
+      const std::vector<AlterTableRequestPB::Step>& steps,
+      TableMetadataLock* l,
+      std::vector<scoped_refptr<TabletInfo>>* tablets_to_add,
+      std::vector<scoped_refptr<TabletInfo>>* tablets_to_drop,
+      bool* partition_schema_updated);
 
   // Task that takes care of the tablet assignments/creations.
   // Loops through the "not created" tablets and sends a CreateTablet() request.
@@ -1143,6 +1247,13 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
 
   void ResetTableLocationsCache();
 
+  // Fill in the reply of ListTables request.
+  static void FillListTablesResponse(const std::string& table_name,
+                                     const scoped_refptr<TableInfo>& table_info,
+                                     int replica_num,
+                                     bool list_tablet_with_partition,
+                                     ListTablesResponsePB* resp);
+
   // Task that takes care of deleted tables, is called in a backgroud thread.
   // Clean up the metadata of tables if the time since they were deleted has passed
   // 'FLAGS_metadata_for_deleted_table_and_tablet_reserved_secs'.
@@ -1175,7 +1286,7 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   template<typename RespClass>
   Status ValidateNumberReplicas(const std::string& normalized_table_name,
                                 RespClass* resp, ValidateType type,
-                                const boost::optional<int>& partitions_count,
+                                const std::optional<int>& partitions_count,
                                 int num_replicas);
 
   // TODO(unknown): the maps are a little wasteful of RAM, since the TableInfo/TabletInfo
@@ -1189,6 +1300,8 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   // Table maps: table-id -> TableInfo and normalized-table-name -> TableInfo
   TableInfoMap table_ids_map_;
   TableInfoMap normalized_table_names_map_;
+  // Table maps: soft-deleted-table-name -> TableInfo
+  TableInfoMap soft_deleted_table_names_map_;
 
   // Tablet maps: tablet-id -> TabletInfo
   TabletInfoMap tablet_map_;
@@ -1225,6 +1338,8 @@ class CatalogManager : public tserver::TabletReplicaLookupIf {
   std::unique_ptr<master::AuthzProvider> authz_provider_;
 
   std::unique_ptr<AutoRebalancerTask> auto_rebalancer_;
+
+  std::unique_ptr<AutoLeaderRebalancerTask> auto_leader_rebalancer_;
 
   enum State {
     kConstructed,

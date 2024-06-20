@@ -19,13 +19,11 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <random>
+#include <optional>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <google/protobuf/util/message_differencer.h>
@@ -43,8 +41,9 @@
 #include "kudu/util/test_macros.h"
 #include "kudu/util/test_util.h"
 
-using boost::optional;
 using google::protobuf::util::MessageDifferencer;
+using std::nullopt;
+using std::optional;
 using std::pair;
 using std::string;
 using std::vector;
@@ -112,7 +111,7 @@ void CheckCreateRangePartitions(const vector<pair<optional<string>, optional<str
   }
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions(splits, bounds, {}, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions(splits, bounds, schema, &partitions));
   ASSERT_EQ(expected_partition_ranges.size(), partitions.size());
 
   for (int i = 0; i < partitions.size(); i++) {
@@ -188,7 +187,7 @@ TEST_F(PartitionTest, TestCompoundRangeKeyEncoding) {
   }
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions(splits, bounds, {}, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions(splits, bounds, schema, &partitions));
   ASSERT_EQ(4, partitions.size());
 
   EXPECT_TRUE(partitions[0].hash_buckets().empty());
@@ -199,7 +198,7 @@ TEST_F(PartitionTest, TestCompoundRangeKeyEncoding) {
             partition_schema.PartitionDebugString(partitions[1], schema));
   EXPECT_EQ(R"(RANGE (c1, c2, c3) PARTITION ("", "b", "c") <= VALUES < ("d", "", "f"))",
             partition_schema.PartitionDebugString(partitions[2], schema));
-  EXPECT_EQ(R"(RANGE (c1, c2, c3) PARTITION VALUES >= ("e", "", ""))",
+  EXPECT_EQ(R"(RANGE (c1, c2, c3) PARTITION ("e", "", "") <= VALUES)",
             partition_schema.PartitionDebugString(partitions[3], schema));
 }
 
@@ -414,7 +413,7 @@ TEST_F(PartitionTest, TestCreateRangePartitions) {
     // [ ("h\0"), ("z")   )
 
     vector<pair<optional<string>, optional<string>>> bounds {
-      { boost::none, string("b") },
+      { nullopt, string("b") },
       { string("c"), string("f") },
       { string("f"), string("z") },
     };
@@ -443,7 +442,7 @@ TEST_F(PartitionTest, TestCreateRangePartitions) {
     // [ ("m"),   ("")   )
 
     vector<pair<optional<string>, optional<string>>> bounds {
-      { boost::none, boost::none },
+      { nullopt, nullopt },
     };
     vector<string> splits { "m" };
     vector<pair<string, string>> partitions {
@@ -469,19 +468,19 @@ TEST_F(PartitionTest, TestCreateHashPartitions) {
 
   // Encoded Partition Keys:
   //
-  // [ (_), (1) )
+  // [ (0), (1) )
   // [ (1), (2) )
-  // [ (2), (_) )
+  // [ (2), (3) )
 
   vector<Partition> partitions;
   ASSERT_OK(
-      partition_schema.CreatePartitions(vector<KuduPartialRow>(), {}, {}, schema, &partitions));
+      partition_schema.CreatePartitions(vector<KuduPartialRow>(), {}, schema, &partitions));
   ASSERT_EQ(3, partitions.size());
 
   EXPECT_EQ(0, partitions[0].hash_buckets()[0]);
   EXPECT_TRUE(partitions[0].begin().range_key().empty());
   EXPECT_TRUE(partitions[0].end().range_key().empty());
-  EXPECT_TRUE(partitions[0].begin().empty());
+  EXPECT_EQ(string("\0\0\0\0", 4), partitions[0].begin().ToString());
   EXPECT_EQ(string("\0\0\0\1", 4), partitions[0].end().ToString());
   EXPECT_EQ("HASH (a) PARTITION 0",
             partition_schema.PartitionDebugString(partitions[0], schema));
@@ -498,7 +497,7 @@ TEST_F(PartitionTest, TestCreateHashPartitions) {
   EXPECT_TRUE(partitions[2].begin().range_key().empty());
   EXPECT_TRUE(partitions[2].end().range_key().empty());
   EXPECT_EQ(string("\0\0\0\2", 4), partitions[2].begin().ToString());
-  EXPECT_EQ("", partitions[2].end().ToString());
+  EXPECT_EQ(string("\0\0\0\3", 4), partitions[2].end().ToString());
   EXPECT_EQ("HASH (a) PARTITION 2",
             partition_schema.PartitionDebugString(partitions[2], schema));
 }
@@ -534,21 +533,21 @@ TEST_F(PartitionTest, TestCreatePartitions) {
   //
   // Encoded Partition Keys:
   //
-  // [ (_, _,        _), (0, 0, "a1b1c1") )
+  // [ (0, 0,        _), (0, 0, "a1b1c1") )
   // [ (0, 0, "a1b1c1"), (0, 0,   "a2b2") )
   // [ (0, 0,   "a2b2"), (0, 1,        _) )
   //
   // [ (0, 1,        _), (0, 1, "a1b1c1") )
   // [ (0, 1, "a1b1c1"), (0, 1,   "a2b2") )
-  // [ (0, 1,   "a2b2"), (1, _,        _) )
+  // [ (0, 1,   "a2b2"), (0, 2,        _) )
   //
-  // [ (1, _,        _), (1, 0, "a1b1c1") )
+  // [ (1, 0,        _), (1, 0, "a1b1c1") )
   // [ (1, 0, "a1b1c1"), (1, 0,   "a2b2") )
   // [ (1, 0,   "a2b2"), (1, 1,        _) )
   //
   // [ (1, 1,        _), (1, 1, "a1b1c1") )
   // [ (1, 1, "a1b1c1"), (1, 1,   "a2b2") )
-  // [ (1, 1,   "a2b2"), (_, _,        _) )
+  // [ (1, 1,   "a2b2"), (1, 2,        _) )
   //
   // _ signifies that the value is omitted from the encoded partition key.
 
@@ -564,20 +563,19 @@ TEST_F(PartitionTest, TestCreatePartitions) {
   // Split keys need not be passed in sorted order.
   vector<KuduPartialRow> split_rows = { split_b, split_a };
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions(split_rows, {}, {}, schema, &partitions));
+  ASSERT_OK(partition_schema.CreatePartitions(split_rows, {}, schema, &partitions));
   ASSERT_EQ(12, partitions.size());
 
   EXPECT_EQ(0, partitions[0].hash_buckets()[0]);
   EXPECT_EQ(0, partitions[0].hash_buckets()[1]);
   EXPECT_EQ("", partitions[0].begin().range_key());
   EXPECT_EQ(string("a1\0\0b1\0\0c1", 10), partitions[0].end().range_key());
-  EXPECT_EQ("", partitions[0].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\0", 8), partitions[0].begin().ToString());
   EXPECT_EQ(string("\0\0\0\0" "\0\0\0\0" "a1\0\0b1\0\0c1", 18),
             partitions[0].end().ToString());
   EXPECT_EQ("HASH (a) PARTITION 0, HASH (b) PARTITION 0, "
             R"(RANGE (a, b, c) PARTITION VALUES < ("a1", "b1", "c1"))",
             partition_schema.PartitionDebugString(partitions[0], schema));
-
 
   EXPECT_EQ(0, partitions[1].hash_buckets()[0]);
   EXPECT_EQ(0, partitions[1].hash_buckets()[1]);
@@ -590,6 +588,9 @@ TEST_F(PartitionTest, TestCreatePartitions) {
   EXPECT_EQ("HASH (a) PARTITION 0, HASH (b) PARTITION 0, "
             R"(RANGE (a, b, c) PARTITION ("a1", "b1", "c1") <= VALUES < ("a2", "b2", ""))",
             partition_schema.PartitionDebugString(partitions[1], schema));
+  EXPECT_EQ(R"(RANGE (a, b, c) PARTITION ("a1", "b1", "c1") <= VALUES < ("a2", "b2", ""))",
+            partition_schema.PartitionDebugString(partitions[1], schema,
+            PartitionSchema::HashPartitionInfo::HIDE));
 
   EXPECT_EQ(0, partitions[2].hash_buckets()[0]);
   EXPECT_EQ(0, partitions[2].hash_buckets()[1]);
@@ -598,8 +599,11 @@ TEST_F(PartitionTest, TestCreatePartitions) {
   EXPECT_EQ(string("\0\0\0\0" "\0\0\0\0" "a2\0\0b2\0\0", 16), partitions[2].begin().ToString());
   EXPECT_EQ(string("\0\0\0\0" "\0\0\0\1", 8), partitions[2].end().ToString());
   EXPECT_EQ("HASH (a) PARTITION 0, HASH (b) PARTITION 0, "
-            R"(RANGE (a, b, c) PARTITION VALUES >= ("a2", "b2", ""))",
+            R"(RANGE (a, b, c) PARTITION ("a2", "b2", "") <= VALUES)",
             partition_schema.PartitionDebugString(partitions[2], schema));
+  EXPECT_EQ(R"(RANGE (a, b, c) PARTITION ("a2", "b2", "") <= VALUES)",
+            partition_schema.PartitionDebugString(partitions[2], schema,
+            PartitionSchema::HashPartitionInfo::HIDE));
 
   EXPECT_EQ(0, partitions[3].hash_buckets()[0]);
   EXPECT_EQ(1, partitions[3].hash_buckets()[1]);
@@ -610,6 +614,10 @@ TEST_F(PartitionTest, TestCreatePartitions) {
   EXPECT_EQ("HASH (a) PARTITION 0, HASH (b) PARTITION 1, "
             R"(RANGE (a, b, c) PARTITION VALUES < ("a1", "b1", "c1"))",
             partition_schema.PartitionDebugString(partitions[3], schema));
+  EXPECT_EQ(R"(RANGE (a, b, c) PARTITION VALUES < ("a1", "b1", "c1"))",
+            partition_schema.PartitionDebugString(partitions[3], schema,
+            PartitionSchema::HashPartitionInfo::HIDE));
+
 
   EXPECT_EQ(0, partitions[4].hash_buckets()[0]);
   EXPECT_EQ(1, partitions[4].hash_buckets()[1]);
@@ -621,26 +629,36 @@ TEST_F(PartitionTest, TestCreatePartitions) {
   EXPECT_EQ("HASH (a) PARTITION 0, HASH (b) PARTITION 1, "
             R"(RANGE (a, b, c) PARTITION ("a1", "b1", "c1") <= VALUES < ("a2", "b2", ""))",
             partition_schema.PartitionDebugString(partitions[4], schema));
+  EXPECT_EQ(R"(RANGE (a, b, c) PARTITION ("a1", "b1", "c1") <= VALUES < ("a2", "b2", ""))",
+            partition_schema.PartitionDebugString(partitions[4], schema,
+            PartitionSchema::HashPartitionInfo::HIDE));
+
 
   EXPECT_EQ(0, partitions[5].hash_buckets()[0]);
   EXPECT_EQ(1, partitions[5].hash_buckets()[1]);
   EXPECT_EQ(string("a2\0\0b2\0\0", 8), partitions[5].begin().range_key());
   EXPECT_EQ("", partitions[5].end().range_key());
   EXPECT_EQ(string("\0\0\0\0" "\0\0\0\1" "a2\0\0b2\0\0", 16), partitions[5].begin().ToString());
-  EXPECT_EQ(string("\0\0\0\1", 4), partitions[5].end().ToString());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\2", 8), partitions[5].end().ToString());
   EXPECT_EQ("HASH (a) PARTITION 0, HASH (b) PARTITION 1, "
-            R"(RANGE (a, b, c) PARTITION VALUES >= ("a2", "b2", ""))",
+            R"(RANGE (a, b, c) PARTITION ("a2", "b2", "") <= VALUES)",
             partition_schema.PartitionDebugString(partitions[5], schema));
+  EXPECT_EQ(R"(RANGE (a, b, c) PARTITION ("a2", "b2", "") <= VALUES)",
+            partition_schema.PartitionDebugString(partitions[5], schema,
+            PartitionSchema::HashPartitionInfo::HIDE));
 
   EXPECT_EQ(1, partitions[6].hash_buckets()[0]);
   EXPECT_EQ(0, partitions[6].hash_buckets()[1]);
   EXPECT_EQ("", partitions[6].begin().range_key());
   EXPECT_EQ(string("a1\0\0b1\0\0c1", 10), partitions[6].end().range_key());
-  EXPECT_EQ(string("\0\0\0\1", 4), partitions[6].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\0", 8), partitions[6].begin().ToString());
   EXPECT_EQ(string("\0\0\0\1" "\0\0\0\0" "a1\0\0b1\0\0c1", 18), partitions[6].end().ToString());
   EXPECT_EQ("HASH (a) PARTITION 1, HASH (b) PARTITION 0, "
             R"(RANGE (a, b, c) PARTITION VALUES < ("a1", "b1", "c1"))",
             partition_schema.PartitionDebugString(partitions[6], schema));
+  EXPECT_EQ(R"(RANGE (a, b, c) PARTITION VALUES < ("a1", "b1", "c1"))",
+            partition_schema.PartitionDebugString(partitions[6], schema,
+            PartitionSchema::HashPartitionInfo::HIDE));
 
   EXPECT_EQ(1, partitions[7].hash_buckets()[0]);
   EXPECT_EQ(0, partitions[7].hash_buckets()[1]);
@@ -652,6 +670,9 @@ TEST_F(PartitionTest, TestCreatePartitions) {
   EXPECT_EQ("HASH (a) PARTITION 1, HASH (b) PARTITION 0, "
             R"(RANGE (a, b, c) PARTITION ("a1", "b1", "c1") <= VALUES < ("a2", "b2", ""))",
             partition_schema.PartitionDebugString(partitions[7], schema));
+  EXPECT_EQ(R"(RANGE (a, b, c) PARTITION ("a1", "b1", "c1") <= VALUES < ("a2", "b2", ""))",
+            partition_schema.PartitionDebugString(partitions[7], schema,
+            PartitionSchema::HashPartitionInfo::HIDE));
 
   EXPECT_EQ(1, partitions[8].hash_buckets()[0]);
   EXPECT_EQ(0, partitions[8].hash_buckets()[1]);
@@ -660,8 +681,11 @@ TEST_F(PartitionTest, TestCreatePartitions) {
   EXPECT_EQ(string("\0\0\0\1" "\0\0\0\0" "a2\0\0b2\0\0", 16), partitions[8].begin().ToString());
   EXPECT_EQ(string("\0\0\0\1" "\0\0\0\1", 8), partitions[8].end().ToString());
   EXPECT_EQ("HASH (a) PARTITION 1, HASH (b) PARTITION 0, "
-            R"(RANGE (a, b, c) PARTITION VALUES >= ("a2", "b2", ""))",
+            R"(RANGE (a, b, c) PARTITION ("a2", "b2", "") <= VALUES)",
             partition_schema.PartitionDebugString(partitions[8], schema));
+  EXPECT_EQ(R"(RANGE (a, b, c) PARTITION ("a2", "b2", "") <= VALUES)",
+            partition_schema.PartitionDebugString(partitions[8], schema,
+            PartitionSchema::HashPartitionInfo::HIDE));
 
   EXPECT_EQ(1, partitions[9].hash_buckets()[0]);
   EXPECT_EQ(1, partitions[9].hash_buckets()[1]);
@@ -672,6 +696,9 @@ TEST_F(PartitionTest, TestCreatePartitions) {
   EXPECT_EQ("HASH (a) PARTITION 1, HASH (b) PARTITION 1, "
             R"(RANGE (a, b, c) PARTITION VALUES < ("a1", "b1", "c1"))",
             partition_schema.PartitionDebugString(partitions[9], schema));
+  EXPECT_EQ(R"(RANGE (a, b, c) PARTITION VALUES < ("a1", "b1", "c1"))",
+            partition_schema.PartitionDebugString(partitions[9], schema,
+            PartitionSchema::HashPartitionInfo::HIDE));
 
   EXPECT_EQ(1, partitions[10].hash_buckets()[0]);
   EXPECT_EQ(1, partitions[10].hash_buckets()[1]);
@@ -683,16 +710,22 @@ TEST_F(PartitionTest, TestCreatePartitions) {
   EXPECT_EQ("HASH (a) PARTITION 1, HASH (b) PARTITION 1, "
             R"(RANGE (a, b, c) PARTITION ("a1", "b1", "c1") <= VALUES < ("a2", "b2", ""))",
             partition_schema.PartitionDebugString(partitions[10], schema));
+  EXPECT_EQ(R"(RANGE (a, b, c) PARTITION ("a1", "b1", "c1") <= VALUES < ("a2", "b2", ""))",
+            partition_schema.PartitionDebugString(partitions[10], schema,
+            PartitionSchema::HashPartitionInfo::HIDE));
 
   EXPECT_EQ(1, partitions[11].hash_buckets()[0]);
   EXPECT_EQ(1, partitions[11].hash_buckets()[1]);
   EXPECT_EQ(string("a2\0\0b2\0\0", 8), partitions[11].begin().range_key());
   EXPECT_EQ("", partitions[11].end().range_key());
   EXPECT_EQ(string("\0\0\0\1" "\0\0\0\1" "a2\0\0b2\0\0", 16), partitions[11].begin().ToString());
-  EXPECT_EQ("", partitions[11].end().ToString());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\2", 8), partitions[11].end().ToString());
   EXPECT_EQ("HASH (a) PARTITION 1, HASH (b) PARTITION 1, "
-            R"(RANGE (a, b, c) PARTITION VALUES >= ("a2", "b2", ""))",
+            R"(RANGE (a, b, c) PARTITION ("a2", "b2", "") <= VALUES)",
             partition_schema.PartitionDebugString(partitions[11], schema));
+  EXPECT_EQ(R"(RANGE (a, b, c) PARTITION ("a2", "b2", "") <= VALUES)",
+            partition_schema.PartitionDebugString(partitions[11], schema,
+            PartitionSchema::HashPartitionInfo::HIDE));
 }
 
 TEST_F(PartitionTest, TestIncrementRangePartitionBounds) {
@@ -707,25 +740,25 @@ TEST_F(PartitionTest, TestIncrementRangePartitionBounds) {
   PartitionSchema partition_schema;
   ASSERT_OK(PartitionSchema::FromPB(schema_builder, schema, &partition_schema));
 
-  vector<vector<boost::optional<int8_t>>> tests {
+  vector<vector<optional<int8_t>>> tests {
     // Big list of test cases. First three columns are the input columns, final
     // three columns are the expected output columns. For example,
     { 1, 2, 3, 1, 2, 4 },
     // corresponds to the test case:
     // (1, 2, 3) -> (1, 2, 4)
 
-    { 1, 2, boost::none, 1, 2, -127 },
-    { 1, boost::none, 3, 1, boost::none, 4 },
-    { boost::none, 2, 3, boost::none, 2, 4 },
-    { 1, boost::none, boost::none, 1, boost::none, -127 },
-    { boost::none, boost::none, 3, boost::none, boost::none, 4 },
-    { boost::none, 2, boost::none, boost::none, 2, -127 },
-    { 1, 2, 127, 1, 3, boost::none },
+    { 1, 2, nullopt, 1, 2, -127 },
+    { 1, nullopt, 3, 1, nullopt, 4 },
+    { nullopt, 2, 3, nullopt, 2, 4 },
+    { 1, nullopt, nullopt, 1, nullopt, -127 },
+    { nullopt, nullopt, 3, nullopt, nullopt, 4 },
+    { nullopt, 2, nullopt, nullopt, 2, -127 },
+    { 1, 2, 127, 1, 3, nullopt },
     { 1, 127, 3, 1, 127, 4},
-    { 1, 127, 127, 2, boost::none, boost::none },
+    { 1, 127, 127, 2, nullopt, nullopt },
   };
 
-  auto check = [&] (const vector<boost::optional<int8_t>>& test, bool lower_bound) {
+  auto check = [&] (const vector<optional<int8_t>>& test, bool lower_bound) {
     CHECK_EQ(6, test.size());
     KuduPartialRow bound(&schema);
     if (test[0]) ASSERT_OK(bound.SetInt8("c1", *test[0]));
@@ -771,11 +804,11 @@ TEST_F(PartitionTest, TestIncrementRangePartitionBounds) {
 
   // Special cases:
   // lower bound: (_, _, _) -> (_, _, -127)
-  check({ boost::none, boost::none, boost::none, boost::none, boost::none, -127 }, true);
+  check({ nullopt, nullopt, nullopt, nullopt, nullopt, -127 }, true);
   // upper bound: (_, _, _) -> (_, _, _)
-  check({ boost::none, boost::none, boost::none, boost::none, boost::none, boost::none }, false);
+  check({ nullopt, nullopt, nullopt, nullopt, nullopt, nullopt }, false);
   // upper bound: (127, 127, 127) -> (_, _, _)
-  check({ 127, 127, 127, boost::none, boost::none, boost::none }, false);
+  check({ 127, 127, 127, nullopt, nullopt, nullopt }, false);
 
   // lower bound: (127, 127, 127) -> fail!
     KuduPartialRow lower_bound(&schema);
@@ -799,12 +832,12 @@ TEST_F(PartitionTest, TestIncrementRangePartitionStringBounds) {
   PartitionSchema partition_schema;
   ASSERT_OK(PartitionSchema::FromPB(schema_builder, schema, &partition_schema));
 
-  vector<vector<boost::optional<string>>> tests {
+  vector<vector<optional<string>>> tests {
     { string("a"), string("b"), string("a"), string("b\0", 2) },
-    { string("a"), boost::none, string("a"), string("\0", 1) },
+    { string("a"), nullopt, string("a"), string("\0", 1) },
   };
 
-  auto check = [&] (const vector<boost::optional<string>>& test, bool lower_bound) {
+  auto check = [&] (const vector<optional<string>>& test, bool lower_bound) {
     CHECK_EQ(4, test.size());
     KuduPartialRow bound(&schema);
     if (test[0]) ASSERT_OK(bound.SetString("c1", *test[0]));
@@ -843,9 +876,9 @@ TEST_F(PartitionTest, TestIncrementRangePartitionStringBounds) {
 }
 
 TEST_F(PartitionTest, TestVarcharRangePartitions) {
-  Schema schema({ ColumnSchema("c1", VARCHAR, false, nullptr, nullptr,
+  Schema schema({ ColumnSchema("c1", VARCHAR, false, false, nullptr, nullptr,
                                ColumnStorageAttributes(), ColumnTypeAttributes(10)),
-                  ColumnSchema("c2", VARCHAR, false, nullptr, nullptr,
+                  ColumnSchema("c2", VARCHAR, false, false, nullptr, nullptr,
                                ColumnStorageAttributes(), ColumnTypeAttributes(10)) },
                   { ColumnId(0), ColumnId(1) }, 2);
 
@@ -853,12 +886,12 @@ TEST_F(PartitionTest, TestVarcharRangePartitions) {
   PartitionSchema partition_schema;
   ASSERT_OK(PartitionSchema::FromPB(schema_builder, schema, &partition_schema));
 
-  vector<vector<boost::optional<string>>> tests {
+  vector<vector<optional<string>>> tests {
     { string("a"), string("b"), string("a"), string("b\0", 2) },
-    { string("a"), boost::none, string("a"), string("\0", 1) },
+    { string("a"), nullopt, string("a"), string("\0", 1) },
   };
 
-  auto check = [&] (const vector<boost::optional<string>>& test, bool lower_bound) {
+  auto check = [&] (const vector<optional<string>>& test, bool lower_bound) {
     CHECK_EQ(4, test.size());
     KuduPartialRow bound(&schema);
     if (test[0]) ASSERT_OK(bound.SetVarchar("c1", *test[0]));
@@ -912,31 +945,43 @@ void CheckSerializationFunctions(const PartitionSchemaPB& pb,
   ASSERT_EQ(partition_schema, partition_schema1);
 }
 
+void AddRangePartitionWithSchema(
+    const Schema& schema,
+    const KuduPartialRow& lower,
+    const KuduPartialRow& upper,
+    const PartitionSchema::HashSchema& range_hash_schema,
+    PartitionSchemaPB* pb) {
+  auto* range = pb->add_custom_hash_schema_ranges();
+  RowOperationsPBEncoder encoder(range->mutable_range_bounds());
+  encoder.Add(RowOperationsPB::RANGE_LOWER_BOUND, lower);
+  encoder.Add(RowOperationsPB::RANGE_UPPER_BOUND, upper);
+  for (const auto& dimension : range_hash_schema) {
+    auto* hash_dimension_pb = range->add_hash_schema();
+    PartitionSchema::HashDimension hash_dimension;
+    for (const auto& cid : dimension.column_ids) {
+      hash_dimension_pb->add_columns()->set_name(schema.column_by_id(cid).name());
+    }
+    hash_dimension_pb->set_num_buckets(dimension.num_buckets);
+    hash_dimension_pb->set_seed(dimension.seed);
+  }
+}
+
 } // anonymous namespace
 
-TEST_F(PartitionTest, TestVaryingHashSchemasPerRange) {
-  // CREATE TABLE t (a VARCHAR, b VARCHAR, c VARCHAR, PRIMARY KEY (a, b, c))
+TEST_F(PartitionTest, VaryingHashSchemasPerRange) {
+  // CREATE TABLE t (a STRING, b STRING, c STRING, PRIMARY KEY (a, b, c))
   // PARTITION BY [HASH BUCKET (a, c), HASH BUCKET (b), RANGE (a, b, c)];
   Schema schema({ ColumnSchema("a", STRING),
                   ColumnSchema("b", STRING),
                   ColumnSchema("c", STRING) },
                 { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
 
-  PartitionSchemaPB schema_builder;
-  // Table-wide hash schema defined below, 3 by 2 buckets so 6 total.
-  AddHashDimension(&schema_builder, { "a", "c" }, 3, 0);
-  AddHashDimension(&schema_builder, { "b" }, 2, 0);
-  PartitionSchema partition_schema;
-  ASSERT_OK(PartitionSchema::FromPB(schema_builder, schema, &partition_schema));
-  CheckSerializationFunctions(schema_builder, partition_schema, schema);
-
-  ASSERT_EQ("HASH (a, c) PARTITIONS 3, HASH (b) PARTITIONS 2, RANGE (a, b, c)",
-            partition_schema.DebugString(schema));
-
-  vector<pair<KuduPartialRow, KuduPartialRow>> bounds;
-  vector<PartitionSchema::HashSchema> range_hash_schemas;
-  vector<pair<pair<KuduPartialRow, KuduPartialRow>,
-              PartitionSchema::HashSchema>> bounds_with_hash_schemas;
+  PartitionSchemaPB ps_pb;
+  // Table-wide hash schema is defined below: 3 by 2 buckets, so 6 total.
+  const PartitionSchema::HashSchema table_wide_hash_schema =
+      { { { ColumnId(0), ColumnId(2) }, 3, 0}, { { ColumnId(1) }, 2, 0 } };
+  AddHashDimension(&ps_pb, { "a", "c" }, 3, 0);
+  AddHashDimension(&ps_pb, { "b" }, 2, 0);
 
   { // [(a1, _, c1), (a2, _, c2))
     KuduPartialRow lower(&schema);
@@ -945,11 +990,8 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerRange) {
     ASSERT_OK(lower.SetStringCopy("c", "c1"));
     ASSERT_OK(upper.SetStringCopy("a", "a2"));
     ASSERT_OK(upper.SetStringCopy("c", "c2"));
-    PartitionSchema::HashSchema hash_schema_4_buckets = {{{ColumnId(0)}, 4, 0}};
-    bounds.emplace_back(lower, upper);
-    range_hash_schemas.emplace_back(hash_schema_4_buckets);
-    bounds_with_hash_schemas.emplace_back(make_pair(std::move(lower), std::move(upper)),
-                                          std::move(hash_schema_4_buckets));
+    AddRangePartitionWithSchema(
+        schema, lower, upper, {{{ColumnId(0)}, 4, 0}}, &ps_pb);
   }
 
   { // [(a3, b3, _), (a4, b4, _))
@@ -959,11 +1001,10 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerRange) {
     ASSERT_OK(lower.SetStringCopy("b", "b3"));
     ASSERT_OK(upper.SetStringCopy("a", "a4"));
     ASSERT_OK(upper.SetStringCopy("b", "b4"));
-    bounds.emplace_back(lower, upper);
-    range_hash_schemas.emplace_back(partition_schema.hash_schema());
-    // Use the table-wide hash schema for this range.
-    bounds_with_hash_schemas.emplace_back(make_pair(std::move(lower), std::move(upper)),
-                                          partition_schema.hash_schema());
+    AddRangePartitionWithSchema(
+        schema, lower, upper,
+        { { { ColumnId(0), ColumnId(2) }, 3, 1 }, { { ColumnId(1) }, 2, 10 } },
+        &ps_pb);
   }
 
   { // [(a5, b5, _), (a6, _, c6))
@@ -973,234 +1014,181 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerRange) {
     ASSERT_OK(lower.SetStringCopy("b", "b5"));
     ASSERT_OK(upper.SetStringCopy("a", "a6"));
     ASSERT_OK(upper.SetStringCopy("c", "c6"));
-    PartitionSchema::HashSchema hash_schema_2_buckets_by_3 = {
-        {{ColumnId(0)}, 2, 0},
-        {{ColumnId(1)}, 3, 0}
-    };
-    bounds.emplace_back(lower, upper);
-    range_hash_schemas.emplace_back(hash_schema_2_buckets_by_3);
-    bounds_with_hash_schemas.emplace_back(make_pair(std::move(lower), std::move(upper)),
-                                          std::move(hash_schema_2_buckets_by_3));
+    AddRangePartitionWithSchema(
+        schema, lower, upper,
+        {{{ColumnId(0)}, 2, 0}, {{ColumnId(1)}, 3, 0}}, &ps_pb);
   }
 
-  const auto check_partitions = [](const vector<Partition>& partitions) {
-    ASSERT_EQ(16, partitions.size());
+  PartitionSchema ps;
+  PartitionSchema::RangesWithHashSchemas ranges;
+  ASSERT_OK(PartitionSchema::FromPB(ps_pb, schema, &ps, &ranges));
+  CheckSerializationFunctions(ps_pb, ps, schema);
 
-    ASSERT_EQ(1, partitions[0].hash_buckets().size());
-    EXPECT_EQ(0, partitions[0].hash_buckets()[0]);
-    EXPECT_EQ(string("a1\0\0\0\0c1", 8), partitions[0].begin().range_key());
-    EXPECT_EQ(string("a2\0\0\0\0c2", 8), partitions[0].end().range_key());
-    EXPECT_EQ(string("\0\0\0\0" "a1\0\0\0\0c1", 12),
-              partitions[0].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\0" "a2\0\0\0\0c2", 12),
-              partitions[0].end().ToString());
-
-    ASSERT_EQ(1, partitions[1].hash_buckets().size());
-    EXPECT_EQ(1, partitions[1].hash_buckets()[0]);
-    EXPECT_EQ(string("a1\0\0\0\0c1", 8), partitions[1].begin().range_key());
-    EXPECT_EQ(string("a2\0\0\0\0c2", 8), partitions[1].end().range_key());
-    EXPECT_EQ(string("\0\0\0\1" "a1\0\0\0\0c1", 12),
-              partitions[1].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\1" "a2\0\0\0\0c2", 12),
-              partitions[1].end().ToString());
-
-    ASSERT_EQ(1, partitions[2].hash_buckets().size());
-    EXPECT_EQ(2, partitions[2].hash_buckets()[0]);
-    EXPECT_EQ(string("a1\0\0\0\0c1", 8), partitions[2].begin().range_key());
-    EXPECT_EQ(string("a2\0\0\0\0c2", 8), partitions[2].end().range_key());
-    EXPECT_EQ(string("\0\0\0\2" "a1\0\0\0\0c1", 12),
-              partitions[2].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\2" "a2\0\0\0\0c2", 12),
-              partitions[2].end().ToString());
-
-    ASSERT_EQ(1, partitions[3].hash_buckets().size());
-    EXPECT_EQ(3, partitions[3].hash_buckets()[0]);
-    EXPECT_EQ(string("a1\0\0\0\0c1", 8), partitions[3].begin().range_key());
-    EXPECT_EQ(string("a2\0\0\0\0c2", 8), partitions[3].end().range_key());
-    EXPECT_EQ(string("\0\0\0\3" "a1\0\0\0\0c1", 12),
-              partitions[3].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\3" "a2\0\0\0\0c2", 12),
-              partitions[3].end().ToString());
-
-    ASSERT_EQ(2, partitions[4].hash_buckets().size());
-    EXPECT_EQ(0, partitions[4].hash_buckets()[0]);
-    EXPECT_EQ(0, partitions[4].hash_buckets()[1]);
-    EXPECT_EQ(string("a3\0\0b3\0\0", 8), partitions[4].begin().range_key());
-    EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[4].end().range_key());
-    EXPECT_EQ(string("\0\0\0\0" "\0\0\0\0" "a3\0\0b3\0\0", 16),
-              partitions[4].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\0" "\0\0\0\0" "a4\0\0b4\0\0", 16),
-              partitions[4].end().ToString());
-
-    ASSERT_EQ(2, partitions[5].hash_buckets().size());
-    EXPECT_EQ(0, partitions[5].hash_buckets()[0]);
-    EXPECT_EQ(1, partitions[5].hash_buckets()[1]);
-    EXPECT_EQ(string("a3\0\0b3\0\0", 8), partitions[5].begin().range_key());
-    EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[5].end().range_key());
-    EXPECT_EQ(string("\0\0\0\0" "\0\0\0\1" "a3\0\0b3\0\0", 16),
-              partitions[5].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\0" "\0\0\0\1" "a4\0\0b4\0\0", 16),
-              partitions[5].end().ToString());
-
-    ASSERT_EQ(2, partitions[6].hash_buckets().size());
-    EXPECT_EQ(1, partitions[6].hash_buckets()[0]);
-    EXPECT_EQ(0, partitions[6].hash_buckets()[1]);
-    EXPECT_EQ(string("a3\0\0b3\0\0", 8), partitions[6].begin().range_key());
-    EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[6].end().range_key());
-    EXPECT_EQ(string("\0\0\0\1" "\0\0\0\0" "a3\0\0b3\0\0", 16),
-              partitions[6].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\1" "\0\0\0\0" "a4\0\0b4\0\0", 16),
-              partitions[6].end().ToString());
-
-    ASSERT_EQ(2, partitions[7].hash_buckets().size());
-    EXPECT_EQ(1, partitions[7].hash_buckets()[0]);
-    EXPECT_EQ(1, partitions[7].hash_buckets()[1]);
-    EXPECT_EQ(string("a3\0\0b3\0\0", 8), partitions[7].begin().range_key());
-    EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[7].end().range_key());
-    EXPECT_EQ(string("\0\0\0\1" "\0\0\0\1" "a3\0\0b3\0\0", 16),
-              partitions[7].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\1" "\0\0\0\1" "a4\0\0b4\0\0", 16),
-              partitions[7].end().ToString());
-
-    ASSERT_EQ(2, partitions[8].hash_buckets().size());
-    EXPECT_EQ(2, partitions[8].hash_buckets()[0]);
-    EXPECT_EQ(0, partitions[8].hash_buckets()[1]);
-    EXPECT_EQ(string("a3\0\0b3\0\0", 8), partitions[8].begin().range_key());
-    EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[8].end().range_key());
-    EXPECT_EQ(string("\0\0\0\2" "\0\0\0\0" "a3\0\0b3\0\0", 16),
-              partitions[8].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\2" "\0\0\0\0" "a4\0\0b4\0\0", 16),
-              partitions[8].end().ToString());
-
-    ASSERT_EQ(2, partitions[9].hash_buckets().size());
-    EXPECT_EQ(2, partitions[9].hash_buckets()[0]);
-    EXPECT_EQ(1, partitions[9].hash_buckets()[1]);
-    EXPECT_EQ(string("a3\0\0b3\0\0", 8), partitions[9].begin().range_key());
-    EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[9].end().range_key());
-    EXPECT_EQ(string("\0\0\0\2" "\0\0\0\1" "a3\0\0b3\0\0", 16),
-              partitions[9].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\2" "\0\0\0\1" "a4\0\0b4\0\0", 16),
-              partitions[9].end().ToString());
-
-    ASSERT_EQ(2, partitions[10].hash_buckets().size());
-    EXPECT_EQ(0, partitions[10].hash_buckets()[0]);
-    EXPECT_EQ(0, partitions[10].hash_buckets()[1]);
-    EXPECT_EQ(string("a5\0\0b5\0\0", 8),
-              partitions[10].begin().range_key());
-    EXPECT_EQ(string("a6\0\0\0\0c6", 8),
-              partitions[10].end().range_key());
-    EXPECT_EQ(string("\0\0\0\0" "\0\0\0\0" "a5\0\0b5\0\0", 16),
-              partitions[10].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\0" "\0\0\0\0" "a6\0\0\0\0c6", 16),
-              partitions[10].end().ToString());
-
-    ASSERT_EQ(2, partitions[11].hash_buckets().size());
-    EXPECT_EQ(0, partitions[11].hash_buckets()[0]);
-    EXPECT_EQ(1, partitions[11].hash_buckets()[1]);
-    EXPECT_EQ(string("a5\0\0b5\0\0", 8),partitions[11].begin().range_key());
-    EXPECT_EQ(string("a6\0\0\0\0c6", 8),partitions[11].end().range_key());
-    EXPECT_EQ(string("\0\0\0\0" "\0\0\0\1" "a5\0\0b5\0\0", 16),
-              partitions[11].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\0" "\0\0\0\1" "a6\0\0\0\0c6", 16),
-              partitions[11].end().ToString());
-
-    ASSERT_EQ(2, partitions[12].hash_buckets().size());
-    EXPECT_EQ(0, partitions[12].hash_buckets()[0]);
-    EXPECT_EQ(2, partitions[12].hash_buckets()[1]);
-    EXPECT_EQ(string("a5\0\0b5\0\0", 8), partitions[12].begin().range_key());
-    EXPECT_EQ(string("a6\0\0\0\0c6", 8), partitions[12].end().range_key());
-    EXPECT_EQ(string("\0\0\0\0" "\0\0\0\2" "a5\0\0b5\0\0", 16),
-              partitions[12].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\0" "\0\0\0\2" "a6\0\0\0\0c6", 16),
-              partitions[12].end().ToString());
-
-    ASSERT_EQ(2, partitions[13].hash_buckets().size());
-    EXPECT_EQ(1, partitions[13].hash_buckets()[0]);
-    EXPECT_EQ(0, partitions[13].hash_buckets()[1]);
-    EXPECT_EQ(string("a5\0\0b5\0\0", 8), partitions[13].begin().range_key());
-    EXPECT_EQ(string("a6\0\0\0\0c6", 8), partitions[13].end().range_key());
-    EXPECT_EQ(string("\0\0\0\1" "\0\0\0\0" "a5\0\0b5\0\0", 16),
-              partitions[13].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\1" "\0\0\0\0" "a6\0\0\0\0c6", 16),
-              partitions[13].end().ToString());
-
-    ASSERT_EQ(2, partitions[14].hash_buckets().size());
-    EXPECT_EQ(1, partitions[14].hash_buckets()[0]);
-    EXPECT_EQ(1, partitions[14].hash_buckets()[1]);
-    EXPECT_EQ(string("a5\0\0b5\0\0", 8), partitions[14].begin().range_key());
-    EXPECT_EQ(string("a6\0\0\0\0c6", 8), partitions[14].end().range_key());
-    EXPECT_EQ(string("\0\0\0\1" "\0\0\0\1" "a5\0\0b5\0\0", 16),
-              partitions[14].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\1" "\0\0\0\1" "a6\0\0\0\0c6", 16),
-              partitions[14].end().ToString());
-
-    ASSERT_EQ(2, partitions[15].hash_buckets().size());
-    EXPECT_EQ(1, partitions[15].hash_buckets()[0]);
-    EXPECT_EQ(2, partitions[15].hash_buckets()[1]);
-    EXPECT_EQ(string("a5\0\0b5\0\0", 8), partitions[15].begin().range_key());
-    EXPECT_EQ(string("a6\0\0\0\0c6", 8), partitions[15].end().range_key());
-    EXPECT_EQ(string("\0\0\0\1" "\0\0\0\2" "a5\0\0b5\0\0", 16),
-              partitions[15].begin().ToString());
-    EXPECT_EQ(string("\0\0\0\1" "\0\0\0\2" "a6\0\0\0\0c6", 16),
-              partitions[15].end().ToString());
-  };
+  ASSERT_EQ("HASH (a, c) PARTITIONS 3, HASH (b) PARTITIONS 2, RANGE (a, b, c)",
+            ps.DebugString(schema));
 
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions(
-      {}, bounds, range_hash_schemas, schema, &partitions));
-  NO_FATALS(check_partitions(partitions));
+  ASSERT_OK(ps.CreatePartitions(ranges, schema, &partitions));
 
-  bounds.clear();
-  range_hash_schemas.clear();
-  partitions.clear();
+  ASSERT_EQ(16, partitions.size());
 
-  // Using std::random_shuffle to insert bounds and their hash schemas out of
-  // sorted order, yet resulting partitions will still be the same.
-  std::mt19937 gen(SeedRandom());
-  std::shuffle(bounds_with_hash_schemas.begin(), bounds_with_hash_schemas.end(), gen);
+  ASSERT_EQ(1, partitions[0].hash_buckets().size());
+  EXPECT_EQ(0, partitions[0].hash_buckets()[0]);
+  EXPECT_EQ(string("a1\0\0\0\0c1", 8), partitions[0].begin().range_key());
+  EXPECT_EQ(string("a2\0\0\0\0c2", 8), partitions[0].end().range_key());
+  EXPECT_EQ(string("\0\0\0\0" "a1\0\0\0\0c1", 12),
+            partitions[0].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\0" "a2\0\0\0\0c2", 12),
+            partitions[0].end().ToString());
 
-  for (const auto& bounds_and_schema : bounds_with_hash_schemas) {
-    bounds.emplace_back(bounds_and_schema.first);
-    range_hash_schemas.emplace_back(bounds_and_schema.second);
-  }
+  ASSERT_EQ(1, partitions[1].hash_buckets().size());
+  EXPECT_EQ(1, partitions[1].hash_buckets()[0]);
+  EXPECT_EQ(string("a1\0\0\0\0c1", 8), partitions[1].begin().range_key());
+  EXPECT_EQ(string("a2\0\0\0\0c2", 8), partitions[1].end().range_key());
+  EXPECT_EQ(string("\0\0\0\1" "a1\0\0\0\0c1", 12),
+            partitions[1].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\1" "a2\0\0\0\0c2", 12),
+            partitions[1].end().ToString());
 
-  ASSERT_OK(partition_schema.CreatePartitions(
-      {}, bounds, range_hash_schemas, schema, &partitions));
-  NO_FATALS(check_partitions(partitions));
+  ASSERT_EQ(1, partitions[2].hash_buckets().size());
+  EXPECT_EQ(2, partitions[2].hash_buckets()[0]);
+  EXPECT_EQ(string("a1\0\0\0\0c1", 8), partitions[2].begin().range_key());
+  EXPECT_EQ(string("a2\0\0\0\0c2", 8), partitions[2].end().range_key());
+  EXPECT_EQ(string("\0\0\0\2" "a1\0\0\0\0c1", 12),
+            partitions[2].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\2" "a2\0\0\0\0c2", 12),
+            partitions[2].end().ToString());
 
-  // Not clearing bounds or range_hash_schemas, adding a split row to test
-  // incompatibility.
-  vector<KuduPartialRow> splits;
-  { // split: (a1, _, c12)
-    KuduPartialRow split(&schema);
-    ASSERT_OK(split.SetStringCopy("a", "a1"));
-    ASSERT_OK(split.SetStringCopy("c", "c12"));
-    splits.emplace_back(std::move(split));
-  }
+  ASSERT_EQ(1, partitions[3].hash_buckets().size());
+  EXPECT_EQ(3, partitions[3].hash_buckets()[0]);
+  EXPECT_EQ(string("a1\0\0\0\0c1", 8), partitions[3].begin().range_key());
+  EXPECT_EQ(string("a2\0\0\0\0c2", 8), partitions[3].end().range_key());
+  EXPECT_EQ(string("\0\0\0\3" "a1\0\0\0\0c1", 12),
+            partitions[3].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\3" "a2\0\0\0\0c2", 12),
+            partitions[3].end().ToString());
 
-  // Expecting Status::InvalidArgument() due to 'splits' and schemas within
-  // 'range_hash_schemas' being defined at the same time.
-  {
-    const auto s = partition_schema.CreatePartitions(
-        splits, bounds, range_hash_schemas, schema, &partitions);
-    ASSERT_TRUE(s.IsInvalidArgument()) << s.ToString();
-    ASSERT_STR_CONTAINS(s.ToString(),
-                        "Both 'split_rows' and 'range_hash_schemas' "
-                        "cannot be populated at the same time");
-  }
+  ASSERT_EQ(2, partitions[4].hash_buckets().size());
+  EXPECT_EQ(0, partitions[4].hash_buckets()[0]);
+  EXPECT_EQ(0, partitions[4].hash_buckets()[1]);
+  EXPECT_EQ(string("a3\0\0b3\0\0", 8), partitions[4].begin().range_key());
+  EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[4].end().range_key());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\0" "a3\0\0b3\0\0", 16),
+            partitions[4].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\0" "a4\0\0b4\0\0", 16),
+            partitions[4].end().ToString());
 
-  // Adding another schema to range_hash_schemas to trigger
-  // Status::InvalidArgument() due to 'bounds and 'range_hash_schema' not being
-  // the same size.
-  {
-    range_hash_schemas.push_back({});
-    const auto s = partition_schema.CreatePartitions(
-        {}, bounds, range_hash_schemas, schema, &partitions);
-    ASSERT_TRUE(s.IsInvalidArgument()) << s.ToString();
-    ASSERT_STR_CONTAINS(s.ToString(),
-                        "4 vs 3: per range hash schemas and range bounds "
-                        "must have the same size");
-  }
+  ASSERT_EQ(2, partitions[5].hash_buckets().size());
+  EXPECT_EQ(0, partitions[5].hash_buckets()[0]);
+  EXPECT_EQ(1, partitions[5].hash_buckets()[1]);
+  EXPECT_EQ(string("a3\0\0b3\0\0", 8), partitions[5].begin().range_key());
+  EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[5].end().range_key());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\1" "a3\0\0b3\0\0", 16),
+            partitions[5].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\1" "a4\0\0b4\0\0", 16),
+            partitions[5].end().ToString());
+
+  ASSERT_EQ(2, partitions[6].hash_buckets().size());
+  EXPECT_EQ(1, partitions[6].hash_buckets()[0]);
+  EXPECT_EQ(0, partitions[6].hash_buckets()[1]);
+  EXPECT_EQ(string("a3\0\0b3\0\0", 8), partitions[6].begin().range_key());
+  EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[6].end().range_key());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\0" "a3\0\0b3\0\0", 16),
+            partitions[6].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\0" "a4\0\0b4\0\0", 16),
+            partitions[6].end().ToString());
+
+  ASSERT_EQ(2, partitions[7].hash_buckets().size());
+  EXPECT_EQ(1, partitions[7].hash_buckets()[0]);
+  EXPECT_EQ(1, partitions[7].hash_buckets()[1]);
+  EXPECT_EQ(string("a3\0\0b3\0\0", 8), partitions[7].begin().range_key());
+  EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[7].end().range_key());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\1" "a3\0\0b3\0\0", 16),
+            partitions[7].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\1" "a4\0\0b4\0\0", 16),
+            partitions[7].end().ToString());
+
+  ASSERT_EQ(2, partitions[8].hash_buckets().size());
+  EXPECT_EQ(2, partitions[8].hash_buckets()[0]);
+  EXPECT_EQ(0, partitions[8].hash_buckets()[1]);
+  EXPECT_EQ(string("a3\0\0b3\0\0", 8), partitions[8].begin().range_key());
+  EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[8].end().range_key());
+  EXPECT_EQ(string("\0\0\0\2" "\0\0\0\0" "a3\0\0b3\0\0", 16),
+            partitions[8].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\2" "\0\0\0\0" "a4\0\0b4\0\0", 16),
+            partitions[8].end().ToString());
+
+  ASSERT_EQ(2, partitions[9].hash_buckets().size());
+  EXPECT_EQ(2, partitions[9].hash_buckets()[0]);
+  EXPECT_EQ(1, partitions[9].hash_buckets()[1]);
+  EXPECT_EQ(string("a3\0\0b3\0\0", 8), partitions[9].begin().range_key());
+  EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[9].end().range_key());
+  EXPECT_EQ(string("\0\0\0\2" "\0\0\0\1" "a3\0\0b3\0\0", 16),
+            partitions[9].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\2" "\0\0\0\1" "a4\0\0b4\0\0", 16),
+            partitions[9].end().ToString());
+
+  ASSERT_EQ(2, partitions[10].hash_buckets().size());
+  EXPECT_EQ(0, partitions[10].hash_buckets()[0]);
+  EXPECT_EQ(0, partitions[10].hash_buckets()[1]);
+  EXPECT_EQ(string("a5\0\0b5\0\0", 8),
+            partitions[10].begin().range_key());
+  EXPECT_EQ(string("a6\0\0\0\0c6", 8),
+            partitions[10].end().range_key());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\0" "a5\0\0b5\0\0", 16),
+            partitions[10].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\0" "a6\0\0\0\0c6", 16),
+            partitions[10].end().ToString());
+
+  ASSERT_EQ(2, partitions[11].hash_buckets().size());
+  EXPECT_EQ(0, partitions[11].hash_buckets()[0]);
+  EXPECT_EQ(1, partitions[11].hash_buckets()[1]);
+  EXPECT_EQ(string("a5\0\0b5\0\0", 8),partitions[11].begin().range_key());
+  EXPECT_EQ(string("a6\0\0\0\0c6", 8),partitions[11].end().range_key());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\1" "a5\0\0b5\0\0", 16),
+            partitions[11].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\1" "a6\0\0\0\0c6", 16),
+            partitions[11].end().ToString());
+
+  ASSERT_EQ(2, partitions[12].hash_buckets().size());
+  EXPECT_EQ(0, partitions[12].hash_buckets()[0]);
+  EXPECT_EQ(2, partitions[12].hash_buckets()[1]);
+  EXPECT_EQ(string("a5\0\0b5\0\0", 8), partitions[12].begin().range_key());
+  EXPECT_EQ(string("a6\0\0\0\0c6", 8), partitions[12].end().range_key());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\2" "a5\0\0b5\0\0", 16),
+            partitions[12].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\2" "a6\0\0\0\0c6", 16),
+            partitions[12].end().ToString());
+
+  ASSERT_EQ(2, partitions[13].hash_buckets().size());
+  EXPECT_EQ(1, partitions[13].hash_buckets()[0]);
+  EXPECT_EQ(0, partitions[13].hash_buckets()[1]);
+  EXPECT_EQ(string("a5\0\0b5\0\0", 8), partitions[13].begin().range_key());
+  EXPECT_EQ(string("a6\0\0\0\0c6", 8), partitions[13].end().range_key());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\0" "a5\0\0b5\0\0", 16),
+            partitions[13].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\0" "a6\0\0\0\0c6", 16),
+            partitions[13].end().ToString());
+
+  ASSERT_EQ(2, partitions[14].hash_buckets().size());
+  EXPECT_EQ(1, partitions[14].hash_buckets()[0]);
+  EXPECT_EQ(1, partitions[14].hash_buckets()[1]);
+  EXPECT_EQ(string("a5\0\0b5\0\0", 8), partitions[14].begin().range_key());
+  EXPECT_EQ(string("a6\0\0\0\0c6", 8), partitions[14].end().range_key());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\1" "a5\0\0b5\0\0", 16),
+            partitions[14].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\1" "a6\0\0\0\0c6", 16),
+            partitions[14].end().ToString());
+
+  ASSERT_EQ(2, partitions[15].hash_buckets().size());
+  EXPECT_EQ(1, partitions[15].hash_buckets()[0]);
+  EXPECT_EQ(2, partitions[15].hash_buckets()[1]);
+  EXPECT_EQ(string("a5\0\0b5\0\0", 8), partitions[15].begin().range_key());
+  EXPECT_EQ(string("a6\0\0\0\0c6", 8), partitions[15].end().range_key());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\2" "a5\0\0b5\0\0", 16),
+            partitions[15].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\2" "a6\0\0\0\0c6", 16),
+            partitions[15].end().ToString());
 }
 
 TEST_F(PartitionTest, CustomHashSchemasPerRangeOnly) {
@@ -1209,18 +1197,7 @@ TEST_F(PartitionTest, CustomHashSchemasPerRangeOnly) {
                 { ColumnId(0), ColumnId(1) }, 2);
 
   // No table-wide hash bucket schema.
-  PartitionSchemaPB schema_builder;
-  PartitionSchema partition_schema;
-  ASSERT_OK(PartitionSchema::FromPB(schema_builder, schema, &partition_schema));
-  CheckSerializationFunctions(schema_builder, partition_schema, schema);
-
-  ASSERT_EQ("RANGE (a, b)", partition_schema.DebugString(schema));
-
-  typedef pair<KuduPartialRow, KuduPartialRow> RangeBound;
-  vector<RangeBound> bounds;
-  vector<PartitionSchema::HashSchema> range_hash_schemas;
-  vector<pair<RangeBound, PartitionSchema::HashSchema>>
-      bounds_with_hash_schemas;
+  PartitionSchemaPB ps_pb;
 
   // [(a1, b1), (a2, b2))
   {
@@ -1230,19 +1207,19 @@ TEST_F(PartitionTest, CustomHashSchemasPerRangeOnly) {
     ASSERT_OK(lower.SetStringNoCopy("b", "b1"));
     ASSERT_OK(upper.SetStringNoCopy("a", "a2"));
     ASSERT_OK(upper.SetStringNoCopy("b", "b2"));
-    PartitionSchema::HashSchema hash_schema_2_buckets =
-        { { { ColumnId(0) }, 2, 0 } };
-    bounds.emplace_back(lower, upper);
-    range_hash_schemas.emplace_back(hash_schema_2_buckets);
-    bounds_with_hash_schemas.emplace_back(
-        make_pair(std::move(lower), std::move(upper)),
-        std::move(hash_schema_2_buckets));
+    AddRangePartitionWithSchema(
+        schema, lower, upper, { { { ColumnId(0) }, 2, 0 } }, &ps_pb);
   }
 
-  vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions(
-      {}, bounds, range_hash_schemas, schema, &partitions));
+  PartitionSchema ps;
+  PartitionSchema::RangesWithHashSchemas ranges;
+  ASSERT_OK(PartitionSchema::FromPB(ps_pb, schema, &ps, &ranges));
+  CheckSerializationFunctions(ps_pb, ps, schema);
 
+  ASSERT_EQ("RANGE (a, b)", ps.DebugString(schema));
+
+  vector<Partition> partitions;
+  ASSERT_OK(ps.CreatePartitions(ranges, schema, &partitions));
   ASSERT_EQ(2, partitions.size());
 
   {
@@ -1262,35 +1239,25 @@ TEST_F(PartitionTest, CustomHashSchemasPerRangeOnly) {
   }
 }
 
-TEST_F(PartitionTest, TestVaryingHashSchemasPerUnboundedRanges) {
-  // CREATE TABLE t (a VARCHAR, b VARCHAR, c VARCHAR, PRIMARY KEY (a, b, c))
+TEST_F(PartitionTest, VaryingHashSchemasPerUnboundedRanges) {
+  // CREATE TABLE t (a STRING, b STRING, c STRING, PRIMARY KEY (a, b, c))
   // PARTITION BY [HASH BUCKET (b), RANGE (a, b, c)];
   Schema schema({ ColumnSchema("a", STRING),
                   ColumnSchema("b", STRING),
                   ColumnSchema("c", STRING) },
                 { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
 
-  PartitionSchemaPB schema_builder;
-  // Table-wide hash schema defined below.
-  AddHashDimension(&schema_builder, { "b" }, 2, 0);
-  PartitionSchema partition_schema;
-  ASSERT_OK(PartitionSchema::FromPB(schema_builder, schema, &partition_schema));
-  CheckSerializationFunctions(schema_builder, partition_schema, schema);
-
-  ASSERT_EQ("HASH (b) PARTITIONS 2, RANGE (a, b, c)",
-            partition_schema.DebugString(schema));
-
-  vector<pair<KuduPartialRow, KuduPartialRow>> bounds;
-  vector<PartitionSchema::HashSchema> range_hash_schemas;
+  PartitionSchemaPB ps_pb;
+  // Table-wide hash schema is defined below.
+  AddHashDimension(&ps_pb, { "b" }, 2, 0);
 
   { // [(_, _, _), (a1, _, c1))
     KuduPartialRow lower(&schema);
     KuduPartialRow upper(&schema);
     ASSERT_OK(upper.SetStringCopy("a", "a1"));
     ASSERT_OK(upper.SetStringCopy("c", "c1"));
-    PartitionSchema::HashSchema hash_schema_4_buckets = {{{ColumnId(0)}, 4, 0}};
-    bounds.emplace_back(lower, upper);
-    range_hash_schemas.emplace_back(hash_schema_4_buckets);
+    AddRangePartitionWithSchema(
+        schema, lower, upper, {{{ColumnId(0)}, 4, 0}}, &ps_pb);
   }
 
   { // [(a2, b2, _), (a3, b3, _))
@@ -1300,8 +1267,7 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerUnboundedRanges) {
     ASSERT_OK(lower.SetStringCopy("b", "b2"));
     ASSERT_OK(upper.SetStringCopy("a", "a3"));
     ASSERT_OK(upper.SetStringCopy("b", "b3"));
-    bounds.emplace_back(lower, upper);
-    range_hash_schemas.emplace_back(PartitionSchema::HashSchema());
+    AddRangePartitionWithSchema(schema, lower, upper, {}, &ps_pb);
   }
 
   { // [(a4, b4, _), (_, _, _))
@@ -1309,16 +1275,20 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerUnboundedRanges) {
     KuduPartialRow upper(&schema);
     ASSERT_OK(lower.SetStringCopy("a", "a4"));
     ASSERT_OK(lower.SetStringCopy("b", "b4"));
-    PartitionSchema::HashSchema hash_schema_2_buckets_by_3 = {
-        {{ColumnId(0)}, 2, 0},
-        {{ColumnId(2)}, 3, 0}
-    };
-    bounds.emplace_back(lower, upper);
-    range_hash_schemas.emplace_back(hash_schema_2_buckets_by_3);
+    AddRangePartitionWithSchema(
+        schema, lower, upper,
+        {{{ColumnId(0)}, 2, 0}, {{ColumnId(2)}, 3, 0}}, &ps_pb);
   }
 
+  PartitionSchema ps;
+  PartitionSchema::RangesWithHashSchemas ranges;
+  ASSERT_OK(PartitionSchema::FromPB(ps_pb, schema, &ps, &ranges));
+  CheckSerializationFunctions(ps_pb, ps, schema);
+
+  ASSERT_EQ("HASH (b) PARTITIONS 2, RANGE (a, b, c)", ps.DebugString(schema));
+
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions({}, bounds, range_hash_schemas, schema, &partitions));
+  ASSERT_OK(ps.CreatePartitions(ranges, schema, &partitions));
   ASSERT_EQ(11, partitions.size());
   // Partitions below sorted by range, can verify that the partition keyspace is filled by checking
   // that the start key of the first partition and the end key of the last partition is cleared.
@@ -1327,7 +1297,7 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerUnboundedRanges) {
   EXPECT_EQ(0, partitions[0].hash_buckets()[0]);
   EXPECT_EQ("", partitions[0].begin().range_key());
   EXPECT_EQ(string("a1\0\0\0\0c1", 8), partitions[0].end().range_key());
-  EXPECT_EQ("", partitions[0].begin().ToString());
+  EXPECT_EQ(string("\0\0\0\0", 4), partitions[0].begin().ToString());
   EXPECT_EQ(string("\0\0\0\0" "a1\0\0\0\0c1", 12), partitions[0].end().ToString());
 
   ASSERT_EQ(1, partitions[1].hash_buckets().size());
@@ -1379,7 +1349,7 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerUnboundedRanges) {
   EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[7].begin().range_key());
   EXPECT_EQ("", partitions[7].end().range_key());
   EXPECT_EQ(string("\0\0\0\0" "\0\0\0\2" "a4\0\0b4\0\0", 16), partitions[7].begin().ToString());
-  EXPECT_EQ(string("\0\0\0\1", 4), partitions[7].end().ToString());
+  EXPECT_EQ(string("\0\0\0\0" "\0\0\0\3", 8), partitions[7].end().ToString());
 
   ASSERT_EQ(2, partitions[8].hash_buckets().size());
   EXPECT_EQ(1, partitions[8].hash_buckets()[0]);
@@ -1403,37 +1373,27 @@ TEST_F(PartitionTest, TestVaryingHashSchemasPerUnboundedRanges) {
   EXPECT_EQ(string("a4\0\0b4\0\0", 8), partitions[10].begin().range_key());
   EXPECT_EQ("", partitions[10].end().range_key());
   EXPECT_EQ(string("\0\0\0\1" "\0\0\0\2" "a4\0\0b4\0\0", 16), partitions[10].begin().ToString());
-  EXPECT_EQ("", partitions[10].end().ToString());
+  EXPECT_EQ(string("\0\0\0\1" "\0\0\0\3", 8), partitions[10].end().ToString());
 }
 
 TEST_F(PartitionTest, NoHashSchemasForLastUnboundedRange) {
-  // CREATE TABLE t (a VARCHAR, b VARCHAR, PRIMARY KEY (a, b))
+  // CREATE TABLE t (a STRING, b STRING, PRIMARY KEY (a, b))
   // PARTITION BY [HASH BUCKET (b), RANGE (a, b)];
   Schema schema({ ColumnSchema("a", STRING),
                   ColumnSchema("b", STRING) },
                 { ColumnId(0), ColumnId(1) }, 2);
 
-  PartitionSchemaPB schema_builder;
-  // Table-wide hash schema defined below.
-  AddHashDimension(&schema_builder, { "b" }, 2, 0);
-  PartitionSchema partition_schema;
-  ASSERT_OK(PartitionSchema::FromPB(schema_builder, schema, &partition_schema));
-  CheckSerializationFunctions(schema_builder, partition_schema, schema);
-
-  ASSERT_EQ("HASH (b) PARTITIONS 2, RANGE (a, b)",
-            partition_schema.DebugString(schema));
-
-  vector<pair<KuduPartialRow, KuduPartialRow>> bounds;
-  vector<PartitionSchema::HashSchema> range_hash_schemas;
+  PartitionSchemaPB ps_pb;
+  // Table-wide hash schema is defined below.
+  AddHashDimension(&ps_pb, { "b" }, 2, 0);
 
   // [(_, _), (a1, _))
   {
     KuduPartialRow lower(&schema);
     KuduPartialRow upper(&schema);
     ASSERT_OK(upper.SetStringCopy("a", "a1"));
-    PartitionSchema::HashSchema hash_schema_3_buckets = {{{ColumnId(0)}, 3, 0}};
-    bounds.emplace_back(lower, upper);
-    range_hash_schemas.emplace_back(hash_schema_3_buckets);
+    AddRangePartitionWithSchema(
+        schema, lower, upper, {{{ColumnId(0)}, 3, 0}}, &ps_pb);
   }
 
   // [(a2, _), (a3, _))
@@ -1442,12 +1402,9 @@ TEST_F(PartitionTest, NoHashSchemasForLastUnboundedRange) {
     KuduPartialRow upper(&schema);
     ASSERT_OK(lower.SetStringCopy("a", "a2"));
     ASSERT_OK(upper.SetStringCopy("a", "a3"));
-    bounds.emplace_back(lower, upper);
-    PartitionSchema::HashSchema hash_schema_3_buckets_by_2 = {
-        {{ColumnId(0)}, 3, 0},
-        {{ColumnId(1)}, 2, 0}
-    };
-    range_hash_schemas.emplace_back(hash_schema_3_buckets_by_2);
+    AddRangePartitionWithSchema(
+        schema, lower, upper,
+        {{{ColumnId(0)}, 3, 0}, {{ColumnId(1)}, 2, 0}}, &ps_pb);
   }
 
   // [(a4, _), (_, _))
@@ -1455,13 +1412,18 @@ TEST_F(PartitionTest, NoHashSchemasForLastUnboundedRange) {
     KuduPartialRow lower(&schema);
     KuduPartialRow upper(&schema);
     ASSERT_OK(lower.SetStringCopy("a", "a4"));
-    bounds.emplace_back(lower, upper);
-    range_hash_schemas.emplace_back(PartitionSchema::HashSchema());
+    AddRangePartitionWithSchema(schema, lower, upper, {}, &ps_pb);
   }
 
+  PartitionSchema ps;
+  PartitionSchema::RangesWithHashSchemas ranges;
+  ASSERT_OK(PartitionSchema::FromPB(ps_pb, schema, &ps, &ranges));
+  CheckSerializationFunctions(ps_pb, ps, schema);
+
+  ASSERT_EQ("HASH (b) PARTITIONS 2, RANGE (a, b)", ps.DebugString(schema));
+
   vector<Partition> partitions;
-  ASSERT_OK(partition_schema.CreatePartitions(
-      {}, bounds, range_hash_schemas, schema, &partitions));
+  ASSERT_OK(ps.CreatePartitions(ranges, schema, &partitions));
   ASSERT_EQ(10, partitions.size());
 
   {
@@ -1470,7 +1432,7 @@ TEST_F(PartitionTest, NoHashSchemasForLastUnboundedRange) {
     EXPECT_EQ(0, p.hash_buckets()[0]);
     EXPECT_EQ("", p.begin().range_key());
     EXPECT_EQ(string("a1\0\0", 4), p.end().range_key());
-    EXPECT_EQ("", p.begin().ToString());
+    EXPECT_EQ(string("\0\0\0\0", 4), p.begin().ToString());
     EXPECT_EQ(string("\0\0\0\0" "a1\0\0c1", 8), p.end().ToString());
   }
   {
@@ -1561,6 +1523,102 @@ TEST_F(PartitionTest, NoHashSchemasForLastUnboundedRange) {
   }
 }
 
+// This test scenario verifies that when converting to PartitionSchemaPB,
+// the 'custom_hash_schema_ranges' field is populated only with ranges
+// that have different from the table-wide hash schema.
+// The rationale is the following: Kudu server side accepts input from the
+// client side that specify ranges with table-wide hash schema as elements
+// of the 'PartitionSchemaPB::custom_hash_schema_ranges' field, but when storing
+// the information in the system catalog, unnecessary parts are omitted.
+TEST_F(PartitionTest, CustomHashSchemaRangesToPB) {
+  const Schema schema({ ColumnSchema("a", STRING),
+                        ColumnSchema("b", STRING),
+                        ColumnSchema("c", STRING) },
+                      { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
+
+  PartitionSchemaPB ps_pb;
+  // Table-wide hash schema.
+  AddHashDimension(&ps_pb, { "b" }, 2, 0);
+
+  {
+    KuduPartialRow lower(&schema);
+    KuduPartialRow upper(&schema);
+    ASSERT_OK(upper.SetStringCopy("a", "a1"));
+    ASSERT_OK(upper.SetStringCopy("c", "c1"));
+    AddRangePartitionWithSchema(
+        schema, lower, upper, {{{ColumnId(0)}, 4, 1}}, &ps_pb);
+  }
+  {
+    KuduPartialRow lower(&schema);
+    ASSERT_OK(lower.SetStringCopy("a", "a2.0"));
+    ASSERT_OK(lower.SetStringCopy("b", "b2.0"));
+    KuduPartialRow upper(&schema);
+    ASSERT_OK(upper.SetStringCopy("a", "a2.1"));
+    ASSERT_OK(upper.SetStringCopy("b", "b2.1"));
+    // This hash schema is actually the table-wide one.
+    AddRangePartitionWithSchema(
+        schema, lower, upper, {{{ColumnId(1)}, 2, 0}}, &ps_pb);
+  }
+  {
+    KuduPartialRow lower(&schema);
+    ASSERT_OK(lower.SetStringCopy("a", "a3.0"));
+    ASSERT_OK(lower.SetStringCopy("b", "b3.0"));
+    KuduPartialRow upper(&schema);
+    ASSERT_OK(upper.SetStringCopy("a", "a3.1"));
+    ASSERT_OK(upper.SetStringCopy("b", "b3.1"));
+    AddRangePartitionWithSchema(
+        schema, lower, upper, {{{ColumnId(2)}, 3, 10}}, &ps_pb);
+  }
+  {
+    KuduPartialRow lower(&schema);
+    ASSERT_OK(lower.SetStringCopy("a", "a4.0"));
+    ASSERT_OK(lower.SetStringCopy("b", "b4.0"));
+    KuduPartialRow upper(&schema);
+    ASSERT_OK(upper.SetStringCopy("a", "a4.1"));
+    ASSERT_OK(upper.SetStringCopy("b", "b4.1"));
+    // This hash schema is not the table-wide one: the seed is different.
+    AddRangePartitionWithSchema(
+        schema, lower, upper, {{{ColumnId(1)}, 2, 5}}, &ps_pb);
+  }
+
+  PartitionSchema ps;
+  PartitionSchema::RangesWithHashSchemas ranges;
+  ASSERT_OK(PartitionSchema::FromPB(ps_pb, schema, &ps, &ranges));
+  ASSERT_TRUE(ps.HasCustomHashSchemas());
+  // All the ranges are transcoded from the original PartitionSchemaPB.
+  ASSERT_EQ(4, ranges.size());
+  // There are only 3 ranges with range-specific hash schema.
+  ASSERT_EQ(3, ps.ranges_with_custom_hash_schemas().size());
+
+  PartitionSchemaPB ps_pb_other;
+  ASSERT_OK(ps.ToPB(schema, &ps_pb_other));
+  ASSERT_EQ(1, ps_pb_other.hash_schema_size());
+  // The range with the table-wide schema shouldn't be there.
+  ASSERT_EQ(3, ps_pb_other.custom_hash_schema_ranges_size());
+  for (const auto& range : ps_pb_other.custom_hash_schema_ranges()) {
+    // All the table's hash schemas have a single dimension.
+    ASSERT_EQ(1, range.hash_schema_size());
+    const auto& hash_dimension = range.hash_schema(0);
+    ASSERT_TRUE(hash_dimension.has_seed());
+    const auto seed = hash_dimension.seed();
+    ASSERT_NE(0, seed);
+    // In this scenario, only the table-wide hash schema has zero seed.
+    ASSERT_TRUE(seed == 1 || seed == 5 || seed == 10);
+    ASSERT_TRUE(hash_dimension.has_num_buckets());
+    const auto num_buckets = hash_dimension.num_buckets();
+    ASSERT_TRUE(num_buckets == 4 || num_buckets == 2 || num_buckets == 3);
+  }
+
+  PartitionSchema ps_other;
+  PartitionSchema::RangesWithHashSchemas ranges_other;
+  ASSERT_OK(PartitionSchema::FromPB(ps_pb_other, schema, &ps_other, &ranges_other));
+  ASSERT_TRUE(ps_other.HasCustomHashSchemas());
+  // The information on the ranges with custom hash schemas isn't persisted
+  // anywhere else but in the 'RangeSchemaPB::custom_hash_schema_ranges' field.
+  ASSERT_EQ(3, ps_other.ranges_with_custom_hash_schemas_.size());
+  ASSERT_EQ(3, ranges_other.size());
+}
+
 TEST_F(PartitionTest, TestPartitionSchemaPB) {
   // CREATE TABLE t (a VARCHAR, b VARCHAR, c VARCHAR, PRIMARY KEY (a, b, c))
   // PARTITION BY [HASH BUCKET (b), RANGE (a, b, c)];
@@ -1634,11 +1692,13 @@ TEST_F(PartitionTest, TestPartitionSchemaPB) {
   }
 
   PartitionSchema partition_schema;
-  ASSERT_OK(PartitionSchema::FromPB(pb, schema, &partition_schema));
+  PartitionSchema::RangesWithHashSchemas ranges;
+  ASSERT_OK(PartitionSchema::FromPB(pb, schema, &partition_schema, &ranges));
 
   // Check fields of 'partition_schema' to verify decoder function.
   ASSERT_EQ(1, partition_schema.hash_schema().size());
-  const auto& ranges_with_hash_schemas = partition_schema.ranges_with_hash_schemas();
+  const auto& ranges_with_hash_schemas =
+      partition_schema.ranges_with_custom_hash_schemas_;
   ASSERT_EQ(3, ranges_with_hash_schemas.size());
 
   EXPECT_EQ(string("a0\0\0\0\0c0", 8), ranges_with_hash_schemas[0].lower);
@@ -1916,6 +1976,341 @@ TEST_F(PartitionTest, HasCustomHashSchemasMethod) {
     ASSERT_OK(PartitionSchema::FromPB(pb, schema, &partition_schema));
     ASSERT_TRUE(partition_schema.HasCustomHashSchemas());
   }
+}
+
+// A test scenario to verify functionality of the
+// PartitionSchema::DropRange() method.
+TEST_F(PartitionTest, DropRange) {
+  const Schema schema({ ColumnSchema("a", STRING),
+                        ColumnSchema("b", STRING),
+                        ColumnSchema("c", STRING) },
+                      { ColumnId(0), ColumnId(1), ColumnId(2) }, 3);
+
+  // Try to drop non-existing range.
+  {
+    PartitionSchemaPB pb;
+    PartitionSchema ps;
+    ASSERT_OK(PartitionSchema::FromPB(pb, schema, &ps));
+
+    KuduPartialRow lower(&schema);
+    ASSERT_OK(lower.SetStringCopy("a", "a0"));
+    ASSERT_OK(lower.SetStringCopy("c", "c0"));
+
+    KuduPartialRow upper(&schema);
+    ASSERT_OK(upper.SetStringCopy("a", "a0"));
+    ASSERT_OK(upper.SetStringCopy("c", "c1"));
+
+    const auto s = ps.DropRange(lower, upper, schema);
+    ASSERT_TRUE(s.IsNotFound()) << s.ToString();
+    ASSERT_STR_CONTAINS(s.ToString(),
+                        "range with specified lower bound not found");
+  }
+
+  // Single range with custom hash schema.
+  {
+    PartitionSchemaPB pb;
+    auto* range = pb.add_custom_hash_schema_ranges();
+
+    KuduPartialRow lower(&schema);
+    ASSERT_OK(lower.SetStringCopy("a", "a0"));
+    ASSERT_OK(lower.SetStringCopy("c", "c0"));
+
+    KuduPartialRow upper(&schema);
+    ASSERT_OK(upper.SetStringCopy("a", "a0"));
+    ASSERT_OK(upper.SetStringCopy("c", "c1"));
+
+    RowOperationsPBEncoder encoder(range->mutable_range_bounds());
+    encoder.Add(RowOperationsPB::RANGE_LOWER_BOUND, lower);
+    encoder.Add(RowOperationsPB::RANGE_UPPER_BOUND, upper);
+
+    auto* hash_dimension = range->add_hash_schema();
+    hash_dimension->add_columns()->set_name("a");
+    hash_dimension->set_num_buckets(2);
+
+    PartitionSchema ps;
+    PartitionSchema::RangesWithHashSchemas ranges;
+    ASSERT_OK(PartitionSchema::FromPB(pb, schema, &ps, &ranges));
+    ASSERT_EQ(1, ranges.size());
+    ASSERT_EQ(1, ps.ranges_with_custom_hash_schemas_.size());
+    ASSERT_EQ(1, ps.hash_schema_idx_by_encoded_range_start_.size());
+    ASSERT_TRUE(ps.HasCustomHashSchemas());
+    ASSERT_OK(ps.DropRange(lower, upper, schema));
+    ASSERT_EQ(0, ps.ranges_with_custom_hash_schemas_.size());
+    ASSERT_EQ(0, ps.hash_schema_idx_by_encoded_range_start_.size());
+    ASSERT_FALSE(ps.HasCustomHashSchemas());
+
+    // Doing that one more time should not work.
+    const auto s = ps.DropRange(lower, upper, schema);
+    ASSERT_TRUE(s.IsNotFound()) << s.ToString();
+    ASSERT_STR_CONTAINS(s.ToString(),
+                        "range with specified lower bound not found");
+    ASSERT_EQ(0, ps.ranges_with_custom_hash_schemas_.size());
+    ASSERT_EQ(0, ps.hash_schema_idx_by_encoded_range_start_.size());
+    ASSERT_FALSE(ps.HasCustomHashSchemas());
+  }
+
+  // Two ranges with range-specific hash schemas.
+  {
+    PartitionSchemaPB pb;
+
+    KuduPartialRow lower_0(&schema);
+    ASSERT_OK(lower_0.SetStringCopy("a", "a0"));
+    ASSERT_OK(lower_0.SetStringCopy("c", "c0"));
+
+    KuduPartialRow upper_0(&schema);
+    ASSERT_OK(upper_0.SetStringCopy("a", "a0"));
+    ASSERT_OK(upper_0.SetStringCopy("c", "c1"));
+
+    {
+      auto* range = pb.add_custom_hash_schema_ranges();
+      RowOperationsPBEncoder encoder(range->mutable_range_bounds());
+      encoder.Add(RowOperationsPB::RANGE_LOWER_BOUND, lower_0);
+      encoder.Add(RowOperationsPB::RANGE_UPPER_BOUND, upper_0);
+
+      auto* hash_dimension = range->add_hash_schema();
+      hash_dimension->add_columns()->set_name("a");
+      hash_dimension->set_num_buckets(5);
+    }
+
+    KuduPartialRow lower_1(&schema);
+    ASSERT_OK(lower_1.SetStringCopy("a", "a1"));
+    ASSERT_OK(lower_1.SetStringCopy("c", "c1"));
+
+    KuduPartialRow upper_1(&schema);
+    ASSERT_OK(upper_1.SetStringCopy("a", "a1"));
+    ASSERT_OK(upper_1.SetStringCopy("c", "c2"));
+    {
+      auto* range = pb.add_custom_hash_schema_ranges();
+
+      RowOperationsPBEncoder encoder(range->mutable_range_bounds());
+      encoder.Add(RowOperationsPB::RANGE_LOWER_BOUND, lower_1);
+      encoder.Add(RowOperationsPB::RANGE_UPPER_BOUND, upper_1);
+
+      auto* hash_dimension = range->add_hash_schema();
+      hash_dimension->add_columns()->set_name("a");
+      hash_dimension->set_num_buckets(3);
+    }
+
+    PartitionSchema ps;
+    PartitionSchema::RangesWithHashSchemas ranges;
+    ASSERT_OK(PartitionSchema::FromPB(pb, schema, &ps, &ranges));
+    ASSERT_EQ(2, ranges.size());
+    ASSERT_EQ(2, ps.ranges_with_custom_hash_schemas_.size());
+    ASSERT_EQ(2, ps.hash_schema_idx_by_encoded_range_start_.size());
+    ASSERT_TRUE(ps.HasCustomHashSchemas());
+
+    // Try to drop a range with non-matching lower range.
+    {
+      KuduPartialRow lower_x(&schema);
+      ASSERT_OK(lower_x.SetStringCopy("a", "a0_x"));
+      ASSERT_OK(lower_x.SetStringCopy("c", "c0_x"));
+      const auto s = ps.DropRange(lower_x, upper_0, schema);
+      ASSERT_TRUE(s.IsNotFound()) << s.ToString();
+      ASSERT_STR_CONTAINS(s.ToString(),
+                          "range with specified lower bound not found");
+      ASSERT_EQ(2, ps.ranges_with_custom_hash_schemas_.size());
+      ASSERT_EQ(2, ps.hash_schema_idx_by_encoded_range_start_.size());
+    }
+
+    // Try to drop a range with non-matching upper range.
+    {
+      KuduPartialRow upper_x(&schema);
+      ASSERT_OK(upper_x.SetStringCopy("a", "a0_x"));
+      ASSERT_OK(upper_x.SetStringCopy("c", "c1_x"));
+
+      const auto s = ps.DropRange(lower_0, upper_x, schema);
+      ASSERT_TRUE(s.IsInvalidArgument()) << s.ToString();
+      ASSERT_STR_CONTAINS(s.ToString(), "upper bound does not match");
+      ASSERT_EQ(2, ps.ranges_with_custom_hash_schemas_.size());
+      ASSERT_EQ(2, ps.hash_schema_idx_by_encoded_range_start_.size());
+    }
+
+    // Try dropping a range with mix-and-match range boundaries.
+    {
+      const auto s = ps.DropRange(lower_0, upper_1, schema);
+      ASSERT_TRUE(s.IsInvalidArgument()) << s.ToString();
+      ASSERT_STR_CONTAINS(s.ToString(), "upper bound does not match");
+      ASSERT_EQ(2, ps.ranges_with_custom_hash_schemas_.size());
+      ASSERT_EQ(2, ps.hash_schema_idx_by_encoded_range_start_.size());
+    }
+    {
+      const auto s = ps.DropRange(lower_1, upper_0, schema);
+      ASSERT_TRUE(s.IsInvalidArgument()) << s.ToString();
+      ASSERT_STR_CONTAINS(s.ToString(), "upper bound does not match");
+      ASSERT_EQ(2, ps.ranges_with_custom_hash_schemas_.size());
+      ASSERT_EQ(2, ps.hash_schema_idx_by_encoded_range_start_.size());
+    }
+  }
+}
+
+TEST_F(PartitionTest, HasCustomHashSchemasWhenAddingAndDroppingRanges) {
+  const Schema schema({ ColumnSchema("a", STRING),
+                        ColumnSchema("b", STRING) },
+                      { ColumnId(0), ColumnId(1) }, 2);
+
+  PartitionSchemaPB ps_pb;
+  // Add the information on the table-wide hash schema.
+  AddHashDimension(&ps_pb, { "b" }, 2, 0);
+
+  // No ranges defined yet, so there isn't any range with range-specific
+  // hash schema.
+  {
+    PartitionSchema ps;
+    PartitionSchema::RangesWithHashSchemas ranges;
+    ASSERT_OK(PartitionSchema::FromPB(ps_pb, schema, &ps, &ranges));
+    ASSERT_FALSE(ps.HasCustomHashSchemas());
+    ASSERT_EQ(0, ranges.size());
+    ASSERT_EQ(0, ps.ranges_with_custom_hash_schemas_.size());
+    ASSERT_EQ(0, ps.hash_schema_idx_by_encoded_range_start_.size());
+  }
+
+  // Add a range with table-wide hash schema into the
+  // PartitionSchemaPB::custom_hash_schema_ranges.
+  {
+    KuduPartialRow lower(&schema);
+    ASSERT_OK(lower.SetStringCopy("a", "a0.0"));
+    ASSERT_OK(lower.SetStringCopy("b", "b0.0"));
+
+    KuduPartialRow upper(&schema);
+    ASSERT_OK(upper.SetStringCopy("a", "a0.1"));
+    ASSERT_OK(upper.SetStringCopy("b", "b0.1"));
+
+    auto* range = ps_pb.add_custom_hash_schema_ranges();
+    RowOperationsPBEncoder encoder(range->mutable_range_bounds());
+    encoder.Add(RowOperationsPB::RANGE_LOWER_BOUND, lower);
+    encoder.Add(RowOperationsPB::RANGE_UPPER_BOUND, upper);
+
+    auto* hash_dimension = range->add_hash_schema();
+    hash_dimension->add_columns()->set_name("b");
+    hash_dimension->set_num_buckets(2);
+    hash_dimension->set_seed(0);
+
+    PartitionSchema ps;
+    PartitionSchema::RangesWithHashSchemas ranges;
+    ASSERT_OK(PartitionSchema::FromPB(ps_pb, schema, &ps, &ranges));
+    ASSERT_FALSE(ps.HasCustomHashSchemas());
+    ASSERT_EQ(1, ranges.size());
+    ASSERT_EQ(0, ps.ranges_with_custom_hash_schemas_.size());
+    ASSERT_EQ(0, ps.hash_schema_idx_by_encoded_range_start_.size());
+  }
+
+  // Add a range with a custom hash schema.
+  {
+    auto* range = ps_pb.add_custom_hash_schema_ranges();
+
+    KuduPartialRow lower(&schema);
+    ASSERT_OK(lower.SetStringCopy("a", "a1.0"));
+    ASSERT_OK(lower.SetStringCopy("b", "b1.0"));
+
+    KuduPartialRow upper(&schema);
+    ASSERT_OK(upper.SetStringCopy("a", "a1.1"));
+    ASSERT_OK(upper.SetStringCopy("b", "b1.1"));
+
+    RowOperationsPBEncoder encoder(range->mutable_range_bounds());
+    encoder.Add(RowOperationsPB::RANGE_LOWER_BOUND, lower);
+    encoder.Add(RowOperationsPB::RANGE_UPPER_BOUND, upper);
+
+    auto* hash_dimension = range->add_hash_schema();
+    hash_dimension->add_columns()->set_name("a");
+    hash_dimension->set_num_buckets(3);
+
+    PartitionSchema ps;
+    PartitionSchema::RangesWithHashSchemas ranges;
+    ASSERT_OK(PartitionSchema::FromPB(ps_pb, schema, &ps, &ranges));
+    ASSERT_TRUE(ps.HasCustomHashSchemas());
+    ASSERT_EQ(2, ranges.size());
+    ASSERT_EQ(1, ps.ranges_with_custom_hash_schemas_.size());
+    ASSERT_EQ(1, ps.hash_schema_idx_by_encoded_range_start_.size());
+  }
+
+  // Add one more range with table-wide hash schema into the
+  // 'custom_hash_schema_ranges'.
+  {
+    KuduPartialRow lower(&schema);
+    ASSERT_OK(lower.SetStringCopy("a", "a2.0"));
+    ASSERT_OK(lower.SetStringCopy("b", "b2.0"));
+
+    KuduPartialRow upper(&schema);
+    ASSERT_OK(upper.SetStringCopy("a", "a2.1"));
+    ASSERT_OK(upper.SetStringCopy("b", "b2.1"));
+
+    auto* range = ps_pb.add_custom_hash_schema_ranges();
+    RowOperationsPBEncoder encoder(range->mutable_range_bounds());
+    encoder.Add(RowOperationsPB::RANGE_LOWER_BOUND, lower);
+    encoder.Add(RowOperationsPB::RANGE_UPPER_BOUND, upper);
+
+    auto* hash_dimension = range->add_hash_schema();
+    hash_dimension->add_columns()->set_name("b");
+    hash_dimension->set_num_buckets(2);
+    hash_dimension->set_seed(0);
+
+    PartitionSchema ps;
+    PartitionSchema::RangesWithHashSchemas ranges;
+    ASSERT_OK(PartitionSchema::FromPB(ps_pb, schema, &ps, &ranges));
+    ASSERT_TRUE(ps.HasCustomHashSchemas());
+    ASSERT_EQ(3, ranges.size());
+    ASSERT_EQ(1, ps.ranges_with_custom_hash_schemas_.size());
+    ASSERT_EQ(1, ps.hash_schema_idx_by_encoded_range_start_.size());
+  }
+
+  // Now check how HasCustomHashSchema() works when dropping ranges.
+  PartitionSchema ps;
+  ASSERT_OK(PartitionSchema::FromPB(ps_pb, schema, &ps));
+
+  // Drop the first range that has the table-wide hash schema.
+  {
+    KuduPartialRow lower(&schema);
+    ASSERT_OK(lower.SetStringCopy("a", "a0.0"));
+    ASSERT_OK(lower.SetStringCopy("b", "b0.0"));
+
+    KuduPartialRow upper(&schema);
+    ASSERT_OK(upper.SetStringCopy("a", "a0.1"));
+    ASSERT_OK(upper.SetStringCopy("b", "b0.1"));
+
+    const auto s = ps.DropRange(lower, upper, schema);
+    ASSERT_TRUE(s.IsNotFound()) << s.ToString();
+    ASSERT_STR_CONTAINS(s.ToString(),
+                        "range with specified lower bound not found");
+  }
+  // The range with custom hash schema is still there.
+  ASSERT_TRUE(ps.HasCustomHashSchemas());
+  ASSERT_EQ(1, ps.ranges_with_custom_hash_schemas_.size());
+  ASSERT_EQ(1, ps.hash_schema_idx_by_encoded_range_start_.size());
+
+  // Drop the range with range-specific hash schema.
+  {
+    KuduPartialRow lower(&schema);
+    ASSERT_OK(lower.SetStringCopy("a", "a1.0"));
+    ASSERT_OK(lower.SetStringCopy("b", "b1.0"));
+
+    KuduPartialRow upper(&schema);
+    ASSERT_OK(upper.SetStringCopy("a", "a1.1"));
+    ASSERT_OK(upper.SetStringCopy("b", "b1.1"));
+
+    ASSERT_OK(ps.DropRange(lower, upper, schema));
+  }
+  ASSERT_FALSE(ps.HasCustomHashSchemas());
+  ASSERT_EQ(0, ps.ranges_with_custom_hash_schemas_.size());
+  ASSERT_EQ(0, ps.hash_schema_idx_by_encoded_range_start_.size());
+
+  // Drop the remaining range that has the table-wide hash schema.
+  {
+    KuduPartialRow lower(&schema);
+    ASSERT_OK(lower.SetStringCopy("a", "a2.0"));
+    ASSERT_OK(lower.SetStringCopy("b", "b2.0"));
+
+    KuduPartialRow upper(&schema);
+    ASSERT_OK(upper.SetStringCopy("a", "a2.1"));
+    ASSERT_OK(upper.SetStringCopy("b", "b2.1"));
+
+    const auto s = ps.DropRange(lower, upper, schema);
+    ASSERT_TRUE(s.IsNotFound()) << s.ToString();
+    ASSERT_STR_CONTAINS(s.ToString(),
+                        "range with specified lower bound not found");
+  }
+  ASSERT_FALSE(ps.HasCustomHashSchemas());
+  ASSERT_EQ(0, ps.ranges_with_custom_hash_schemas_.size());
+  ASSERT_EQ(0, ps.hash_schema_idx_by_encoded_range_start_.size());
 }
 
 } // namespace kudu

@@ -19,13 +19,13 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags_declare.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
@@ -81,6 +81,8 @@ using kudu::log::LogEntryPB;
 using kudu::log::LogOptions;
 using kudu::log::LogReader;
 using kudu::pb_util::SecureShortDebugString;
+using std::nullopt;
+using std::optional;
 using std::shared_ptr;
 using std::string;
 using std::unique_ptr;
@@ -132,7 +134,18 @@ class RaftConsensusQuorumTest : public KuduTest {
       opts.wal_root = test_path;
       opts.data_roots = { test_path };
       unique_ptr<FsManager> fs_manager(new FsManager(env_, opts));
-      RETURN_NOT_OK(fs_manager->CreateInitialFileSystemLayout());
+      string server_key;
+      string server_key_iv;
+      string server_key_version;
+      GetEncryptionKey(&server_key, &server_key_iv, &server_key_version);
+      if (server_key.empty()) {
+        RETURN_NOT_OK(fs_manager->CreateInitialFileSystemLayout());
+      } else {
+        RETURN_NOT_OK(fs_manager->CreateInitialFileSystemLayout(nullopt,
+                                                                server_key,
+                                                                server_key_iv,
+                                                                server_key_version));
+      }
       RETURN_NOT_OK(fs_manager->Open());
 
       scoped_refptr<Log> log;
@@ -329,7 +342,7 @@ class RaftConsensusQuorumTest : public KuduTest {
     const int kMaxBackoffExp = 8;
     OpId committed = MinimumOpId();
     while (true) {
-      boost::optional<OpId> opt_committed = peer->GetLastOpId(COMMITTED_OPID);
+      optional<OpId> opt_committed = peer->GetLastOpId(COMMITTED_OPID);
       if (opt_committed) {
         committed = *opt_committed;
         if (committed.index() >= to_wait_for) {
@@ -1013,7 +1026,7 @@ TEST_F(RaftConsensusQuorumTest, TestRequestVote) {
   request.set_candidate_uuid(fs_managers_[0]->uuid());
   request.set_candidate_term(last_op_id.term() + 1);
   ASSERT_OK(peer->RequestVote(&request,
-                              TabletVotingState(boost::none, tablet::TABLET_DATA_READY),
+                              TabletVotingState(nullopt, tablet::TABLET_DATA_READY),
                               &response));
   ASSERT_FALSE(response.vote_granted());
   ASSERT_EQ(ConsensusErrorPB::LEADER_IS_ALIVE, response.consensus_error().code());
@@ -1027,7 +1040,7 @@ TEST_F(RaftConsensusQuorumTest, TestRequestVote) {
   flush_count_before = flush_count();
   request.set_ignore_live_leader(true);
   ASSERT_OK(peer->RequestVote(&request,
-                              TabletVotingState(boost::none, tablet::TABLET_DATA_READY),
+                              TabletVotingState(nullopt, tablet::TABLET_DATA_READY),
                               &response));
   ASSERT_TRUE(response.vote_granted());
   ASSERT_EQ(last_op_id.term() + 1, response.responder_term());
@@ -1040,7 +1053,7 @@ TEST_F(RaftConsensusQuorumTest, TestRequestVote) {
   response.Clear();
   flush_count_before = flush_count();
   ASSERT_OK(peer->RequestVote(&request,
-                              TabletVotingState(boost::none, tablet::TABLET_DATA_READY),
+                              TabletVotingState(nullopt, tablet::TABLET_DATA_READY),
                               &response));
   ASSERT_TRUE(response.vote_granted());
   ASSERT_EQ(0, flush_count() - flush_count_before)
@@ -1051,7 +1064,7 @@ TEST_F(RaftConsensusQuorumTest, TestRequestVote) {
   response.Clear();
   request.set_candidate_uuid(fs_managers_[2]->uuid());
   ASSERT_OK(peer->RequestVote(&request,
-                              TabletVotingState(boost::none, tablet::TABLET_DATA_READY),
+                              TabletVotingState(nullopt, tablet::TABLET_DATA_READY),
                               &response));
   ASSERT_FALSE(response.vote_granted());
   ASSERT_TRUE(response.has_consensus_error());
@@ -1073,7 +1086,7 @@ TEST_F(RaftConsensusQuorumTest, TestRequestVote) {
   request.set_candidate_term(last_op_id.term() + 2);
   response.Clear();
   ASSERT_OK(peer->RequestVote(&request,
-                              TabletVotingState(boost::none, tablet::TABLET_DATA_READY),
+                              TabletVotingState(nullopt, tablet::TABLET_DATA_READY),
                               &response));
   ASSERT_TRUE(response.vote_granted());
   ASSERT_EQ(last_op_id.term() + 2, response.responder_term());
@@ -1089,7 +1102,7 @@ TEST_F(RaftConsensusQuorumTest, TestRequestVote) {
   request.set_candidate_term(last_op_id.term() + 1);
   response.Clear();
   ASSERT_OK(peer->RequestVote(&request,
-                              TabletVotingState(boost::none, tablet::TABLET_DATA_READY),
+                              TabletVotingState(nullopt, tablet::TABLET_DATA_READY),
                               &response));
   ASSERT_FALSE(response.vote_granted());
   ASSERT_TRUE(response.has_consensus_error());
@@ -1107,7 +1120,7 @@ TEST_F(RaftConsensusQuorumTest, TestRequestVote) {
   request.set_is_pre_election(true);
   response.Clear();
   ASSERT_OK(peer->RequestVote(&request,
-                              TabletVotingState(boost::none, tablet::TABLET_DATA_READY),
+                              TabletVotingState(nullopt, tablet::TABLET_DATA_READY),
                               &response));
   ASSERT_TRUE(response.vote_granted());
   ASSERT_FALSE(response.has_consensus_error());
@@ -1128,7 +1141,7 @@ TEST_F(RaftConsensusQuorumTest, TestRequestVote) {
   request.mutable_candidate_status()->mutable_last_received()->CopyFrom(MinimumOpId());
   response.Clear();
   ASSERT_OK(peer->RequestVote(&request,
-                              TabletVotingState(boost::none, tablet::TABLET_DATA_READY),
+                              TabletVotingState(nullopt, tablet::TABLET_DATA_READY),
                               &response));
   ASSERT_FALSE(response.vote_granted());
   ASSERT_TRUE(response.has_consensus_error());

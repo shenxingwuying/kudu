@@ -19,11 +19,11 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
@@ -291,6 +291,54 @@ struct NullableValueTestSetup {
   }
 };
 
+// Setup for testing nullable columns
+struct ImmutableColumnTestSetup {
+  static Schema CreateSchema() {
+    return Schema({ ColumnSchema("key", INT32),
+                    ColumnSchema("key_idx", INT32),
+                    ColumnSchema("val", INT32),
+                    ColumnSchema("imm_val", INT32, true, true) }, 1);
+  }
+
+  static void BuildRowKey(KuduPartialRow *row, int64_t i) {
+    CHECK_OK(row->SetInt32(0, (int32_t)i));
+  }
+
+  // builds a row key from an existing row for updates
+  template<class RowType>
+  void BuildRowKeyFromExistingRow(KuduPartialRow *row, const RowType& src_row) {
+    CHECK_OK(row->SetInt32(0, *reinterpret_cast<const int32_t*>(src_row.cell_ptr(0))));
+  }
+
+  static void BuildRow(KuduPartialRow *row, int64_t key_idx,
+                       int32_t val = 0, bool set_immutable_column = false) {
+    BuildRowKey(row, key_idx);
+    CHECK_OK(row->SetInt32(1, key_idx));
+    CHECK_OK(row->SetInt32(2, val));
+    if (set_immutable_column) {
+      CHECK_OK(row->SetInt32(3, val));
+    } else {
+      CHECK_OK(row->Unset(3));
+    }
+  }
+
+  static std::string FormatDebugRow(int64_t key_idx, int64_t val, bool /* updated */,
+                                    std::optional<int64_t> immutable_column_val = std::nullopt) {
+    if (immutable_column_val) {
+      return strings::Substitute(
+          "(int32 key=$0, int32 key_idx=$1, int32 val=$2, int32 imm_val=$3)",
+          static_cast<int32_t>(key_idx), key_idx, val, *immutable_column_val);
+    }
+    return strings::Substitute(
+        "(int32 key=$0, int32 key_idx=$1, int32 val=$2, int32 imm_val=NULL)",
+        static_cast<int32_t>(key_idx), key_idx, val);
+  }
+
+  static uint64_t GetMaxRows() {
+    return std::numeric_limits<uint32_t>::max() - 1;
+  }
+};
+
 // Use this with TYPED_TEST_SUITE from gtest
 typedef ::testing::Types<
                          StringKeyTestSetup,
@@ -298,8 +346,11 @@ typedef ::testing::Types<
                          IntKeyTestSetup<INT16>,
                          IntKeyTestSetup<INT32>,
                          IntKeyTestSetup<INT64>,
-                         NullableValueTestSetup
+                         NullableValueTestSetup,
+                         ImmutableColumnTestSetup
                          > TabletTestHelperTypes;
+
+typedef ::testing::Types<ImmutableColumnTestSetup> TestImmutableColumnHelperTypes;
 
 template<class TESTSETUP>
 class TabletTestBase : public KuduTabletTest {
@@ -337,6 +388,14 @@ class TabletTestBase : public KuduTabletTest {
     InsertOrUpsertTestRows(RowOperationsPB::UPSERT, first_row, count, val, ts);
   }
 
+  // Upserts "count" rows, ignoring immutable column errors.
+  void UpsertIgnoreTestRows(int64_t first_row,
+                            int64_t count,
+                            int32_t val,
+                            TimeSeries *ts = nullptr) {
+    InsertOrUpsertTestRows(RowOperationsPB::UPSERT_IGNORE, first_row, count, val, ts);
+  }
+
   // Deletes 'count' rows, starting with 'first_row'.
   void DeleteTestRows(int64_t first_row, int64_t count) {
     LocalTabletWriter writer(tablet().get(), &client_schema_);
@@ -362,6 +421,8 @@ class TabletTestBase : public KuduTabletTest {
         CHECK_OK(writer.InsertIgnore(row));
       } else if (type == RowOperationsPB::UPSERT) {
         CHECK_OK(writer.Upsert(row));
+      } else if (type == RowOperationsPB::UPSERT_IGNORE) {
+        CHECK_OK(writer.UpsertIgnore(row));
       } else {
         LOG(FATAL) << "bad type: " << type;
       }
@@ -433,11 +494,11 @@ class TabletTestBase : public KuduTabletTest {
   }
 
   void VerifyTestRows(int32_t first_row, uint64_t expected_count) {
-    VerifyTestRowsWithVerifier(first_row, expected_count, boost::none);
+    VerifyTestRowsWithVerifier(first_row, expected_count, std::nullopt);
   }
 
   void VerifyTestRowsWithVerifier(int32_t first_row, uint64_t expected_count,
-                                  const boost::optional<TestRowVerifier>& verifier) {
+                                  const std::optional<TestRowVerifier>& verifier) {
     std::unique_ptr<RowwiseIterator> iter;
     ASSERT_OK(tablet()->NewRowIterator(client_schema_, &iter));
     VerifyTestRowsWithRowIteratorAndVerifier(first_row, expected_count, std::move(iter), verifier);
@@ -445,7 +506,7 @@ class TabletTestBase : public KuduTabletTest {
 
   void VerifyTestRowsWithTimestampAndVerifier(int32_t first_row, uint64_t expected_count,
                                               Timestamp timestamp,
-                                              const boost::optional<TestRowVerifier>& verifier) {
+                                              const std::optional<TestRowVerifier>& verifier) {
     RowIteratorOptions opts;
     opts.projection = &client_schema_;
     opts.snap_to_include = MvccSnapshot(timestamp);
@@ -456,7 +517,7 @@ class TabletTestBase : public KuduTabletTest {
 
   void VerifyTestRowsWithRowIteratorAndVerifier(int32_t first_row, uint64_t expected_row_count,
                                                 std::unique_ptr<RowwiseIterator> iter,
-                                                const boost::optional<TestRowVerifier>& verifier) {
+                                                const std::optional<TestRowVerifier>& verifier) {
     ASSERT_OK(iter->Init(nullptr));
     int batch_size = std::max<size_t>(1, std::min<size_t>(expected_row_count / 10,
                                                           4L * 1024 * 1024 / schema_.byte_size()));

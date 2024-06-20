@@ -173,6 +173,47 @@ public class TestKuduClient {
   }
 
   /**
+   * Test recalling a soft deleted table through a KuduClient.
+   */
+  @Test(timeout = 100000)
+  public void testRecallDeletedTable() throws Exception {
+    // Check that we can create a table.
+    assertTrue(client.getTablesList().getTablesList().isEmpty());
+    final KuduTable table = client.createTable(TABLE_NAME, basicSchema,
+        getBasicCreateTableOptions());
+    final String tableId = table.getTableId();
+    assertEquals(1, client.getTablesList().getTablesList().size());
+    assertEquals(TABLE_NAME, client.getTablesList().getTablesList().get(0));
+
+    // Check that we can delete it.
+    client.deleteTable(TABLE_NAME, 600);
+    List<String> tables = client.getTablesList().getTablesList();
+    assertEquals(0, tables.size());
+    tables = client.getSoftDeletedTablesList().getTablesList();
+    assertEquals(1, tables.size());
+    String softDeletedTable = tables.get(0);
+    assertEquals(TABLE_NAME, softDeletedTable);
+    // Check that we can recall the soft_deleted table.
+    client.recallDeletedTable(tableId);
+    assertEquals(1, client.getTablesList().getTablesList().size());
+    assertEquals(TABLE_NAME, client.getTablesList().getTablesList().get(0));
+
+    // Check that we can delete it.
+    client.deleteTable(TABLE_NAME, 600);
+    tables = client.getTablesList().getTablesList();
+    assertEquals(0, tables.size());
+    tables = client.getSoftDeletedTablesList().getTablesList();
+    assertEquals(1, tables.size());
+    softDeletedTable = tables.get(0);
+    assertEquals(TABLE_NAME, softDeletedTable);
+    // Check we can recall soft deleted table with new table name.
+    final String newTableName = "NewTable";
+    client.recallDeletedTable(tableId, newTableName);
+    assertEquals(1, client.getTablesList().getTablesList().size());
+    assertEquals(newTableName, client.getTablesList().getTablesList().get(0));
+  }
+
+  /**
    * Test creating a table with various invalid schema cases.
    */
   @Test(timeout = 100000)
@@ -738,6 +779,106 @@ public class TestKuduClient {
         expectedRow.append("NULL");
       }
       assertEquals(expectedRow.toString(), rowStrings.get(i));
+    }
+  }
+
+  /**
+   * Test inserting and retrieving rows from a table that has a range partition
+   * with custom hash schema.
+   */
+  @Test(timeout = 100000)
+  public void testRangeWithCustomHashSchema() throws Exception {
+    List<ColumnSchema> cols = new ArrayList<>();
+    cols.add(new ColumnSchema.ColumnSchemaBuilder("c0", Type.INT64).key(true).build());
+    cols.add(new ColumnSchema.ColumnSchemaBuilder("c1", Type.INT32).nullable(true).build());
+    Schema schema = new Schema(cols);
+
+    CreateTableOptions options = new CreateTableOptions();
+    options.setRangePartitionColumns(ImmutableList.of("c0"));
+    options.addHashPartitions(ImmutableList.of("c0"), 2);
+
+    // Add range partition with table-wide hash schema.
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addLong("c0", -100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addLong("c0", 100);
+      options.addRangePartition(lower, upper);
+    }
+
+    // Add a partition with custom hash schema.
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addLong("c0", 100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addLong("c0", 200);
+
+      RangePartitionWithCustomHashSchema rangePartition =
+          new RangePartitionWithCustomHashSchema(
+              lower,
+              upper,
+              RangePartitionBound.INCLUSIVE_BOUND,
+              RangePartitionBound.EXCLUSIVE_BOUND);
+      rangePartition.addHashPartitions(ImmutableList.of("c0"), 5, 0);
+      options.addRangePartition(rangePartition);
+    }
+
+    client.createTable(TABLE_NAME, schema, options);
+
+    KuduSession session = client.newSession();
+    session.setFlushMode(SessionConfiguration.FlushMode.AUTO_FLUSH_SYNC);
+    KuduTable table = client.openTable(TABLE_NAME);
+
+    // Check the range with the table-wide hash schema.
+    {
+      for (int i = 0; i < 10; ++i) {
+        Insert insert = table.newInsert();
+        PartialRow row = insert.getRow();
+        row.addLong("c0", i);
+        row.addInt("c1", 1000 * i);
+        session.apply(insert);
+      }
+
+      // Scan all the rows in the table.
+      List<String> rowStringsAll = scanTableToStrings(table);
+      assertEquals(10, rowStringsAll.size());
+
+      // Now scan the rows that are in the range with the table-wide hash schema.
+      List<String> rowStrings = scanTableToStrings(table,
+          KuduPredicate.newComparisonPredicate(schema.getColumn("c0"), GREATER_EQUAL, 0),
+          KuduPredicate.newComparisonPredicate(schema.getColumn("c0"), LESS, 100));
+      assertEquals(10, rowStrings.size());
+      for (int i = 0; i < rowStrings.size(); ++i) {
+        StringBuilder expectedRow = new StringBuilder();
+        expectedRow.append(String.format("INT64 c0=%d, INT32 c1=%d", i, 1000 * i));
+        assertEquals(expectedRow.toString(), rowStrings.get(i));
+      }
+    }
+
+    // Check the range with the custom hash schema.
+    {
+      for (int i = 100; i < 110; ++i) {
+        Insert insert = table.newInsert();
+        PartialRow row = insert.getRow();
+        row.addLong("c0", i);
+        row.addInt("c1", 2 * i);
+        session.apply(insert);
+      }
+
+      // Scan all the rows in the table.
+      List<String> rowStringsAll = scanTableToStrings(table);
+      assertEquals(20, rowStringsAll.size());
+
+      // Now scan the rows that are in the range with the custom hash schema.
+      List<String> rowStrings = scanTableToStrings(table,
+          KuduPredicate.newComparisonPredicate(schema.getColumn("c0"), GREATER_EQUAL, 100));
+      assertEquals(10, rowStrings.size());
+      for (int i = 0; i < rowStrings.size(); ++i) {
+        StringBuilder expectedRow = new StringBuilder();
+        expectedRow.append(String.format("INT64 c0=%d, INT32 c1=%d",
+            i + 100, 2 * (i + 100)));
+        assertEquals(expectedRow.toString(), rowStrings.get(i));
+      }
     }
   }
 

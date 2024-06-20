@@ -34,6 +34,11 @@
 
 #include "kudu/client/client.h"
 #include "kudu/client/master_rpc.h"
+#include "kudu/fs/default_key_provider.h"
+#include "kudu/fs/fs.pb.h"
+#include "kudu/fs/key_provider.h"
+#include "kudu/postgres/mini_postgres.h"
+#include "kudu/ranger-kms/mini_ranger_kms.h"
 #include "kudu/rpc/rpc_header.pb.h"
 #if !defined(NO_CHRONY)
 #include "kudu/clock/test/mini_chronyd.h"
@@ -41,6 +46,7 @@
 #include "kudu/common/wire_protocol.h"
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/gutil/basictypes.h"
+#include "kudu/gutil/strings/escaping.h"
 #include "kudu/gutil/strings/join.h"
 #include "kudu/gutil/strings/stringpiece.h"
 #include "kudu/gutil/strings/substitute.h"
@@ -85,6 +91,7 @@ using kudu::master::MasterServiceProxy;
 using kudu::pb_util::SecureDebugString;
 using kudu::pb_util::SecureShortDebugString;
 using kudu::rpc::RpcController;
+using kudu::security::DefaultKeyProvider;
 using kudu::server::ServerStatusPB;
 using kudu::tserver::ListTabletsRequestPB;
 using kudu::tserver::ListTabletsResponsePB;
@@ -97,6 +104,7 @@ using std::string;
 using std::unique_ptr;
 using std::unordered_set;
 using std::vector;
+using strings::a2b_hex;
 using strings::Substitute;
 
 typedef ListTabletsResponsePB::StatusAndSchemaPB StatusAndSchemaPB;
@@ -125,6 +133,8 @@ ExternalMiniClusterOptions::ExternalMiniClusterOptions()
       principal("kudu"),
       hms_mode(HmsMode::NONE),
       enable_ranger(false),
+      enable_ranger_kms(false),
+      ranger_cluster_key("kuduclusterkey"),
       enable_encryption(FLAGS_encrypt_data_at_rest),
       logtostderr(true),
       start_process_timeout(MonoDelta::FromSeconds(70)),
@@ -151,6 +161,14 @@ ExternalMiniCluster::~ExternalMiniCluster() {
 
 Env* ExternalMiniCluster::env() const {
   return Env::Default();
+}
+
+Env* ExternalMiniCluster::ts_env(int ts_idx) const {
+  return tablet_server(ts_idx)->env();
+}
+
+Env* ExternalMiniCluster::master_env(int master_idx) const {
+  return master(master_idx)->env();
 }
 
 Status ExternalMiniCluster::DeduceBinRoot(std::string* ret) {
@@ -309,9 +327,12 @@ Status ExternalMiniCluster::Start() {
   }
 #endif // #if !defined(NO_CHRONY) ...
 
-  if (opts_.enable_ranger) {
+  if (opts_.enable_ranger || opts_.enable_ranger_kms) {
+    if (!postgres_ || !postgres_->IsStarted()) {
+      postgres_.reset(new postgres::MiniPostgres(cluster_root(), GetBindIpForExternalServer(0)));
+    }
     string host = GetBindIpForExternalServer(0);
-    ranger_.reset(new ranger::MiniRanger(cluster_root(), host));
+    ranger_.reset(new ranger::MiniRanger(cluster_root(), host, postgres_));
     if (opts_.enable_kerberos) {
 
       // The SPNs match the ones defined in mini_ranger_configs.h.
@@ -341,6 +362,32 @@ Status ExternalMiniCluster::Start() {
     RETURN_NOT_OK_PREPEND(ranger_->CreateClientConfig(JoinPathSegments(cluster_root(),
                                                                        "ranger-client")),
                           "Failed to write Ranger client config");
+  }
+
+  if (opts_.enable_ranger_kms) {
+    string host = GetBindIpForExternalServer(0);
+    ranger_kms_.reset(new rangerkms::MiniRangerKMS(cluster_root(), host, postgres_, ranger_));
+    if (opts_.enable_kerberos) {
+      string keytab;
+      RETURN_NOT_OK_PREPEND(kdc_->CreateServiceKeytab(
+          Substitute("rangerkms/$0@KRBTEST.COM", host),
+          &keytab),
+        "could not create ranger kms keytab");
+      string spnego_keytab;
+      RETURN_NOT_OK_PREPEND(kdc_->CreateServiceKeytab(
+          Substitute("HTTP/$0@KRBTEST.COM", host),
+          &spnego_keytab),
+        "could not create ranger kms keytab");
+
+      ranger_kms_->EnableKerberos(kdc_->GetEnvVars()["KRB5_CONFIG"], keytab, spnego_keytab);
+    }
+    RETURN_NOT_OK(kdc_->CreateUserPrincipal("keyadmin"));
+    RETURN_NOT_OK(kdc_->Kinit("keyadmin"));
+    RETURN_NOT_OK_PREPEND(ranger_kms_->Start(), "Failed to start the Ranger KMS service");
+    RETURN_NOT_OK_PREPEND(ranger_kms_->CreateClusterKey(opts_.ranger_cluster_key,
+                                                        &opts_.ranger_cluster_key_version),
+                          "Failed to create cluster key");;
+    RETURN_NOT_OK(kdc_->Kinit("test-admin"));
   }
 
   // Start the HMS.
@@ -462,12 +509,12 @@ string ExternalMiniCluster::GetLogPath(const string& daemon_id) const {
 }
 
 string ExternalMiniCluster::GetDataPath(const string& daemon_id,
-                                        boost::optional<uint32_t> dir_index) const {
+                                        std::optional<uint32_t> dir_index) const {
   CHECK(!opts_.cluster_root.empty());
   string data_path = "data";
   if (dir_index) {
     CHECK_LT(*dir_index, opts_.num_data_dirs);
-    data_path = Substitute("$0-$1", data_path, dir_index.get());
+    data_path = Substitute("$0-$1", data_path, *dir_index);
   } else {
     CHECK_EQ(1, opts_.num_data_dirs);
   }
@@ -537,6 +584,7 @@ Status ExternalMiniCluster::StartMasters() {
     scoped_refptr<ExternalMaster> peer;
     RETURN_NOT_OK(CreateMaster(master_rpc_addrs, i, &peer));
     RETURN_NOT_OK_PREPEND(peer->Start(), Substitute("Unable to start Master at index $0", i));
+    RETURN_NOT_OK(peer->SetServerKey());
     masters_.emplace_back(std::move(peer));
   }
   return Status::OK();
@@ -568,6 +616,11 @@ Status ExternalMiniCluster::AddTabletServer() {
   ExternalDaemonOptions opts;
   opts.messenger = messenger_;
   opts.enable_encryption = opts_.enable_encryption;
+  opts.enable_ranger_kms = opts_.enable_ranger_kms;
+  opts.ranger_cluster_key = opts_.ranger_cluster_key;
+  if (opts.enable_ranger_kms) {
+    opts.ranger_kms_url = ranger_kms_->url();
+  }
   opts.block_manager_type = opts_.block_manager_type;
   opts.exe = GetBinaryPath(kKuduBinaryName);
   opts.wal_dir = GetWalPath(daemon_id);
@@ -599,6 +652,7 @@ Status ExternalMiniCluster::AddTabletServer() {
   }
 
   RETURN_NOT_OK(ts->Start());
+  RETURN_NOT_OK(ts->SetServerKey());
   tablet_servers_.push_back(ts);
   return Status::OK();
 }
@@ -651,10 +705,20 @@ Status ExternalMiniCluster::CreateMaster(const vector<HostPort>& master_rpc_addr
     flags.emplace_back(Substitute("--ranger_config_path=$0",
                                   JoinPathSegments(cluster_root(),
                                                    "ranger-client")));
+    flags.emplace_back("--trusted_user_acl=test-admin");
   }
   if (!opts_.master_alias_prefix.empty()) {
     flags.emplace_back(Substitute("--host_for_tests=$0.$1",
                                   opts_.master_alias_prefix, idx));
+  }
+
+  if (opts_.enable_encryption) {
+    flags.emplace_back("--encrypt_data_at_rest=true");
+    if (opts_.enable_ranger_kms) {
+      flags.emplace_back("--encryption_key_provider=ranger-kms");
+      flags.emplace_back(Substitute("--encryption_cluster_key_name=$0", opts_.ranger_cluster_key));
+      flags.emplace_back(Substitute("--ranger_kms_url=$0", ranger_kms_->url()));
+    }
   }
   // Add custom master flags.
   copy(opts_.extra_master_flags.begin(), opts_.extra_master_flags.end(),
@@ -1077,6 +1141,7 @@ Status ExternalMiniCluster::RemoveMaster(const HostPort& hp) {
 
 ExternalDaemon::ExternalDaemon(ExternalDaemonOptions opts)
     : opts_(std::move(opts)),
+      key_provider_(new DefaultKeyProvider()),
       parent_tid_(std::this_thread::get_id()) {
   CHECK(rpc_bind_address().Initialized());
 }
@@ -1132,6 +1197,11 @@ std::vector<std::string> ExternalDaemon::GetDaemonFlags(const ExternalDaemonOpti
 
   if (opts.enable_encryption) {
     flags.emplace_back("--encrypt_data_at_rest=true");
+    if (opts.enable_ranger_kms) {
+      flags.emplace_back("--encryption_key_provider=ranger-kms");
+      flags.emplace_back(Substitute("--encryption_cluster_key_name=$0", opts.ranger_cluster_key));
+      flags.emplace_back(Substitute("--ranger_kms_url=$0", opts.ranger_kms_url));
+    }
   }
 
   // If large keys are not enabled.
@@ -1253,6 +1323,27 @@ Status ExternalDaemon::StartProcess(const vector<string>& user_flags) {
 
   process_.swap(p);
   perf_record_process_.swap(perf_record);
+  return Status::OK();
+}
+
+Env* ExternalDaemon::env() const {
+  return Env::Default();
+}
+
+Status ExternalDaemon::SetServerKey() {
+  string path = JoinPathSegments(this->wal_dir(), "instance");;
+  LOG(INFO) << "Reading " << path;
+  InstanceMetadataPB instance;
+  RETURN_NOT_OK(pb_util::ReadPBContainerFromPath(env(), path, &instance, pb_util::NOT_SENSITIVE));
+  if (!instance.server_key().empty()) {
+    string key;
+    RETURN_NOT_OK(key_provider_->DecryptServerKey(instance.server_key(),
+                                                  instance.server_key_iv(),
+                                                  instance.server_key_version(),
+                                                  &key));
+    LOG(INFO) << "Setting key " << key;
+    env()->SetEncryptionKey(reinterpret_cast<const uint8_t*>(a2b_hex(key).c_str()), key.size() * 4);
+  }
   return Status::OK();
 }
 
@@ -1527,7 +1618,8 @@ ScopedResumeExternalDaemon::~ScopedResumeExternalDaemon() {
 //------------------------------------------------------------
 
 ExternalMaster::ExternalMaster(ExternalDaemonOptions opts)
-    : ExternalDaemon(std::move(opts)) {
+    : ExternalDaemon(std::move(opts)),
+      env_(Env::NewEnv()) {
 }
 
 ExternalMaster::~ExternalMaster() {
@@ -1652,7 +1744,8 @@ vector<string> ExternalMaster::GetMasterFlags(const ExternalDaemonOptions& opts)
 ExternalTabletServer::ExternalTabletServer(ExternalDaemonOptions opts,
                                            vector<HostPort> master_addrs)
     : ExternalDaemon(std::move(opts)),
-      master_addrs_(std::move(master_addrs)) {
+      master_addrs_(std::move(master_addrs)),
+      env_(Env::NewEnv()) {
   DCHECK(!master_addrs_.empty());
 }
 

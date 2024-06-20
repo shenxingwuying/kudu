@@ -18,18 +18,20 @@
 #include "kudu/tablet/tablet.h"
 
 #include <algorithm>
+#include <ctime>
 #include <functional>
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ostream>
 #include <random>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <google/protobuf/arena.h>
@@ -70,7 +72,6 @@
 #include "kudu/tablet/ops/write_op.h"
 #include "kudu/tablet/row_op.h"
 #include "kudu/tablet/rowset_info.h"
-#include "kudu/tablet/rowset_metadata.h"
 #include "kudu/tablet/rowset_tree.h"
 #include "kudu/tablet/svg_dump.h"
 #include "kudu/tablet/tablet.pb.h"
@@ -96,6 +97,12 @@
 #include "kudu/util/throttler.h"
 #include "kudu/util/trace.h"
 #include "kudu/util/url-coding.h"
+
+namespace kudu {
+namespace tablet {
+class RowSetMetadata;
+}  // namespace tablet
+}  // namespace kudu
 
 DEFINE_bool(prevent_kudu_2233_corruption, true,
             "Whether or not to prevent KUDU-2233 corruptions. Used for testing only!");
@@ -222,6 +229,8 @@ using kudu::log::LogAnchorRegistry;
 using kudu::log::MinLogIndexAnchorer;
 using std::endl;
 using std::make_shared;
+using std::nullopt;
+using std::optional;
 using std::ostream;
 using std::pair;
 using std::shared_ptr;
@@ -670,6 +679,7 @@ Status Tablet::ValidateOp(const RowOp& op) {
     case RowOperationsPB::INSERT:
     case RowOperationsPB::INSERT_IGNORE:
     case RowOperationsPB::UPSERT:
+    case RowOperationsPB::UPSERT_IGNORE:
       return ValidateInsertOrUpsertUnlocked(op);
 
     case RowOperationsPB::UPDATE:
@@ -698,7 +708,7 @@ Status Tablet::ValidateInsertOrUpsertUnlocked(const RowOp& op) {
 Status Tablet::ValidateMutateUnlocked(const RowOp& op) {
   RowChangeListDecoder rcl_decoder(op.decoded_op.changelist);
   RETURN_NOT_OK(rcl_decoder.Init());
-  if (rcl_decoder.is_reinsert()) {
+  if (PREDICT_FALSE(rcl_decoder.is_reinsert())) {
     // REINSERT mutations are the byproduct of an INSERT on top of a ghost
     // row, not something the user is allowed to specify on their own.
     return Status::InvalidArgument("User may not specify REINSERT mutations");
@@ -728,7 +738,18 @@ Status Tablet::InsertOrUpsertUnlocked(const IOContext* io_context,
   if (op->present_in_rowset) {
     switch (op_type) {
       case RowOperationsPB::UPSERT:
-        return ApplyUpsertAsUpdate(io_context, op_state, op, op->present_in_rowset, stats);
+      case RowOperationsPB::UPSERT_IGNORE: {
+        Status s = ApplyUpsertAsUpdate(io_context, op_state, op, op->present_in_rowset, stats);
+        if (s.ok()) {
+          return Status::OK();
+        }
+        if (s.IsImmutable() && op_type == RowOperationsPB::UPSERT_IGNORE) {
+          op->SetErrorIgnored();
+          return Status::OK();
+        }
+        op->SetFailed(s);
+        return s;
+      }
       case RowOperationsPB::INSERT_IGNORE:
         op->SetErrorIgnored();
         return Status::OK();
@@ -745,6 +766,7 @@ Status Tablet::InsertOrUpsertUnlocked(const IOContext* io_context,
     }
   }
 
+  DCHECK(!op->present_in_rowset);
   Timestamp ts = op_state->timestamp();
   ConstContiguousRow row(schema().get(), op->decoded_op.row_data);
 
@@ -798,7 +820,18 @@ Status Tablet::InsertOrUpsertUnlocked(const IOContext* io_context,
     if (s.IsAlreadyPresent()) {
       switch (op_type) {
         case RowOperationsPB::UPSERT:
-          return ApplyUpsertAsUpdate(io_context, op_state, op, comps->memrowset.get(), stats);
+        case RowOperationsPB::UPSERT_IGNORE: {
+          Status s = ApplyUpsertAsUpdate(io_context, op_state, op, comps->memrowset.get(), stats);
+          if (s.ok()) {
+            return Status::OK();
+          }
+          if (s.IsImmutable() && op_type == RowOperationsPB::UPSERT_IGNORE) {
+            op->SetErrorIgnored();
+            return Status::OK();
+          }
+          op->SetFailed(s);
+          return s;
+        }
         case RowOperationsPB::INSERT_IGNORE:
           op->SetErrorIgnored();
           return Status::OK();
@@ -821,18 +854,27 @@ Status Tablet::ApplyUpsertAsUpdate(const IOContext* io_context,
                                    RowOp* upsert,
                                    RowSet* rowset,
                                    ProbeStats* stats) {
+  const auto op_type = upsert->decoded_op.type;
+  bool error_ignored = false;
   const auto* schema = this->schema().get();
   ConstContiguousRow row(schema, upsert->decoded_op.row_data);
   faststring buf;
   RowChangeListEncoder enc(&buf);
-  for (int i = 0; i < schema->num_columns(); i++) {
-    if (schema->is_key_column(i)) continue;
-
+  for (int i = schema->num_key_columns(); i < schema->num_columns(); i++) {
     // If the user didn't explicitly set this column in the UPSERT, then we should
     // not turn it into an UPDATE. This prevents the UPSERT from updating
     // values back to their defaults when unset.
     if (!BitmapTest(upsert->decoded_op.isset_bitmap, i)) continue;
     const auto& c = schema->column(i);
+    if (c.is_immutable()) {
+      if (op_type == RowOperationsPB::UPSERT) {
+        return Status::Immutable("UPDATE not allowed for immutable column", c.ToString());
+      }
+      DCHECK_EQ(op_type, RowOperationsPB::UPSERT_IGNORE);
+      error_ignored = true;
+      continue;
+    }
+
     const void* val = c.is_nullable() ? row.nullable_cell_ptr(i) : row.cell_ptr(i);
     enc.AddColumnUpdate(c, schema->column_id(i), val);
   }
@@ -845,6 +887,9 @@ Status Tablet::ApplyUpsertAsUpdate(const IOContext* io_context,
       op_state->pb_arena());
   if (enc.is_empty()) {
     upsert->SetMutateSucceeded(result);
+    if (error_ignored) {
+      upsert->error_ignored = true;
+    }
     return Status::OK();
   }
 
@@ -1294,8 +1339,9 @@ Status Tablet::ApplyRowOperation(const IOContext* io_context,
     case RowOperationsPB::INSERT:
     case RowOperationsPB::INSERT_IGNORE:
     case RowOperationsPB::UPSERT:
+    case RowOperationsPB::UPSERT_IGNORE:
       s = InsertOrUpsertUnlocked(io_context, op_state, row_op, stats);
-      if (s.IsAlreadyPresent()) {
+      if (s.IsAlreadyPresent() || s.IsImmutable()) {
         return Status::OK();
       }
       return s;
@@ -2230,10 +2276,10 @@ Status Tablet::CaptureConsistentIterators(
 
   // Cull row-sets in the case of key-range queries.
   if (spec != nullptr && (spec->lower_bound_key() || spec->exclusive_upper_bound_key())) {
-    boost::optional<Slice> lower_bound = spec->lower_bound_key() ? \
-        boost::optional<Slice>(spec->lower_bound_key()->encoded_key()) : boost::none;
-    boost::optional<Slice> upper_bound = spec->exclusive_upper_bound_key() ? \
-        boost::optional<Slice>(spec->exclusive_upper_bound_key()->encoded_key()) : boost::none;
+    optional<Slice> lower_bound = spec->lower_bound_key() ?
+        optional<Slice>(spec->lower_bound_key()->encoded_key()) : nullopt;
+    optional<Slice> upper_bound = spec->exclusive_upper_bound_key() ?
+        optional<Slice>(spec->exclusive_upper_bound_key()->encoded_key()) : nullopt;
     vector<RowSet*> interval_sets;
     components_->rowsets->FindRowSetsIntersectingInterval(lower_bound, upper_bound, &interval_sets);
     for (const auto* rs : interval_sets) {

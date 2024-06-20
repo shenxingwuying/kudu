@@ -21,12 +21,12 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
@@ -84,7 +84,7 @@ using kudu::pb_util::SecureShortDebugString;
 using kudu::rpc::RpcController;
 using kudu::tablet::TabletDataState;
 using kudu::tablet::TabletMetadata;
-using kudu::tserver::TabletCopyClient;
+using kudu::tserver::RemoteTabletCopyClient;
 using kudu::tserver::TSTabletManager;
 using std::set;
 using std::string;
@@ -310,12 +310,13 @@ Status ClearLocalSystemCatalogAndCopy(const HostPort& src_hp) {
   RETURN_NOT_OK(TabletMetadata::Load(&fs_manager, SysCatalogTable::kSysCatalogTabletId, &meta));
   RETURN_NOT_OK(TSTabletManager::DeleteTabletData(
       meta, cmeta_manager, TabletDataState::TABLET_DATA_DELETED,
-      /*last_logged_opid*/boost::none));
+      /*last_logged_opid*/std::nullopt));
   LOG(INFO) << "Copying system tablet from " << src_hp.ToString();
   std::shared_ptr<rpc::Messenger> messenger;
   RETURN_NOT_OK(rpc::MessengerBuilder("tablet_copy_client").Build(&messenger));
-  TabletCopyClient copy_client(SysCatalogTable::kSysCatalogTabletId, &fs_manager, cmeta_manager,
-                               messenger, nullptr /* no metrics */);
+  RemoteTabletCopyClient copy_client(SysCatalogTable::kSysCatalogTabletId,
+                                     &fs_manager, cmeta_manager,
+                                     messenger, nullptr /* no metrics */);
   RETURN_NOT_OK(copy_client.Start(src_hp, /*meta*/nullptr));
   RETURN_NOT_OK(copy_client.FetchAll(/*tablet_replica*/nullptr));
   return copy_client.Finish();

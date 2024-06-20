@@ -65,6 +65,9 @@
 DEFINE_int32(rpc_timeout, 1000, "Timeout for RPC calls, in seconds");
 DECLARE_bool(enable_maintenance_manager);
 DECLARE_int32(heartbeat_rpc_timeout_ms);
+DECLARE_string(test_server_key);
+DECLARE_string(test_server_key_iv);
+DECLARE_string(test_server_key_version);
 
 METRIC_DEFINE_entity(test);
 
@@ -95,6 +98,10 @@ TabletServerTestBase::TabletServerTestBase()
   // the heartbeat timeout to 1 second speeds up unit tests which
   // purposefully specify non-running Master servers.
   FLAGS_heartbeat_rpc_timeout_ms = 1000;
+
+  GetEncryptionKey(&FLAGS_test_server_key,
+                   &FLAGS_test_server_key_iv,
+                   &FLAGS_test_server_key_version);
 }
 
 // Starts the tablet server, override to start it later.

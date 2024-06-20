@@ -16,20 +16,15 @@
 // under the License.
 //
 // Helpers for dealing with the protobufs defined in wire_protocol.proto.
-#ifndef KUDU_COMMON_WIRE_PROTOCOL_H
-#define KUDU_COMMON_WIRE_PROTOCOL_H
+#pragma once
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "kudu/util/status.h"
-
-namespace boost {
-template <class T>
-class optional;
-}
 
 namespace google {
 namespace protobuf {
@@ -61,6 +56,10 @@ class SchemaPB;
 class ServerEntryPB;
 class ServerRegistrationPB;
 class TableExtraConfigPB;
+
+static const std::string kTableHistoryMaxAgeSec = "kudu.table.history_max_age_sec";
+static const std::string kTableMaintenancePriority = "kudu.table.maintenance_priority";
+static const std::string kTableDisableCompaction = "kudu.table.disable_compaction";
 
 // Convert the given C++ Status object into the equivalent Protobuf.
 void StatusToPB(const Status& status, AppStatusPB* pb);
@@ -113,7 +112,7 @@ void ColumnSchemaToPB(const ColumnSchema& schema, ColumnSchemaPB *pb, int flags 
 
 // Return the ColumnSchema created from the specified protobuf.
 // If the column schema is invalid, return a non-OK status.
-Status ColumnSchemaFromPB(const ColumnSchemaPB& pb, boost::optional<ColumnSchema>* col_schema);
+Status ColumnSchemaFromPB(const ColumnSchemaPB& pb, std::optional<ColumnSchema>* col_schema);
 
 // Convert the given list of ColumnSchemaPB objects into a Schema object.
 //
@@ -141,7 +140,7 @@ void ColumnPredicateToPB(const ColumnPredicate& predicate, ColumnPredicatePB* pb
 Status ColumnPredicateFromPB(const Schema& schema,
                              Arena* arena,
                              const ColumnPredicatePB& pb,
-                             boost::optional<ColumnPredicate>* predicate);
+                             std::optional<ColumnPredicate>* predicate);
 
 // Convert a extra configuration properties protobuf to map.
 Status ExtraConfigPBToMap(const TableExtraConfigPB& pb,
@@ -224,4 +223,3 @@ Status FindLeaderHostPort(const google::protobuf::RepeatedPtrField<ServerEntryPB
 // or '<unknown>' if lack this field.
 std::string StartTimeToString(const ServerRegistrationPB& reg);
 } // namespace kudu
-#endif

@@ -112,6 +112,7 @@ DEPS_FOR_ALL = \
      "build/latest/bin/postgres-lib",
      "build/latest/bin/postgres-share",
      "build/latest/bin/postgresql.jar",
+     "build/latest/bin/ranger_kms-home",
      "build/latest/bin/ranger-home",
 
      # Add the Kudu HMS plugin.
@@ -239,6 +240,10 @@ def is_lib_whitelisted(lib):
     # OpenSSL and Cyrus SASL to better support submitting
     # installed versions different from the dist_test image.
     if "libcrypto" in lib or "libsasl2" in lib or "libssl" in lib:
+      return True
+    # After upgrading to LLVM 11, TSAN builds link libatomic.
+    # Since it was not present on the test machines, it is whitelisted.
+    if "libatomic" in lib:
       return True
     return False
   return True

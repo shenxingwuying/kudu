@@ -18,11 +18,11 @@
 #include "kudu/client/schema.h"
 
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <unordered_map>
 #include <utility>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
@@ -59,6 +59,7 @@ MAKE_ENUM_LIMITS(kudu::client::KuduColumnSchema::DataType,
                  kudu::client::KuduColumnSchema::INT8,
                  kudu::client::KuduColumnSchema::BOOL);
 
+using std::optional;
 using std::string;
 using std::unique_ptr;
 using std::unordered_map;
@@ -541,12 +542,12 @@ class KuduSchemaBuilder::Data {
     // headers declaring friend classes with nested classes.
   }
 
-  boost::optional<vector<string>> key_col_names;
+  std::optional<vector<string>> key_col_names;
   vector<KuduColumnSpec*> specs;
 };
 
 KuduSchemaBuilder::KuduSchemaBuilder()
-  : data_(new Data()) {
+  : data_(new Data) {
 }
 
 KuduSchemaBuilder::~KuduSchemaBuilder() {
@@ -745,6 +746,7 @@ KuduColumnSchema::KuduColumnSchema(const string &name,
   type_attr_private.length = type_attributes.length();
   col_ = new ColumnSchema(name, ToInternalDataType(type, type_attributes),
                           is_nullable,
+                          false,   // TODO(yingchun): set according to a new added parameter later
                           default_value, default_value, attr_private,
                           type_attr_private, comment);
 }

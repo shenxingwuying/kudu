@@ -253,12 +253,16 @@ public class TestAlterTable {
 
     KuduScanner scanner = client.newScannerBuilder(table)
             .setProjectedColumnNames(Lists.newArrayList("c0Key", "c1")).build();
+    int rowCount = 0;
     while (scanner.hasMoreRows()) {
       RowResultIterator it = scanner.nextRows();
-      assertTrue(it.hasNext());
-      RowResult rr = it.next();
-      assertEquals(rr.getInt(0), rr.getInt(1));
+      while (it.hasNext()) {
+        RowResult rr = it.next();
+        assertEquals(rr.getInt(0), rr.getInt(1));
+        ++rowCount;
+      }
     }
+    assertEquals(101, rowCount);
   }
 
   @Test
@@ -510,6 +514,485 @@ public class TestAlterTable {
           "no range partition to drop"));
     }
     assertEquals(100, countRowsInTable(table));
+  }
+
+  /**
+   * Test altering a table, adding range partitions with custom hash schema
+   * per range.
+   */
+  @Test(timeout = 100000)
+  public void testAlterAddRangeWithCustomHashSchema() throws Exception {
+    ArrayList<ColumnSchema> columns = new ArrayList<>(2);
+    columns.add(new ColumnSchema.ColumnSchemaBuilder("c0", Type.INT32)
+        .nullable(false)
+        .key(true)
+        .build());
+    columns.add(new ColumnSchema.ColumnSchemaBuilder("c1", Type.INT32)
+        .nullable(false)
+        .build());
+    final Schema schema = new Schema(columns);
+
+    CreateTableOptions createOptions =
+        new CreateTableOptions()
+            .setRangePartitionColumns(ImmutableList.of("c0"))
+            .addHashPartitions(ImmutableList.of("c0"), 2, 0)
+            .setNumReplicas(1);
+
+    {
+      // Add range partition with the table-wide hash schema (to be added upon
+      // creating the new table).
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", -100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 100);
+      createOptions.addRangePartition(lower, upper);
+    }
+
+    client.createTable(tableName, schema, createOptions);
+
+    // Alter the table: add a range partition with custom hash schema.
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", 100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 200);
+      RangePartitionWithCustomHashSchema range =
+          new RangePartitionWithCustomHashSchema(
+              lower,
+              upper,
+              RangePartitionBound.INCLUSIVE_BOUND,
+              RangePartitionBound.EXCLUSIVE_BOUND);
+      range.addHashPartitions(ImmutableList.of("c0"), 3, 0);
+      client.alterTable(tableName, new AlterTableOptions().addRangePartition(range));
+    }
+
+    KuduTable table = client.openTable(tableName);
+
+    // Insert some rows and then drop partitions, ensuring the row count comes
+    // as expected.
+    insertRows(table, -100, 100);
+    assertEquals(200, countRowsInTable(table));
+    insertRows(table, 100, 200);
+    assertEquals(300, countRowsInTable(table));
+
+    {
+      AlterTableOptions alter = new AlterTableOptions();
+      alter.setWait(true);
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", -100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 100);
+      alter.dropRangePartition(lower, upper);
+      client.alterTable(tableName, alter);
+      assertEquals(100, countRowsInTable(table));
+    }
+
+    {
+      AlterTableOptions alter = new AlterTableOptions();
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", 100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 200);
+      alter.dropRangePartition(lower, upper);
+      client.alterTable(tableName, alter);
+      assertEquals(0, countRowsInTable(table));
+    }
+
+    // Make sure it's possible to delete/drop the table after adding and then
+    // dropping a range with custom hash schema.
+    client.deleteTable(tableName);
+  }
+
+  /**
+   * Test altering a table, adding unbounded range partitions
+   * with custom hash schema.
+   */
+  @Test(timeout = 100000)
+  public void testAlterAddUnboundedRangeWithCustomHashSchema() throws Exception {
+    ArrayList<ColumnSchema> columns = new ArrayList<>(2);
+    columns.add(new ColumnSchema.ColumnSchemaBuilder("c0", Type.INT32)
+        .nullable(false)
+        .key(true)
+        .build());
+    columns.add(new ColumnSchema.ColumnSchemaBuilder("c1", Type.INT32)
+        .nullable(false)
+        .build());
+    final Schema schema = new Schema(columns);
+
+    CreateTableOptions createOptions =
+        new CreateTableOptions()
+            .setRangePartitionColumns(ImmutableList.of("c0"))
+            .addHashPartitions(ImmutableList.of("c0"), 2, 0)
+            .setNumReplicas(1);
+    // Add range partition [-100, 100) with the table-wide hash schema
+    // (to be added upon creating the new table below).
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", -100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 100);
+      createOptions.addRangePartition(lower, upper);
+    }
+    // Add unbounded range partition [100, +inf) with custom hash schema.
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", 100);
+      PartialRow upper = schema.newPartialRow();
+      RangePartitionWithCustomHashSchema range =
+          new RangePartitionWithCustomHashSchema(
+              lower,
+              upper,
+              RangePartitionBound.INCLUSIVE_BOUND,
+              RangePartitionBound.EXCLUSIVE_BOUND);
+      range.addHashPartitions(ImmutableList.of("c0"), 5, 0);
+      createOptions.addRangePartition(range);
+    }
+
+    client.createTable(tableName, schema, createOptions);
+
+    // Alter the table: add unbounded range partition [-inf, -100) with custom hash schema.
+    {
+      PartialRow lower = schema.newPartialRow();
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", -100);
+      RangePartitionWithCustomHashSchema range =
+          new RangePartitionWithCustomHashSchema(
+              lower,
+              upper,
+              RangePartitionBound.INCLUSIVE_BOUND,
+              RangePartitionBound.EXCLUSIVE_BOUND);
+      range.addHashPartitions(ImmutableList.of("c0"), 3, 0);
+      client.alterTable(tableName, new AlterTableOptions().addRangePartition(range));
+    }
+
+    KuduTable table = client.openTable(tableName);
+
+    // Insert some rows and then drop partitions, ensuring the row count comes
+    // out as expected.
+    insertRows(table, -250, -200);
+    assertEquals(50, countRowsInTable(table));
+    insertRows(table, -200, -50);
+    assertEquals(200, countRowsInTable(table));
+    insertRows(table, -50, 50);
+    assertEquals(300, countRowsInTable(table));
+    insertRows(table, 50, 200);
+    assertEquals(450, countRowsInTable(table));
+    insertRows(table, 200, 250);
+    assertEquals(500, countRowsInTable(table));
+
+    {
+      AlterTableOptions alter = new AlterTableOptions();
+      alter.setWait(true);
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", -100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 100);
+      alter.dropRangePartition(lower, upper);
+      client.alterTable(tableName, alter);
+      assertEquals(300, countRowsInTable(table));
+    }
+    {
+      AlterTableOptions alter = new AlterTableOptions();
+      PartialRow lower = schema.newPartialRow();
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", -100);
+      alter.dropRangePartition(lower, upper);
+      client.alterTable(tableName, alter);
+      assertEquals(150, countRowsInTable(table));
+    }
+    {
+      AlterTableOptions alter = new AlterTableOptions();
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", 100);
+      PartialRow upper = schema.newPartialRow();
+      alter.dropRangePartition(lower, upper);
+      client.alterTable(tableName, alter);
+      assertEquals(0, countRowsInTable(table));
+    }
+
+    client.deleteTable(tableName);
+  }
+
+  /**
+   * Test altering a table, adding range partitions with custom hash schema
+   * per range and dropping partition in the middle, resulting in non-covered
+   * ranges between partition with the table-wide and custom hash schemas.
+   */
+  @Test(timeout = 100000)
+  public void testAlterAddRangeWithCustomHashSchemaNonCoveredRange() throws Exception {
+    ArrayList<ColumnSchema> columns = new ArrayList<>(2);
+    columns.add(new ColumnSchema.ColumnSchemaBuilder("c0", Type.INT32)
+        .nullable(false)
+        .key(true)
+        .build());
+    columns.add(new ColumnSchema.ColumnSchemaBuilder("c1", Type.INT32)
+        .nullable(false)
+        .build());
+    final Schema schema = new Schema(columns);
+
+    CreateTableOptions createOptions =
+        new CreateTableOptions()
+            .setRangePartitionColumns(ImmutableList.of("c0"))
+            .addHashPartitions(ImmutableList.of("c0"), 2, 0)
+            .setNumReplicas(1);
+
+    // Add 3 range partitions with the table-wide hash schema.
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", -300);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", -200);
+      createOptions.addRangePartition(lower, upper);
+    }
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", -100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 100);
+      createOptions.addRangePartition(lower, upper);
+    }
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", 200);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 300);
+      createOptions.addRangePartition(lower, upper);
+    }
+
+    client.createTable(tableName, schema, createOptions);
+
+    // Add range partitions with custom hash schemas, interlaced with the
+    // partitions having the table-wide hash schema.
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", -400);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", -300);
+      RangePartitionWithCustomHashSchema range =
+          new RangePartitionWithCustomHashSchema(
+              lower,
+              upper,
+              RangePartitionBound.INCLUSIVE_BOUND,
+              RangePartitionBound.EXCLUSIVE_BOUND);
+      range.addHashPartitions(ImmutableList.of("c0"), 3, 0);
+      client.alterTable(tableName, new AlterTableOptions().addRangePartition(range));
+    }
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", -200);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", -100);
+      RangePartitionWithCustomHashSchema range =
+          new RangePartitionWithCustomHashSchema(
+              lower,
+              upper,
+              RangePartitionBound.INCLUSIVE_BOUND,
+              RangePartitionBound.EXCLUSIVE_BOUND);
+      range.addHashPartitions(ImmutableList.of("c0"), 4, 0);
+      client.alterTable(tableName, new AlterTableOptions().addRangePartition(range));
+    }
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", 100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 200);
+      RangePartitionWithCustomHashSchema range =
+          new RangePartitionWithCustomHashSchema(
+              lower,
+              upper,
+              RangePartitionBound.INCLUSIVE_BOUND,
+              RangePartitionBound.EXCLUSIVE_BOUND);
+      range.addHashPartitions(ImmutableList.of("c0"), 5, 0);
+      client.alterTable(tableName, new AlterTableOptions().addRangePartition(range));
+    }
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", 300);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 400);
+      RangePartitionWithCustomHashSchema range =
+          new RangePartitionWithCustomHashSchema(
+              lower,
+              upper,
+              RangePartitionBound.INCLUSIVE_BOUND,
+              RangePartitionBound.EXCLUSIVE_BOUND);
+      range.addHashPartitions(ImmutableList.of("c0"), 6, 0);
+      client.alterTable(tableName, new AlterTableOptions().addRangePartition(range));
+    }
+
+    KuduTable table = client.openTable(tableName);
+
+    // Insert some rows and then drop partitions, ensuring the row count comes
+    // as expected.
+    insertRows(table, -400, 0);
+    assertEquals(400, countRowsInTable(table));
+
+    insertRows(table, 0, 400);
+    assertEquals(800, countRowsInTable(table));
+
+    // Drop one range with table-wide hash schema in the very middle of the
+    // covered ranges.
+    {
+      AlterTableOptions alter = new AlterTableOptions();
+      alter.setWait(true);
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", -100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 100);
+      alter.dropRangePartition(lower, upper);
+      client.alterTable(tableName, alter);
+    }
+    assertEquals(600, countRowsInTable(table));
+
+    {
+      AlterTableOptions alter = new AlterTableOptions();
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", -400);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", -300);
+      alter.dropRangePartition(lower, upper);
+      client.alterTable(tableName, alter);
+    }
+    assertEquals(500, countRowsInTable(table));
+
+    {
+      AlterTableOptions alter = new AlterTableOptions();
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", 100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 200);
+      alter.dropRangePartition(lower, upper);
+      client.alterTable(tableName, alter);
+    }
+    assertEquals(400, countRowsInTable(table));
+
+    {
+      AlterTableOptions alter = new AlterTableOptions();
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", -200);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", -100);
+      alter.dropRangePartition(lower, upper);
+      client.alterTable(tableName, alter);
+    }
+    assertEquals(300, countRowsInTable(table));
+
+    // Make sure it's possible to delete/drop the table after adding and then
+    // dropping a range with custom hash schema.
+    client.deleteTable(tableName);
+  }
+
+  @Test(timeout = 100000)
+  @KuduTestHarness.MasterServerConfig(flags = {
+      "--enable_per_range_hash_schemas=false",
+  })
+  public void testAlterTryAddRangeWithCustomHashSchema() throws Exception {
+    ArrayList<ColumnSchema> columns = new ArrayList<>(2);
+    columns.add(new ColumnSchema.ColumnSchemaBuilder("c0", Type.INT32)
+        .nullable(false)
+        .key(true)
+        .build());
+    columns.add(new ColumnSchema.ColumnSchemaBuilder("c1", Type.INT32)
+        .nullable(false)
+        .build());
+    final Schema schema = new Schema(columns);
+
+    CreateTableOptions createOptions =
+        new CreateTableOptions()
+            .setRangePartitionColumns(ImmutableList.of("c0"))
+            .addHashPartitions(ImmutableList.of("c0"), 2, 0)
+            .setNumReplicas(1);
+
+    client.createTable(tableName, schema, createOptions);
+
+    // Try adding a range partition with custom hash schema when server side
+    // doesn't support the RANGE_SPECIFIC_HASH_SCHEMA feature.
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", 0);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 100);
+      RangePartitionWithCustomHashSchema range =
+          new RangePartitionWithCustomHashSchema(
+              lower,
+              upper,
+              RangePartitionBound.INCLUSIVE_BOUND,
+              RangePartitionBound.EXCLUSIVE_BOUND);
+      range.addHashPartitions(ImmutableList.of("c0"), 3, 0);
+      try {
+        client.alterTable(tableName, new AlterTableOptions().addRangePartition(range));
+        fail("shouldn't be able to add a range with custom hash schema " +
+                "in a table when server side doesn't support required " +
+                "RANGE_SPECIFIC_HASH_SCHEMA feature");
+      } catch (KuduException ex) {
+        final String errmsg = ex.getMessage();
+        assertTrue(errmsg, ex.getStatus().isRemoteError());
+        assertTrue(errmsg, errmsg.matches(
+            ".* server sent error unsupported feature flags"));
+      }
+    }
+  }
+
+  @Test(timeout = 100000)
+  public void testAlterTryAddRangeWithCustomHashSchemaDuplicateColumns()
+      throws Exception {
+    ArrayList<ColumnSchema> columns = new ArrayList<>(2);
+    columns.add(new ColumnSchema.ColumnSchemaBuilder("c0", Type.INT32)
+        .nullable(false)
+        .key(true)
+        .build());
+    columns.add(new ColumnSchema.ColumnSchemaBuilder("c1", Type.INT32)
+        .nullable(false)
+        .key(true)
+        .build());
+    final Schema schema = new Schema(columns);
+
+    CreateTableOptions createOptions =
+        new CreateTableOptions()
+            .setRangePartitionColumns(ImmutableList.of("c0"))
+            .addHashPartitions(ImmutableList.of("c0"), 2, 0)
+            .addHashPartitions(ImmutableList.of("c1"), 3, 0)
+            .setNumReplicas(1);
+
+    // Add range partition with table-wide hash schema.
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", -100);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 0);
+      createOptions.addRangePartition(lower, upper);
+    }
+
+    client.createTable(tableName, schema, createOptions);
+
+    // Try adding a range partition with custom hash schema having multiple
+    // hash dimensions and conflicting on columns used for hash function:
+    // different dimensions should not intersect on the set of columns
+    // used for hashing.
+    {
+      PartialRow lower = schema.newPartialRow();
+      lower.addInt("c0", 0);
+      PartialRow upper = schema.newPartialRow();
+      upper.addInt("c0", 100);
+      RangePartitionWithCustomHashSchema range =
+          new RangePartitionWithCustomHashSchema(
+              lower,
+              upper,
+              RangePartitionBound.INCLUSIVE_BOUND,
+              RangePartitionBound.EXCLUSIVE_BOUND);
+      range.addHashPartitions(ImmutableList.of("c0"), 3, 0);
+      range.addHashPartitions(ImmutableList.of("c0"), 3, 0);
+      try {
+        client.alterTable(tableName, new AlterTableOptions().addRangePartition(range));
+        fail("shouldn't be able to add a range with custom hash schema " +
+            "having duplicate hash columns across different dimensions");
+      } catch (KuduException ex) {
+        final String errmsg = ex.getMessage();
+        assertTrue(errmsg, ex.getStatus().isInvalidArgument());
+        assertTrue(errmsg, errmsg.matches(
+            "hash bucket schema components must not contain columns in common"));
+      }
+    }
   }
 
   @Test

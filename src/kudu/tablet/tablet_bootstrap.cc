@@ -22,14 +22,15 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <google/protobuf/arena.h>
@@ -75,7 +76,7 @@
 #include "kudu/tablet/ops/write_op.h"
 #include "kudu/tablet/row_op.h"
 #include "kudu/tablet/rowset.h"
-#include "kudu/tablet/rowset_metadata.h"
+#include "kudu/tablet/rowset_metadata.h" // IWYU pragma: keep
 #include "kudu/tablet/tablet.h"
 #include "kudu/tablet/tablet.pb.h"
 #include "kudu/tablet/tablet_metadata.h"
@@ -1681,7 +1682,8 @@ Status TabletBootstrap::ApplyOperations(const IOContext* io_context,
     switch (op->decoded_op.type) {
       case RowOperationsPB::INSERT:
       case RowOperationsPB::INSERT_IGNORE:
-      case RowOperationsPB::UPSERT: {
+      case RowOperationsPB::UPSERT:
+      case RowOperationsPB::UPSERT_IGNORE: {
         // TODO(unknown): should we have a separate counter for upserts?
         stats_.inserts_seen++;
         if (op->has_result()) {

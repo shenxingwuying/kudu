@@ -24,11 +24,11 @@
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <map>
 #include <memory>
 #include <set>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <rapidjson/document.h>
@@ -48,6 +48,7 @@
 #include "kudu/gutil/map-util.h"
 #include "kudu/gutil/port.h"
 #include "kudu/gutil/stl_util.h"
+#include "kudu/gutil/strings/numbers.h"
 #include "kudu/gutil/strings/split.h"
 #include "kudu/gutil/strings/substitute.h"
 #include "kudu/util/bitmap.h"
@@ -76,6 +77,8 @@ using kudu::client::KuduWriteOperation;
 using kudu::iequals;
 using std::endl;
 using std::map;
+using std::nullopt;
+using std::optional;
 using std::ostream;
 using std::ostringstream;
 using std::right;
@@ -88,6 +91,11 @@ using strings::Substitute;
 
 DEFINE_bool(create_table, true,
             "Whether to create the destination table if it doesn't exist.");
+DEFINE_int32(create_table_replication_factor, -1,
+             "The replication factor of the destination table if the table will be created. "
+             "By default, the replication factor of source table will be used.");
+DEFINE_string(create_table_hash_bucket_nums, "",
+              "The number of hash buckets in each hash dimension seperated by comma");
 DEFINE_bool(fill_cache, true,
             "Whether to fill block cache when scanning.");
 DEFINE_string(predicates, "",
@@ -116,7 +124,7 @@ DEFINE_bool(show_values, false,
 DEFINE_string(write_type, "insert",
               "How data should be copied to the destination table. Valid values are 'insert', "
               "'upsert' or the empty string. If the empty string, data will not be copied "
-              "(useful when create_table is 'true').");
+              "(useful when --create_table=true).");
 DEFINE_string(replica_selection, "CLOSEST",
               "Replica selection for scan operations. Acceptable values are: "
               "CLOSEST, LEADER (maps into KuduClient::CLOSEST_REPLICA and "
@@ -283,9 +291,9 @@ KuduPredicate* NewInListPredicate(const client::sp::shared_ptr<KuduTable>& table
 Status AddPredicate(const client::sp::shared_ptr<KuduTable>& table,
                     const string& predicate_type,
                     const string& column_name,
-                    const boost::optional<const rapidjson::Value*>& value,
+                    const optional<const rapidjson::Value*>& value,
                     const JsonReader& reader,
-                    KuduScanTokenBuilder& builder) {
+                    KuduScanTokenBuilder* builder) {
   if (predicate_type.empty() || column_name.empty()) {
     return Status::OK();
   }
@@ -302,7 +310,7 @@ Status AddPredicate(const client::sp::shared_ptr<KuduTable>& table,
     case PredicateType::Equality:
     case PredicateType::Range:
       CHECK(value);
-      predicate = NewComparisonPredicate(table, type, predicate_type, column_name, value.get());
+      predicate = NewComparisonPredicate(table, type, predicate_type, column_name, *value);
       break;
     case PredicateType::IsNotNull:
     case PredicateType::IsNull:
@@ -311,20 +319,20 @@ Status AddPredicate(const client::sp::shared_ptr<KuduTable>& table,
       break;
     case PredicateType::InList: {
       CHECK(value);
-      predicate = NewInListPredicate(table, type, column_name, reader, value.get());
+      predicate = NewInListPredicate(table, type, column_name, reader, *value);
       break;
     }
     default:
       return Status::NotSupported(Substitute("not support predicate_type $0", predicate_type));
   }
   CHECK(predicate);
-  RETURN_NOT_OK(builder.AddConjunctPredicate(predicate));
+  RETURN_NOT_OK(builder->AddConjunctPredicate(predicate));
 
   return Status::OK();
 }
 
 Status AddPredicates(const client::sp::shared_ptr<KuduTable>& table,
-                     KuduScanTokenBuilder& builder) {
+                     KuduScanTokenBuilder* builder) {
   if (FLAGS_predicates.empty()) {
     return Status::OK();
   }
@@ -355,8 +363,8 @@ Status AddPredicates(const client::sp::shared_ptr<KuduTable>& table,
       RETURN_NOT_OK(AddPredicate(table,
           elements[0]->GetString(),
           elements[1]->GetString(),
-          elements.size() == 2 ?
-            boost::none : boost::optional<const rapidjson::Value*>(elements[2]),
+          elements.size() == 2 ? nullopt
+                               : optional<const rapidjson::Value*>(elements[2]),
           reader,
           builder));
     } else {
@@ -415,17 +423,60 @@ Status CreateDstTableIfNeeded(const client::sp::shared_ptr<KuduTable>& src_table
   };
 
   // Table schema and replica number.
+  int num_replicas = FLAGS_create_table_replication_factor == -1 ?
+      src_table->num_replicas() : FLAGS_create_table_replication_factor;
   unique_ptr<KuduTableCreator> table_creator(dst_client->NewTableCreator());
   table_creator->table_name(dst_table_name)
       .schema(&dst_table_schema)
-      .num_replicas(src_table->num_replicas());
+      .num_replicas(num_replicas);
 
   // Add hash partition schema.
+  vector<int> hash_bucket_nums;
+  if (!partition_schema.hash_schema().empty()) {
+    vector<string> hash_bucket_nums_str = Split(FLAGS_create_table_hash_bucket_nums,
+                                                ",", strings::SkipEmpty());
+    // FLAGS_create_table_hash_bucket_nums is not defined, set it to -1 defaultly.
+    if (hash_bucket_nums_str.empty()) {
+      for (int i = 0; i < partition_schema.hash_schema().size(); i++) {
+        hash_bucket_nums.push_back(-1);
+      }
+    } else {
+      // If the --create_table_hash_bucket_nums flag is set, the number
+      // of comma-separated elements must be equal to the number of hash schema dimensions.
+      if (partition_schema.hash_schema().size() != hash_bucket_nums_str.size()) {
+        return Status::InvalidArgument("The count of hash bucket numbers must be equal to the "
+                                       "number of hash schema dimensions.");
+      }
+      for (int i = 0; i < hash_bucket_nums_str.size(); i++) {
+        int bucket_num = 0;
+        bool is_number = safe_strto32(hash_bucket_nums_str[i], &bucket_num);
+        if (!is_number) {
+          return Status::InvalidArgument(Substitute("'$0': cannot parse the number "
+                                                    "of hash buckets.",
+                                                    hash_bucket_nums_str[i]));
+        }
+        if (bucket_num < 2) {
+          return Status::InvalidArgument("The number of hash buckets must not be less than 2.");
+        }
+        hash_bucket_nums.push_back(bucket_num);
+      }
+    }
+  }
+
+  if (partition_schema.hash_schema().empty() &&
+      !FLAGS_create_table_hash_bucket_nums.empty()) {
+    return Status::InvalidArgument("There are no hash partitions defined in this table.");
+  }
+
+  int i = 0;
   for (const auto& hash_dimension : partition_schema.hash_schema()) {
+    int num_buckets = hash_bucket_nums[i] != -1 ? hash_bucket_nums[i] :
+                                                  hash_dimension.num_buckets;
     auto hash_columns = convert_column_ids_to_names(hash_dimension.column_ids);
     table_creator->add_hash_partitions(hash_columns,
-                                       hash_dimension.num_buckets,
+                                       num_buckets,
                                        hash_dimension.seed);
+    i++;
   }
 
   // Add range partition schema.
@@ -486,8 +537,8 @@ void CheckPendingErrors(const client::sp::shared_ptr<KuduSession>& session) {
 TableScanner::TableScanner(
     client::sp::shared_ptr<client::KuduClient> client,
     std::string table_name,
-    boost::optional<client::sp::shared_ptr<client::KuduClient>> dst_client,
-    boost::optional<std::string> dst_table_name)
+    optional<client::sp::shared_ptr<client::KuduClient>> dst_client,
+    optional<std::string> dst_table_name)
     : total_count_(0),
       client_(std::move(client)),
       table_name_(std::move(table_name)),
@@ -552,11 +603,11 @@ void TableScanner::ScanTask(const vector<KuduScanToken*>& tokens, Status* thread
 
 void TableScanner::CopyTask(const vector<KuduScanToken*>& tokens, Status* thread_status) {
   client::sp::shared_ptr<KuduTable> dst_table;
-  CHECK_OK(dst_client_.get()->OpenTable(*dst_table_name_, &dst_table));
+  CHECK_OK((*dst_client_)->OpenTable(*dst_table_name_, &dst_table));
   const KuduSchema& dst_table_schema = dst_table->schema();
 
   // One session per thread.
-  client::sp::shared_ptr<KuduSession> session(dst_client_.get()->NewSession());
+  client::sp::shared_ptr<KuduSession> session((*dst_client_)->NewSession());
   CHECK_OK(session->SetFlushMode(KuduSession::AUTO_FLUSH_BACKGROUND));
   CHECK_OK(session->SetErrorBufferSpace(1024));
   session->SetTimeoutMillis(FLAGS_timeout_ms);
@@ -607,7 +658,7 @@ Status TableScanner::StartWork(WorkType type) {
   KuduScanTokenBuilder builder(src_table.get());
   RETURN_NOT_OK(builder.SetCacheBlocks(FLAGS_fill_cache));
   if (mode_) {
-    RETURN_NOT_OK(builder.SetReadMode(mode_.get()));
+    RETURN_NOT_OK(builder.SetReadMode(*mode_));
   }
   if (scan_batch_size_ >= 0) {
     // Batch size of 0 is valid and has special semantics: the server sends
@@ -631,7 +682,7 @@ Status TableScanner::StartWork(WorkType type) {
   }
 
   // Set predicates.
-  RETURN_NOT_OK(AddPredicates(src_table, builder));
+  RETURN_NOT_OK(AddPredicates(src_table, &builder));
 
   vector<KuduScanToken*> tokens;
   ElementDeleter deleter(&tokens);

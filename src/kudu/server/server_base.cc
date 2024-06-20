@@ -21,12 +21,12 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
@@ -499,12 +499,12 @@ ServerBase::ServerBase(string name, const ServerBaseOptions& options,
       result_tracker_(new rpc::ResultTracker(shared_ptr<MemTracker>(
           MemTracker::CreateTracker(-1, "result-tracker", mem_tracker_)))),
       is_first_run_(false),
+      stop_background_threads_latch_(1),
       dns_resolver_(new DnsResolver(
           FLAGS_dns_resolver_max_threads_num,
           FLAGS_dns_resolver_cache_capacity_mb * 1024 * 1024,
           MonoDelta::FromSeconds(FLAGS_dns_resolver_cache_ttl_sec))),
-      options_(options),
-      stop_background_threads_latch_(1) {
+      options_(options) {
   metric_entity_->NeverRetire(
       METRIC_merged_entities_count_of_server.InstantiateHidden(metric_entity_, 1));
 
@@ -611,7 +611,14 @@ Status ServerBase::Init() {
   if (s.IsNotFound()) {
     LOG(INFO) << "This appears to be a new deployment of Kudu; creating new FS layout";
     is_first_run_ = true;
-    s = fs_manager_->CreateInitialFileSystemLayout();
+    if (options_.server_key.empty()) {
+      s = fs_manager_->CreateInitialFileSystemLayout();
+    } else {
+      s = fs_manager_->CreateInitialFileSystemLayout(std::nullopt,
+                                                     options_.server_key,
+                                                     options_.server_key_iv,
+                                                     options_.server_key_version);
+    }
     if (s.IsAlreadyPresent()) {
       return s.CloneAndPrepend("FS layout already exists; not overwriting existing layout");
     }
@@ -684,7 +691,7 @@ Status ServerBase::Init() {
 
 Status ServerBase::InitAcls() {
   string service_user;
-  boost::optional<string> keytab_user = security::GetLoggedInUsernameFromKeytab();
+  std::optional<string> keytab_user = security::GetLoggedInUsernameFromKeytab();
   if (keytab_user) {
     // If we're logged in from a keytab, then everyone should be, and we expect them
     // to use the same mapped username.

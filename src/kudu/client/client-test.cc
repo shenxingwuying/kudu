@@ -28,16 +28,17 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ostream>
 #include <random>
 #include <set>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include <boost/optional/optional.hpp>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <glog/stl_logging.h>
@@ -68,12 +69,12 @@
 #include "kudu/client/write_op.h"
 #include "kudu/clock/clock.h"
 #include "kudu/clock/hybrid_clock.h"
-#include "kudu/common/common.pb.h"
 #include "kudu/common/partial_row.h"
 #include "kudu/common/row.h"
 #include "kudu/common/schema.h"
 #include "kudu/common/timestamp.h"
 #include "kudu/common/txn_id.h"
+#include "kudu/common/wire_protocol.h"
 #include "kudu/common/wire_protocol.pb.h"
 #include "kudu/consensus/metadata.pb.h"
 #include "kudu/gutil/atomicops.h"
@@ -139,7 +140,6 @@ DECLARE_bool(allow_unsafe_replication_factor);
 DECLARE_bool(catalog_manager_support_live_row_count);
 DECLARE_bool(catalog_manager_support_on_disk_size);
 DECLARE_bool(client_use_unix_domain_sockets);
-DECLARE_bool(enable_per_range_hash_schemas);
 DECLARE_bool(enable_txn_system_client_init);
 DECLARE_bool(fail_dns_resolution);
 DECLARE_bool(location_mapping_by_uuid);
@@ -153,6 +153,7 @@ DECLARE_bool(scanner_inject_service_unavailable_on_continue_scan);
 DECLARE_bool(txn_manager_enabled);
 DECLARE_bool(txn_manager_lazily_initialized);
 DECLARE_int32(client_tablet_locations_by_id_ttl_ms);
+DECLARE_int32(check_expired_table_interval_seconds);
 DECLARE_int32(flush_threshold_mb);
 DECLARE_int32(flush_threshold_secs);
 DECLARE_int32(heartbeat_interval_ms);
@@ -200,7 +201,6 @@ using base::subtle::Atomic32;
 using base::subtle::NoBarrier_AtomicIncrement;
 using base::subtle::NoBarrier_Load;
 using base::subtle::NoBarrier_Store;
-using boost::none;
 using google::protobuf::util::MessageDifferencer;
 using kudu::cluster::InternalMiniCluster;
 using kudu::cluster::InternalMiniClusterOptions;
@@ -216,6 +216,8 @@ using kudu::transactions::TxnTokenPB;
 using kudu::tserver::MiniTabletServer;
 using std::function;
 using std::map;
+using std::nullopt;
+using std::optional;
 using std::pair;
 using std::set;
 using std::string;
@@ -249,6 +251,7 @@ class ClientTest : public KuduTest {
     // Reduce the TS<->Master heartbeat interval
     FLAGS_heartbeat_interval_ms = 10;
     FLAGS_scanner_gc_check_interval_us = 50 * 1000; // 50 milliseconds.
+    FLAGS_check_expired_table_interval_seconds = 1;
 
     // Enable TxnManager in Kudu master.
     FLAGS_txn_manager_enabled = true;
@@ -277,7 +280,7 @@ class ClientTest : public KuduTest {
         .add_master_server_addr(cluster_->mini_master()->bound_rpc_addr().ToString())
         .Build(&client_));
 
-    NO_FATALS(CreateTable(kTableName, 1, GenerateSplitRows(), {}, &client_table_));
+    ASSERT_OK(CreateTable(kTableName, 1, GenerateSplitRows(), {}, &client_table_));
   }
 
   // Looks up the remote tablet entry for a given partition key in the meta cache.
@@ -377,7 +380,7 @@ class ClientTest : public KuduTest {
         cluster_->mini_master()->master()->catalog_manager();
     CatalogManager::ScopedLeaderSharedLock l(catalog);
     CHECK_OK(l.first_failed_status());
-    CHECK_OK(catalog->GetTableLocations(&req, &resp, /*user=*/none));
+    CHECK_OK(catalog->GetTableLocations(&req, &resp, /*user=*/nullopt));
     CHECK(resp.tablet_locations_size() > 0);
     return resp.tablet_locations(0).tablet_id();
   }
@@ -709,22 +712,22 @@ class ClientTest : public KuduTest {
 
   // Creates a table with 'num_replicas', split into tablets based on
   // 'split_rows' and 'range_bounds' (or single tablet if both are empty).
-  void CreateTable(const string& table_name,
-                   int num_replicas,
-                   vector<unique_ptr<KuduPartialRow>> split_rows,
-                   vector<pair<unique_ptr<KuduPartialRow>,
-                               unique_ptr<KuduPartialRow>>> range_bounds,
-                   shared_ptr<KuduTable>* table) {
+  Status CreateTable(const string& table_name,
+                     int num_replicas,
+                     vector<unique_ptr<KuduPartialRow>> split_rows,
+                     vector<pair<unique_ptr<KuduPartialRow>,
+                                 unique_ptr<KuduPartialRow>>> range_bounds,
+                     shared_ptr<KuduTable>* table) {
 
     bool added_replicas = false;
     // Add more tablet servers to satisfy all replicas, if necessary.
     while (cluster_->num_tablet_servers() < num_replicas) {
-      ASSERT_OK(cluster_->AddTabletServer());
+      RETURN_NOT_OK(cluster_->AddTabletServer());
       added_replicas = true;
     }
 
     if (added_replicas) {
-      ASSERT_OK(cluster_->WaitForTabletServerCount(num_replicas));
+      RETURN_NOT_OK(cluster_->WaitForTabletServerCount(num_replicas));
     }
 
     unique_ptr<KuduTableCreator> table_creator(client_->NewTableCreator());
@@ -734,14 +737,14 @@ class ClientTest : public KuduTest {
     for (auto& bound : range_bounds) {
       table_creator->add_range_partition(bound.first.release(), bound.second.release());
     }
-    ASSERT_OK(table_creator->table_name(table_name)
+    RETURN_NOT_OK(table_creator->table_name(table_name)
                             .schema(&schema_)
                             .num_replicas(num_replicas)
                             .set_range_partition_columns({ "key" })
                             .timeout(MonoDelta::FromSeconds(60))
                             .Create());
 
-    ASSERT_OK(client_->OpenTable(table_name, table));
+    return client_->OpenTable(table_name, table);
   }
 
   // Kills a tablet server.
@@ -886,17 +889,23 @@ TEST_F(ClientTest, TestClusterId) {
 TEST_F(ClientTest, TestListTables) {
   const char* kTable2Name = "client-testtb2";
   shared_ptr<KuduTable> second_table;
-  NO_FATALS(CreateTable(kTable2Name, 1, {}, {}, &second_table));
+  ASSERT_OK(CreateTable(kTable2Name, 1, {}, {}, &second_table));
 
   vector<string> tables;
   ASSERT_OK(client_->ListTables(&tables));
   std::sort(tables.begin(), tables.end());
   ASSERT_EQ(string(kTableName), tables[0]);
   ASSERT_EQ(string(kTable2Name), tables[1]);
-  tables.clear();
   ASSERT_OK(client_->ListTables(&tables, "testtb2"));
   ASSERT_EQ(1, tables.size());
   ASSERT_EQ(string(kTable2Name), tables[0]);
+
+  ASSERT_OK(client_->ListSoftDeletedTables(&tables));
+  ASSERT_EQ(0, tables.size());
+
+  ASSERT_OK(client_->SoftDeleteTable(kTable2Name, 1000));
+  ASSERT_OK(client_->ListSoftDeletedTables(&tables));
+  ASSERT_EQ(1, tables.size());
 }
 
 TEST_F(ClientTest, TestListTabletServers) {
@@ -1257,7 +1266,7 @@ TEST_P(ScanMultiTabletParamTest, Test) {
       ASSERT_OK(row->SetInt32(0, i * kRowsPerTablet));
       rows.emplace_back(std::move(row));
     }
-    NO_FATALS(CreateTable("TestScanMultiTablet", 1,
+    ASSERT_OK(CreateTable("TestScanMultiTablet", 1,
                           std::move(rows), {}, &table));
   }
 
@@ -1532,7 +1541,7 @@ TEST_F(ClientTest, TestInvalidPredicates) {
 TEST_F(ClientTest, TestScanCloseProxy) {
   const string kEmptyTable = "TestScanCloseProxy";
   shared_ptr<KuduTable> table;
-  NO_FATALS(CreateTable(kEmptyTable, 3, GenerateSplitRows(), {}, &table));
+  ASSERT_OK(CreateTable(kEmptyTable, 3, GenerateSplitRows(), {}, &table));
 
   {
     // Open and close an empty scanner.
@@ -1670,7 +1679,7 @@ TEST_F(ClientTest, TestScanFaultTolerance) {
   FLAGS_leader_failure_exp_backoff_max_delta_ms = 1000;
 
   const int kNumReplicas = 3;
-  NO_FATALS(CreateTable(kScanTable, kNumReplicas, {}, {}, &table));
+  ASSERT_OK(CreateTable(kScanTable, kNumReplicas, {}, {}, &table));
   NO_FATALS(InsertTestRows(table.get(), FLAGS_test_scan_num_rows));
 
   // Do an initial scan to determine the expected rows for later verification.
@@ -1739,7 +1748,7 @@ TEST_F(ClientTest, TestNonFaultTolerantScannerExpired) {
   shared_ptr<KuduTable> table;
 
   const int kNumReplicas = 1;
-  NO_FATALS(CreateTable(kScanTable, kNumReplicas, {}, {}, &table));
+  ASSERT_OK(CreateTable(kScanTable, kNumReplicas, {}, {}, &table));
   NO_FATALS(InsertTestRows(table.get(), FLAGS_test_scan_num_rows));
 
   KuduScanner scanner(table.get());
@@ -2471,7 +2480,7 @@ TEST_F(ClientTest, TestMetaCacheLookupNoLeaders) {
 
 TEST_F(ClientTest, TestGetTabletServerBlacklist) {
   shared_ptr<KuduTable> table;
-  NO_FATALS(CreateTable("blacklist",
+  ASSERT_OK(CreateTable("blacklist",
                         3,
                         GenerateSplitRows(),
                         {},
@@ -2548,7 +2557,7 @@ TEST_F(ClientTest, TestGetTabletServerBlacklist) {
 
 TEST_F(ClientTest, TestGetTabletServerDeterministic) {
   shared_ptr<KuduTable> table;
-  NO_FATALS(CreateTable("selection",
+  ASSERT_OK(CreateTable("selection",
                         3,
                         GenerateSplitRows(),
                         {},
@@ -2598,7 +2607,7 @@ TEST_F(ClientTest, TestGetTabletServerDeterministic) {
 
 TEST_F(ClientTest, TestScanWithEncodedRangePredicate) {
   shared_ptr<KuduTable> table;
-  NO_FATALS(CreateTable("split-table",
+  ASSERT_OK(CreateTable("split-table",
                         1, /* replicas */
                         GenerateSplitRows(),
                         {},
@@ -2722,9 +2731,11 @@ int64_t SumResults(const KuduScanBatch& batch) {
 } // anonymous namespace
 
 TEST_F(ClientTest, TestScannerKeepAlive) {
+  SKIP_IF_SLOW_NOT_ALLOWED();
+
   NO_FATALS(InsertTestRows(client_table_.get(), 1000));
-  // Set the scanner ttl really low
-  FLAGS_scanner_ttl_ms = 100; // 100 milliseconds
+  // Set the scanner TTL low.
+  FLAGS_scanner_ttl_ms = 500;
   // Start a scan but don't get the whole data back
   KuduScanner scanner(client_table_.get());
   // This will make sure we have to do multiple NextBatch calls to the second tablet.
@@ -2756,9 +2767,11 @@ TEST_F(ClientTest, TestScannerKeepAlive) {
   sum += SumResults(batch);
   ASSERT_TRUE(scanner.HasMoreRows());
 
-  // Now loop while keeping the scanner alive. Each time we loop we sleep 1/2 a scanner
-  // ttl interval (the garbage collector is running each 50 msecs too.).
-  for (int i = 0; i < 5; i++) {
+  // Now loop while keeping the scanner alive. Each loop we sleep about 1/10
+  // of the scanner's TTL interval to avoid flakiness due to scheduling
+  // anomalies. The garbage collector runs each 50 msec as well in this test
+  // scenario (controlled by FLAGS_scanner_gc_check_interval_us).
+  for (int i = 0; i < 15; i++) {
     SleepFor(MonoDelta::FromMilliseconds(50));
     ASSERT_OK(scanner.KeepAlive());
   }
@@ -2772,7 +2785,7 @@ TEST_F(ClientTest, TestScannerKeepAlive) {
   }
 
   ASSERT_TRUE(scanner.HasMoreRows());
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 15; i++) {
     SleepFor(MonoDelta::FromMilliseconds(50));
     ASSERT_OK(scanner.KeepAlive());
   }
@@ -2932,6 +2945,25 @@ static void DoTestVerifyRows(const shared_ptr<KuduTable>& tbl, int num_rows) {
   }
 }
 
+static void DoVerifyMetrics(const KuduSession* session,
+                            int64_t successful_inserts,
+                            int64_t insert_ignore_errors,
+                            int64_t successful_upserts,
+                            int64_t successful_updates,
+                            int64_t update_ignore_errors,
+                            int64_t successful_deletes,
+                            int64_t delete_ignore_errors) {
+  auto metrics = session->GetWriteOpMetrics().Get();
+  ASSERT_EQ(successful_inserts, metrics["successful_inserts"]);
+  ASSERT_EQ(insert_ignore_errors, metrics["insert_ignore_errors"]);
+  ASSERT_EQ(successful_upserts, metrics["successful_upserts"]);
+  // TODO(yingchun): should test upsert_ignore_errors
+  ASSERT_EQ(successful_updates, metrics["successful_updates"]);
+  ASSERT_EQ(update_ignore_errors, metrics["update_ignore_errors"]);
+  ASSERT_EQ(successful_deletes, metrics["successful_deletes"]);
+  ASSERT_EQ(delete_ignore_errors, metrics["delete_ignore_errors"]);
+}
+
 TEST_F(ClientTest, TestInsertIgnore) {
   shared_ptr<KuduSession> session = client_->NewSession();
   session->SetTimeoutMillis(10000);
@@ -2941,6 +2973,7 @@ TEST_F(ClientTest, TestInsertIgnore) {
     unique_ptr<KuduInsert> insert(BuildTestInsert(client_table_.get(), 1));
     ASSERT_OK(session->Apply(insert.release()));
     DoTestVerifyRows(client_table_, 1);
+    DoVerifyMetrics(session.get(), 1, 0, 0, 0, 0, 0, 0);
   }
 
   {
@@ -2948,6 +2981,7 @@ TEST_F(ClientTest, TestInsertIgnore) {
     unique_ptr<KuduInsertIgnore> insert_ignore(BuildTestInsertIgnore(client_table_.get(), 1));
     ASSERT_OK(session->Apply(insert_ignore.release()));
     DoTestVerifyRows(client_table_, 1);
+    DoVerifyMetrics(session.get(), 1, 1, 0, 0, 0, 0, 0);
   }
 
   {
@@ -2959,6 +2993,7 @@ TEST_F(ClientTest, TestInsertIgnore) {
     ASSERT_OK(insert_ignore->mutable_row()->SetInt32("non_null_with_default", 999));
     ASSERT_OK(session->Apply(insert_ignore.release())); // returns ok but results in no change
     DoTestVerifyRows(client_table_, 1);
+    DoVerifyMetrics(session.get(), 1, 2, 0, 0, 0, 0, 0);
   }
 
   {
@@ -2966,6 +3001,7 @@ TEST_F(ClientTest, TestInsertIgnore) {
     unique_ptr<KuduInsertIgnore> insert_ignore(BuildTestInsertIgnore(client_table_.get(), 2));
     ASSERT_OK(session->Apply(insert_ignore.release()));
     DoTestVerifyRows(client_table_, 2);
+    DoVerifyMetrics(session.get(), 2, 2, 0, 0, 0, 0, 0);
   }
 }
 
@@ -2979,12 +3015,14 @@ TEST_F(ClientTest, TestUpdateIgnore) {
     unique_ptr<KuduUpdateIgnore> update_ignore(BuildTestUpdateIgnore(client_table_.get(), 1));
     ASSERT_OK(session->Apply(update_ignore.release()));
     DoTestVerifyRows(client_table_, 0);
+    DoVerifyMetrics(session.get(), 0, 0, 0, 0, 1, 0, 0);
   }
 
   {
     unique_ptr<KuduInsert> insert(BuildTestInsert(client_table_.get(), 1));
     ASSERT_OK(session->Apply(insert.release()));
     DoTestVerifyRows(client_table_, 1);
+    DoVerifyMetrics(session.get(), 1, 0, 0, 0, 1, 0, 0);
   }
 
   {
@@ -2995,6 +3033,7 @@ TEST_F(ClientTest, TestUpdateIgnore) {
     ASSERT_OK(update_ignore->mutable_row()->SetStringCopy("string_val", "hello world"));
     ASSERT_OK(update_ignore->mutable_row()->SetInt32("non_null_with_default", 999));
     ASSERT_OK(session->Apply(update_ignore.release()));
+    DoVerifyMetrics(session.get(), 1, 0, 0, 1, 1, 0, 0);
 
     vector<string> rows;
     KuduScanner scanner(client_table_.get());
@@ -3014,6 +3053,7 @@ TEST_F(ClientTest, TestDeleteIgnore) {
     unique_ptr<KuduInsert> insert(BuildTestInsert(client_table_.get(), 1));
     ASSERT_OK(session->Apply(insert.release()));
     DoTestVerifyRows(client_table_, 1);
+    DoVerifyMetrics(session.get(), 1, 0, 0, 0, 0, 0, 0);
   }
 
   {
@@ -3021,6 +3061,7 @@ TEST_F(ClientTest, TestDeleteIgnore) {
     unique_ptr<KuduDeleteIgnore> delete_ignore(BuildTestDeleteIgnore(client_table_.get(), 1));
     ASSERT_OK(session->Apply(delete_ignore.release()));
     DoTestVerifyRows(client_table_, 0);
+    DoVerifyMetrics(session.get(), 1, 0, 0, 0, 0, 1, 0);
   }
 
   {
@@ -3028,6 +3069,7 @@ TEST_F(ClientTest, TestDeleteIgnore) {
     unique_ptr<KuduDeleteIgnore> delete_ignore(BuildTestDeleteIgnore(client_table_.get(), 1));
     ASSERT_OK(session->Apply(delete_ignore.release()));
     DoTestVerifyRows(client_table_, 0);
+    DoVerifyMetrics(session.get(), 1, 0, 0, 0, 0, 1, 1);
   }
 }
 
@@ -3058,19 +3100,20 @@ TEST_F(ClientTest, TestInsertAutoFlushSync) {
   }
 }
 
-static Status ApplyInsertToSession(KuduSession* session,
-                                   const shared_ptr<KuduTable>& table,
-                                   int row_key,
-                                   int int_val,
-                                   const char* string_val,
-                                   boost::optional<int> non_null_with_default = boost::none) {
+static Status ApplyInsertToSession(
+    KuduSession* session,
+    const shared_ptr<KuduTable>& table,
+    int row_key,
+    int int_val,
+    const char* string_val,
+    optional<int> non_null_with_default = nullopt) {
   unique_ptr<KuduInsert> insert(table->NewInsert());
   RETURN_NOT_OK(insert->mutable_row()->SetInt32("key", row_key));
   RETURN_NOT_OK(insert->mutable_row()->SetInt32("int_val", int_val));
   RETURN_NOT_OK(insert->mutable_row()->SetStringCopy("string_val", string_val));
   if (non_null_with_default) {
     RETURN_NOT_OK(insert->mutable_row()->SetInt32("non_null_with_default",
-                                                  non_null_with_default.get()));
+                                                  *non_null_with_default));
   }
   return session->Apply(insert.release());
 }
@@ -3100,11 +3143,11 @@ static Status ApplyUpdateToSession(KuduSession* session,
 static Status ApplyDeleteToSession(KuduSession* session,
                                    const shared_ptr<KuduTable>& table,
                                    int row_key,
-                                   boost::optional<int> int_val = boost::none) {
+                                   optional<int> int_val = nullopt) {
   unique_ptr<KuduDelete> del(table->NewDelete());
   RETURN_NOT_OK(del->mutable_row()->SetInt32("key", row_key));
   if (int_val) {
-    RETURN_NOT_OK(del->mutable_row()->SetInt32("int_val", int_val.get()));
+    RETURN_NOT_OK(del->mutable_row()->SetInt32("int_val", *int_val));
   }
   return session->Apply(del.release());
 }
@@ -3300,7 +3343,7 @@ TEST_F(ClientTest, TestSessionClose) {
 // contains multiple rows spread across multiple tablets.
 TEST_F(ClientTest, TestMultipleMultiRowManualBatches) {
   shared_ptr<KuduTable> second_table;
-  NO_FATALS(CreateTable("second table", 1, {}, {}, &second_table));
+  ASSERT_OK(CreateTable("second table", 1, {}, {}, &second_table));
 
   shared_ptr<KuduSession> session = client_->NewSession();
   ASSERT_OK(session->SetFlushMode(KuduSession::MANUAL_FLUSH));
@@ -3538,7 +3581,7 @@ TEST_F(ClientTest, TestInsertDuplicateKeys) {
 
   constexpr const char* kTable2Name = "client-testtb2";
   shared_ptr<KuduTable> second_table;
-  NO_FATALS(CreateTable(kTable2Name, 1, {}, {}, &second_table));
+  ASSERT_OK(CreateTable(kTable2Name, 1, {}, {}, &second_table));
 
   // Insert initial rows
   ASSERT_OK(ApplyInsertToSession(session.get(), client_table_, 1, 1, "one"));
@@ -4008,7 +4051,7 @@ TEST_F(ClientTest, TestAutoFlushBackgroundAndErrorCollector) {
     // the crux of the race condition for KUDU-1743.
     const string table_name = Substitute("table.$0", i);
     shared_ptr<KuduTable> table;
-    NO_FATALS(CreateTable(table_name, 3, std::move(splits), {}, &table));
+    ASSERT_OK(CreateTable(table_name, 3, std::move(splits), {}, &table));
 
     shared_ptr<KuduSession> session(client_->NewSession());
     scoped_refptr<ErrorCollector> ec(new CustomErrorCollector);
@@ -4434,6 +4477,7 @@ TEST_F(ClientTest, TestUpsert) {
   // Perform and verify UPSERT which acts as an INSERT.
   ASSERT_OK(ApplyUpsertToSession(session.get(), client_table_, 1, 1, "original row"));
   FlushSessionOrDie(session);
+  DoVerifyMetrics(session.get(), 0, 0, 1, 0, 0, 0, 0);
 
   {
     vector<string> rows;
@@ -4446,6 +4490,7 @@ TEST_F(ClientTest, TestUpsert) {
   // Perform and verify UPSERT which acts as an UPDATE.
   ASSERT_OK(ApplyUpsertToSession(session.get(), client_table_, 1, 2, "upserted row"));
   FlushSessionOrDie(session);
+  DoVerifyMetrics(session.get(), 0, 0, 2, 0, 0, 0, 0);
 
   {
     vector<string> rows;
@@ -4464,6 +4509,7 @@ TEST_F(ClientTest, TestUpsert) {
     ASSERT_OK(row->SetInt32("non_null_with_default", 999));
     ASSERT_OK(session->Apply(update.release()));
     FlushSessionOrDie(session);
+    DoVerifyMetrics(session.get(), 0, 0, 2, 1, 0, 0, 0);
   }
   {
     vector<string> rows;
@@ -4477,6 +4523,7 @@ TEST_F(ClientTest, TestUpsert) {
   // column, and therefore should not revert it back to its default.
   ASSERT_OK(ApplyUpsertToSession(session.get(), client_table_, 1, 3, "upserted row 2"));
   FlushSessionOrDie(session);
+  DoVerifyMetrics(session.get(), 0, 0, 3, 1, 0, 0, 0);
   {
     vector<string> rows;
     ASSERT_OK(ScanTableToStrings(client_table_.get(), &rows));
@@ -4488,6 +4535,7 @@ TEST_F(ClientTest, TestUpsert) {
   // Delete the row.
   ASSERT_OK(ApplyDeleteToSession(session.get(), client_table_, 1));
   FlushSessionOrDie(session);
+  DoVerifyMetrics(session.get(), 0, 0, 3, 1, 0, 1, 0);
   {
     vector<string> rows;
     ASSERT_OK(ScanTableToStrings(client_table_.get(), &rows));
@@ -4795,7 +4843,7 @@ TEST_F(ClientTest, TestBasicAlterOperations) {
     table_alterer->AlterExtraConfig(extra_configs);
     ASSERT_OK(table_alterer->Alter());
     ASSERT_EQ(9, tablet_replica->tablet()->metadata()->schema_version());
-    ASSERT_NE(boost::none, tablet_replica->tablet()->metadata()->extra_config());
+    ASSERT_NE(nullopt, tablet_replica->tablet()->metadata()->extra_config());
     ASSERT_TRUE(tablet_replica->tablet()->metadata()->extra_config()->has_history_max_age_sec());
     ASSERT_EQ(3600, tablet_replica->tablet()->metadata()->extra_config()->history_max_age_sec());
   }
@@ -4807,7 +4855,7 @@ TEST_F(ClientTest, TestBasicAlterOperations) {
     table_alterer->AlterExtraConfig(extra_configs);
     ASSERT_OK(table_alterer->Alter());
     ASSERT_EQ(10, tablet_replica->tablet()->metadata()->schema_version());
-    ASSERT_NE(boost::none, tablet_replica->tablet()->metadata()->extra_config());
+    ASSERT_NE(nullopt, tablet_replica->tablet()->metadata()->extra_config());
     ASSERT_TRUE(tablet_replica->tablet()->metadata()->extra_config()->has_history_max_age_sec());
     ASSERT_EQ(7200, tablet_replica->tablet()->metadata()->extra_config()->history_max_age_sec());
   }
@@ -4825,7 +4873,7 @@ TEST_F(ClientTest, TestBasicAlterOperations) {
                         "kudu.table.maintenance_priority_BAD_NAME");
     // Schema version and old properties are not changed.
     ASSERT_EQ(10, tablet_replica->tablet()->metadata()->schema_version());
-    ASSERT_NE(boost::none, tablet_replica->tablet()->metadata()->extra_config());
+    ASSERT_NE(nullopt, tablet_replica->tablet()->metadata()->extra_config());
     ASSERT_TRUE(tablet_replica->tablet()->metadata()->extra_config()->has_history_max_age_sec());
     ASSERT_EQ(7200, tablet_replica->tablet()->metadata()->extra_config()->history_max_age_sec());
     ASSERT_FALSE(tablet_replica->tablet()->metadata()->extra_config()->has_maintenance_priority());
@@ -4838,7 +4886,7 @@ TEST_F(ClientTest, TestBasicAlterOperations) {
     table_alterer->AlterExtraConfig(extra_configs);
     ASSERT_OK(table_alterer->Alter());
     ASSERT_EQ(11, tablet_replica->tablet()->metadata()->schema_version());
-    ASSERT_NE(boost::none, tablet_replica->tablet()->metadata()->extra_config());
+    ASSERT_NE(nullopt, tablet_replica->tablet()->metadata()->extra_config());
     ASSERT_FALSE(tablet_replica->tablet()->metadata()->extra_config()->has_history_max_age_sec());
   }
 
@@ -4905,10 +4953,213 @@ TEST_F(ClientTest, TestDeleteTable) {
 
   // Create a new table with the same name. This is to ensure that the client
   // doesn't cache anything inappropriately by table name (see KUDU-1055).
-  NO_FATALS(CreateTable(kTableName, 1, GenerateSplitRows(), {}, &client_table_));
+  ASSERT_OK(CreateTable(kTableName, 1, GenerateSplitRows(), {}, &client_table_));
 
   // Should be able to insert successfully into the new table.
   NO_FATALS(InsertTestRows(client_.get(), client_table_.get(), 10));
+}
+
+TEST_F(ClientTest, TestSoftDeleteAndReserveTable) {
+  // Open the table before deleting it.
+  ASSERT_OK(client_->OpenTable(kTableName, &client_table_));
+  string table_id = client_table_->id();
+
+  // Insert a few rows, and scan them back. This is to populate the MetaCache.
+  NO_FATALS(InsertTestRows(client_.get(), client_table_.get(), 10));
+  vector<string> rows;
+  ScanTableToStrings(client_table_.get(), &rows);
+  ASSERT_EQ(10, rows.size());
+
+  // Remove the table.
+  // NOTE that it returns when the operation is completed on the master side
+  string tablet_id = GetFirstTabletId(client_table_.get());
+  ASSERT_OK(client_->SoftDeleteTable(kTableName, 600));
+  CatalogManager* catalog_manager = cluster_->mini_master()->master()->catalog_manager();
+  {
+    CatalogManager::ScopedLeaderSharedLock l(catalog_manager);
+    ASSERT_OK(l.first_failed_status());
+    bool exists;
+    ASSERT_OK(catalog_manager->TableNameExists(kTableName, &exists));
+    ASSERT_TRUE(exists);
+  }
+
+  // Soft_deleted tablet is still visible.
+  scoped_refptr<TabletReplica> tablet_replica;
+  ASSERT_TRUE(cluster_->mini_tablet_server(0)->server()->tablet_manager()->LookupTablet(
+              tablet_id, &tablet_replica));
+
+  // Old table has been removed to the soft_deleted map.
+  vector<string> tables;
+  ASSERT_OK(client_->ListTables(&tables));
+  ASSERT_EQ(0, tables.size());
+  ASSERT_OK(client_->ListSoftDeletedTables(&tables));
+  ASSERT_EQ(1, tables.size());
+  ASSERT_EQ(string(kTableName), tables[0]);
+
+  Status s;
+  // Altering a soft-deleted table is not allowed.
+  {
+    // Not allowed to rename.
+    unique_ptr<KuduTableAlterer> table_alterer(client_->NewTableAlterer(kTableName));
+    const string new_name = "test-new-table";
+    table_alterer->RenameTo(kTableName);
+    s = table_alterer->Alter();
+    ASSERT_TRUE(s.IsInvalidArgument());
+    ASSERT_STR_CONTAINS(s.ToString(), Substitute("soft_deleted table $0 should not be altered",
+                                                 kTableName));
+  }
+
+  {
+    // Not allowed to add column.
+    unique_ptr<KuduTableAlterer> table_alterer(client_->NewTableAlterer(kTableName));
+    table_alterer->DropColumn("int_val")
+        ->AddColumn("new_col")->Type(KuduColumnSchema::INT32);
+    s = table_alterer->Alter();
+    ASSERT_TRUE(s.IsInvalidArgument());
+    ASSERT_STR_CONTAINS(s.ToString(), Substitute("soft_deleted table $0 should not be altered",
+                                                 kTableName));
+  }
+
+  {
+    // Not allowed to delete the soft_deleted table with new reserve_seconds value.
+    s = client_->SoftDeleteTable(kTableName, 600);
+    ASSERT_TRUE(s.IsInvalidArgument());
+    ASSERT_STR_CONTAINS(s.ToString(), Substitute("soft_deleted table $0 should not be deleted",
+                                                 kTableName));
+  }
+
+  {
+    // Not allowed to set extra configs.
+    map<string, string> extra_configs;
+    extra_configs[kTableMaintenancePriority] = "3";
+    unique_ptr<KuduTableAlterer> table_alterer(client_->NewTableAlterer(kTableName));
+    table_alterer->AlterExtraConfig(extra_configs);
+    s = table_alterer->Alter();
+    ASSERT_TRUE(s.IsInvalidArgument());
+    ASSERT_STR_CONTAINS(s.ToString(), Substitute("soft_deleted table $0 should not be altered",
+                                                 kTableName));
+  }
+
+  {
+    // Read and write are allowed for soft_deleted table.
+    NO_FATALS(InsertTestRows(client_.get(), client_table_.get(), 20, 10));
+    ScanTableToStrings(client_table_.get(), &rows);
+    ASSERT_EQ(30, rows.size());
+  }
+
+  {
+    // Not allowed creating a new table with the same name.
+    shared_ptr<KuduTable> new_client_table;
+    s = CreateTable(kTableName, 1, GenerateSplitRows(), {}, &new_client_table);
+    ASSERT_TRUE(s.IsAlreadyPresent());
+    ASSERT_STR_CONTAINS(s.ToString(), Substitute("table $0 already exists with id",
+                        kTableName));
+  }
+
+  // Try to recall the soft_deleted table.
+  ASSERT_OK(client_->RecallTable(table_id));
+  ASSERT_OK(client_->ListTables(&tables));
+  ASSERT_EQ(1, tables.size());
+  ASSERT_EQ(kTableName, tables[0]);
+  ASSERT_OK(client_->ListSoftDeletedTables(&tables));
+  ASSERT_TRUE(tables.empty());
+
+  // Force to delete the soft_deleted table.
+  ASSERT_OK(client_->SoftDeleteTable(kTableName));
+
+  // No one table left.
+  ASSERT_OK(client_->ListTables(&tables));
+  ASSERT_EQ(0, tables.size());
+  ASSERT_OK(client_->ListSoftDeletedTables(&tables));
+  ASSERT_EQ(0, tables.size());
+}
+
+TEST_F(ClientTest, TestSoftDeleteAndRecallTable) {
+  // Open the table before deleting it.
+  ASSERT_OK(client_->OpenTable(kTableName, &client_table_));
+
+  // Insert a few rows, and scan them back. This is to populate the MetaCache.
+  NO_FATALS(InsertTestRows(client_.get(), client_table_.get(), 10));
+  vector<string> rows;
+  ScanTableToStrings(client_table_.get(), &rows);
+  ASSERT_EQ(10, rows.size());
+
+  // Remove the table
+  ASSERT_OK(client_->SoftDeleteTable(kTableName, 600));
+  vector<string> tables;
+  ASSERT_OK(client_->ListTables(&tables));
+  ASSERT_EQ(0, tables.size());
+
+  // Recall and reopen table.
+  ASSERT_OK(client_->ListSoftDeletedTables(&tables));
+  ASSERT_EQ(1, tables.size());
+  ASSERT_OK(client_->RecallTable(client_table_->id()));
+
+  // Check the data in the table.
+  ScanTableToStrings(client_table_.get(), &rows);
+  ASSERT_EQ(10, rows.size());
+}
+
+TEST_F(ClientTest, TestSoftDeleteAndRecallTableWithNewTableName) {
+  // Open the table before deleting it.
+  ASSERT_OK(client_->OpenTable(kTableName, &client_table_));
+  string old_table_id = client_table_->id();
+
+  // Insert a few rows, and scan them back. This is to populate the MetaCache.
+  NO_FATALS(InsertTestRows(client_.get(), client_table_.get(), 10));
+  vector<string> rows;
+  ScanTableToStrings(client_table_.get(), &rows);
+  ASSERT_EQ(10, rows.size());
+
+  // Remove the table
+  ASSERT_OK(client_->SoftDeleteTable(kTableName, 600));
+  vector<string> tables;
+  ASSERT_OK(client_->ListTables(&tables));
+  ASSERT_EQ(0, tables.size());
+
+  // Recall and reopen table.
+  ASSERT_OK(client_->ListSoftDeletedTables(&tables));
+  ASSERT_EQ(1, tables.size());
+
+  const string new_name = "test-new-table";
+  ASSERT_OK(client_->RecallTable(client_table_->id(), new_name));
+  ASSERT_OK(client_->OpenTable(new_name, &client_table_));
+  ASSERT_EQ(old_table_id, client_table_->id());
+
+  // Check the data in the table.
+  ScanTableToStrings(client_table_.get(), &rows);
+  ASSERT_EQ(10, rows.size());
+}
+
+TEST_F(ClientTest, TestSoftDeleteAndRecallAfterReserveTimeTable) {
+  // Open the table before deleting it.
+  ASSERT_OK(client_->OpenTable(kTableName, &client_table_));
+
+  // Insert a few rows, and scan them back. This is to populate the MetaCache.
+  NO_FATALS(InsertTestRows(client_.get(), client_table_.get(), 10));
+  vector<string> rows;
+  ScanTableToStrings(client_table_.get(), &rows);
+  ASSERT_EQ(10, rows.size());
+
+  // Remove the table
+  ASSERT_OK(client_->SoftDeleteTable(kTableName));
+  // Wait util the table is removed completely.
+  ASSERT_EVENTUALLY([&] () {
+    Status s = client_->OpenTable(kTableName, &client_table_);
+    ASSERT_TRUE(s.IsNotFound());
+    ASSERT_STR_CONTAINS(s.ToString(), "the table does not exist");
+  });
+
+  vector<string> tables;
+  ASSERT_OK(client_->ListSoftDeletedTables(&tables));
+  ASSERT_EQ(0, tables.size());
+
+  // Try to recall the table.
+  Status s = client_->RecallTable(client_table_->id());
+  ASSERT_TRUE(s.IsNotFound());
+
+  ASSERT_OK(client_->ListTables(&tables));
+  ASSERT_TRUE(tables.empty());
 }
 
 TEST_F(ClientTest, TestGetTableSchema) {
@@ -4936,7 +5187,7 @@ TEST_F(ClientTest, TestReplicatedMultiTabletTable) {
   const int kNumReplicas = 3;
 
   shared_ptr<KuduTable> table;
-  NO_FATALS(CreateTable(kReplicatedTable,
+  ASSERT_OK(CreateTable(kReplicatedTable,
                         kNumReplicas,
                         GenerateSplitRows(),
                         {},
@@ -4962,7 +5213,7 @@ TEST_F(ClientTest, TestReplicatedMultiTabletTableFailover) {
   const int kNumTries = 100;
 
   shared_ptr<KuduTable> table;
-  NO_FATALS(CreateTable(kReplicatedTable,
+  ASSERT_OK(CreateTable(kReplicatedTable,
                         kNumReplicas,
                         GenerateSplitRows(),
                         {},
@@ -5016,7 +5267,7 @@ TEST_F(ClientTest, TestReplicatedTabletWritesWithLeaderElection) {
   const int kNumReplicas = 3;
 
   shared_ptr<KuduTable> table;
-  NO_FATALS(CreateTable(kReplicatedTable, kNumReplicas, {}, {}, &table));
+  ASSERT_OK(CreateTable(kReplicatedTable, kNumReplicas, {}, {}, &table));
 
   // Insert some data.
   NO_FATALS(InsertTestRows(table.get(), kNumRowsToWrite));
@@ -5768,7 +6019,7 @@ TEST_F(ClientTest, TestReadAtSnapshotNoTimestampSet) {
       CHECK_OK(row->SetInt32(0, i * kRowsPerTablet));
       rows.push_back(std::move(row));
     }
-    NO_FATALS(CreateTable("test_table", 1, std::move(rows), {}, &table));
+    ASSERT_OK(CreateTable("test_table", 1, std::move(rows), {}, &table));
     // Insert some data into the table, so each tablet would get populated.
     shared_ptr<KuduSession> session(client_->NewSession());
     ASSERT_OK(session->SetFlushMode(KuduSession::MANUAL_FLUSH));
@@ -6483,7 +6734,7 @@ TEST_F(ClientTest, TestBatchScanConstIterator) {
 TEST_F(ClientTest, TestTableNumReplicas) {
   for (int i : { 1, 3, 5, 7 }) {
     shared_ptr<KuduTable> table;
-    NO_FATALS(CreateTable(Substitute("table_with_$0_replicas", i),
+    ASSERT_OK(CreateTable(Substitute("table_with_$0_replicas", i),
                           i, {}, {}, &table));
     ASSERT_EQ(i, table->num_replicas());
   }
@@ -6606,7 +6857,7 @@ TEST_F(ClientTest, TestConnectToClusterCompatibility) {
 // the data can be exported and re-imported into a new client.
 TEST_F(ClientTest, TestGetSecurityInfoFromMaster) {
   // Client is already connected when the test starts.
-  ASSERT_TRUE(client_->data_->messenger_->authn_token() != boost::none);
+  ASSERT_TRUE(client_->data_->messenger_->authn_token());
   ASSERT_EQ(1, client_->data_->messenger_->tls_context().trusted_cert_count_for_tests());
 
   string authn_creds;
@@ -8656,7 +8907,7 @@ TEST_F(ReplicationFactorLimitsTest, MinReplicationFactor) {
     const vector<pair<int, string>> cases = {
       {2, "illegal replication factor 2: replication factor must be odd"},
       {3, "not enough live tablet servers to create a table with the requested "
-          "replication factor 3; 1 tablet servers are alive"},
+          "replication factor 3"},
     };
 
     for (auto i = 1; i < cluster_->num_tablet_servers(); ++i) {
